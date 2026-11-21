@@ -7,6 +7,16 @@ use super::{
 };
 use crate::translation_phases::ErrorSeverity;
 
+/// Which extension diagnostics a diagnostic pragma naming a warning option
+/// reaches ([`CompilerConfiguration::pragma_extension_reach`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PragmaExtensionReach {
+    Nothing,
+    /// Those filed under one of GCC's own options.
+    Group(super::ExtensionGroup),
+    All,
+}
+
 /// What `#pragma GCC diagnostic` or `#pragma clang diagnostic` makes of a
 /// warning option. Clang's `fatal` is an `Error` the context also marks.
 /// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1, p. 159;
@@ -598,6 +608,47 @@ impl CompilerConfiguration {
     fn command_line_pedantic_deny(self) -> bool {
         self.command_line_pedantic_deny
             .unwrap_or(self.extension_policy == ExtensionPolicy::Deny)
+    }
+
+    /// Which extension diagnostics a pragma naming the warning option `name`
+    /// reaches: all of them for `-Wpedantic`, Clang's `-Weverything`, an
+    /// option that sets their mapping under the identity's rules
+    /// ([`super::ExtensionOptionName::coverage`]), Clang's option of the
+    /// name of one of GCC's own, or one that holds a group of them; only
+    /// those filed under its group for one of GCC's own options, such as
+    /// `-Wlong-long`, under GCC's rules, or Clang's `-Wvariadic-macros`; and
+    /// none for any other option. GCC and Clang classify a diagnostic by
+    /// the pragmas naming its own option, so a pragma naming another leaves
+    /// the command line's classification of it standing
+    /// (`update_effective_level_from_pragmas` in GCC 14's `diagnostic.cc`,
+    /// and `DiagnosticsEngine::setSeverityForGroup` in Clang 23's
+    /// `Diagnostic.cpp`).
+    pub(crate) fn pragma_extension_reach(self, name: &str) -> PragmaExtensionReach {
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        if name == "pedantic" || (name == "everything" && clang) {
+            return PragmaExtensionReach::All;
+        }
+        if let Some((option, whole)) = super::ExtensionOptionName::parse(name) {
+            let modeled = option.coverage(whole, clang) != super::Coverage::Nothing;
+            match option {
+                | super::ExtensionOptionName::Group(group) if modeled =>
+                    return PragmaExtensionReach::Group(group),
+                // Clang's groups of GCC's names, such as its `-Wvla`, hold
+                // diagnostics bcc files under `-Wpedantic` in Clang's rules.
+                | super::ExtensionOptionName::Group(_) => return PragmaExtensionReach::All,
+                | _ if modeled => return PragmaExtensionReach::All,
+                | _ => {},
+            }
+        }
+        let mask = self.pragma_group_mask(name);
+        if DiagnosticGroup::ALL
+            .iter()
+            .any(|&group| mask.contains(group) && group.holds_extensions())
+        {
+            PragmaExtensionReach::All
+        } else {
+            PragmaExtensionReach::Nothing
+        }
     }
 
     /// The groups a pragma naming the warning option `name` reaches,
@@ -1515,6 +1566,13 @@ impl DiagnosticGroup {
             | GroupDefault::ClangWarning
             | GroupDefault::OnInClang => ErrorSeverity::Warning,
         }
+    }
+
+    /// Whether the group holds extension diagnostics: one `-pedantic`
+    /// enables, or a later revision's syntax.
+    pub(crate) fn holds_extensions(self) -> bool {
+        self.default() == GroupDefault::Extension
+            || matches!(self, Self::C11Extensions | Self::C23Extensions)
     }
 
     /// Whether the group reports anything before an option enables it.

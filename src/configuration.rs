@@ -46,6 +46,7 @@ pub(crate) use diagnostics::{
     DiagnosticPresentation,
     GroupMask,
     PragmaClass,
+    PragmaExtensionReach,
     WarningOption,
 };
 pub(crate) use extension_mapping::{
