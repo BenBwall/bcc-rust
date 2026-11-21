@@ -40,13 +40,23 @@ pub fn Datasheet(
             born
         })
     });
+    let empty = move || snapshot.with(|snapshot| snapshot.as_ref().is_none_or(|snapshot| snapshot.objects.is_empty()));
     view! {
         <figure class="datasheet" aria-labelledby="datasheet-caption">
             <figcaption class="module-caption" id="datasheet-caption">
                 <b>"Table 1"</b>
                 {move || snapshot.with(|snapshot| snapshot.as_ref().map_or_else(|| " — Objects".to_owned(), |snapshot| format!(" — Objects at step {}", snapshot.step)))}
             </figcaption>
-            <div class="sheet-scroll">
+            // Before any object's lifetime has begun the table has no rows:
+            // a card says what will fill it, as the blank tape's does.
+            <div class="figure-empty" hidden=move || !empty()>
+                <p class="figure-empty-label">"No objects yet"</p>
+                <p class="figure-empty-text">
+                    "Each object gets a row here when its lifetime begins: its type and size, where it lives, the \
+                     step that created it and its value at the playhead."
+                </p>
+            </div>
+            <div class="sheet-scroll" hidden=empty>
             <table>
                 <thead>
                     <tr>
