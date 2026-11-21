@@ -40,10 +40,22 @@ pub fn Datasheet(
             born
         })
     });
-    let empty = move || snapshot.with(|snapshot| snapshot.as_ref().is_none_or(|snapshot| snapshot.objects.is_empty()));
+    let empty = move || {
+        snapshot.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .is_none_or(|snapshot| snapshot.objects.is_empty())
+        })
+    };
     // A run that can go on has objects to come; one that stopped or ended
     // without any says so instead.
-    let ended = move || snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| !snapshot.can_step()));
+    let ended = move || {
+        snapshot.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.can_step())
+        })
+    };
     view! {
         <figure class="datasheet" aria-labelledby="datasheet-caption">
             <figcaption class="module-caption" id="datasheet-caption">

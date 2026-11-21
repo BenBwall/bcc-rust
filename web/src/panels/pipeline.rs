@@ -843,11 +843,24 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
     // step the machine, so the arrow keys are free here.
     let moved = move |event: web_sys::KeyboardEvent| {
         let current = stage.get_untracked();
-        let index = Stage::ALL.iter().position(|&each| each == current).unwrap_or(0);
+        let index = Stage::ALL
+            .iter()
+            .position(|&each| each == current)
+            .unwrap_or(0);
         let last = Stage::ALL.len() - 1;
         let next = match event.key().as_str() {
-            | "ArrowRight" | "ArrowDown" => if index == last { 0 } else { index + 1 },
-            | "ArrowLeft" | "ArrowUp" => if index == 0 { last } else { index - 1 },
+            | "ArrowRight" | "ArrowDown" =>
+                if index == last {
+                    0
+                } else {
+                    index + 1
+                },
+            | "ArrowLeft" | "ArrowUp" =>
+                if index == 0 {
+                    last
+                } else {
+                    index - 1
+                },
             | "Home" => 0,
             | "End" => last,
             | _ => return,
@@ -1324,19 +1337,37 @@ mod tests {
     #[test]
     fn the_front_end_skips_to_the_ir_and_the_keys_are_tabs() {
         for stage in Stage::ALL {
-            let html = render_stage(stage, false, false, LiveCompile::Compiling, [None, None, None]);
+            let html = render_stage(
+                stage,
+                false,
+                false,
+                LiveCompile::Compiling,
+                [None, None, None],
+            );
             let skip = html
-                .split("class=\"stage-skip\"")
-                .nth(1)
-                .and_then(|rest| rest.split('>').next())
+                .split("<button")
+                .find(|tag| tag.contains("stage-skip"))
+                .and_then(|tag| tag.split('>').next())
                 .unwrap_or_else(|| panic!("{stage:?} has no skip key"));
             let offered = stage.phase() == "Front end" && stage != Stage::SemanticTypes;
             assert_eq!(!skip.contains("hidden"), offered, "{stage:?}: {skip}");
             assert!(
-                html.contains(&format!("role=\"tabpanel\" aria-labelledby=\"stage-tab-{}\"", stage.key())),
+                html.contains(&format!(
+                    "role=\"tabpanel\" aria-labelledby=\"stage-tab-{}\"",
+                    stage.key()
+                )),
                 "{stage:?}"
             );
-            assert_eq!(html.matches("tabindex=\"0\"").count(), 1, "{stage:?}");
+            assert_eq!(
+                html.matches("tabindex=\"0\" id=\"stage-tab-").count(),
+                1,
+                "{stage:?}"
+            );
+            assert_eq!(
+                html.matches("tabindex=\"-1\" id=\"stage-tab-").count(),
+                Stage::ALL.len() - 1,
+                "{stage:?}"
+            );
             assert!(
                 html.contains(&format!("tabindex=\"0\" id=\"stage-tab-{}\"", stage.key())),
                 "{stage:?}"

@@ -265,24 +265,27 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             note:           String::new(),
             flow:           Vec::new(),
             access:         Vec::new(),
-            clauses:        vec![Clause {
-                id:       "5.1.1.2p1".to_owned(),
-                title:    "Translation phases".to_owned(),
-                gloss:    "Phase 4 executes preprocessing directives and expands macro \
-                           invocations."
-                    .to_owned(),
-                citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
-            }, Clause {
-                // A rule of §6.10, so the note has the button to the
-                // Preprocessor stage that the directives it runs have
-                // (`StepEvent::preprocessed`).
-                id:       "6.10p2".to_owned(),
-                title:    "Preprocessing directives".to_owned(),
-                gloss:    "A directive is a line whose first token is #; it ends at the line's \
-                           new-line."
-                    .to_owned(),
-                citation: "C99 §6.10p2, pp. 146-147; PDF pp. 158-159".to_owned(),
-            }],
+            clauses:        vec![
+                Clause {
+                    id:       "5.1.1.2p1".to_owned(),
+                    title:    "Translation phases".to_owned(),
+                    gloss:    "Phase 4 executes preprocessing directives and expands macro \
+                               invocations."
+                        .to_owned(),
+                    citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
+                },
+                Clause {
+                    // A rule of §6.10, so the note has the button to the
+                    // Preprocessor stage that the directives it runs have
+                    // (`StepEvent::preprocessed`).
+                    id:       "6.10p2".to_owned(),
+                    title:    "Preprocessing directives".to_owned(),
+                    gloss:    "A directive is a line whose first token is #; it ends at the \
+                               line's new-line."
+                        .to_owned(),
+                    citation: "C99 §6.10p2, pp. 146-147; PDF pp. 158-159".to_owned(),
+                },
+            ],
             range:          location,
             encoding:       None,
             conversion:     None,
