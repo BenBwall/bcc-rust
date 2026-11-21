@@ -244,6 +244,61 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
+    /// Reports `cl`'s error `code` in its `words`, at `site`, with its note
+    /// `note` at a place of its own.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn cl_error(
+        &mut self,
+        code: super::ClErrorCode,
+        site: SourceVectors,
+        words: &str,
+        note: Option<(SourceVectors, &str)>,
+    ) {
+        let name = self.context.string_cache.intern(words);
+        let mut related = super::RelatedNotes::default();
+        if let Some((place, text)) = note {
+            related.notes[0] = Some((
+                self.context.file_location(place),
+                self.context.string_cache.intern(text),
+            ));
+        }
+        self.with_related_notes(related, |analyzer| {
+            analyzer.report_cl_error(SemanticErrorKind::ClError(code), site, name);
+        });
+    }
+
+    /// [`Self::error`] keeping the related notes, which `cl`'s errors carry.
+    fn report_cl_error(
+        &mut self,
+        kind: SemanticErrorKind,
+        site: SourceVectors,
+        name: StringCacheId,
+    ) {
+        if self.tainted {
+            return;
+        }
+        self.semantic_errors += 1;
+        self.error_diagnostics += 1;
+        self.hard_errors += 1;
+        let error = SemanticError {
+            extension_severity: None,
+            gcc_werror: false,
+            kind,
+            source_vectors: self.context.file_location(site),
+            name: Some(name),
+            previous: None,
+            highlights: self.format_highlights(),
+            origin: site,
+            order: self.report_order,
+            parameter: None,
+            related: self.related_notes,
+            fix_it: None,
+        };
+        self.context
+            .classified_error(site, TranslationError::Semantic(error));
+    }
+
     /// Reports a diagnostic of no group at `severity`, which the caller has
     /// decided: `cl`'s code generator's warnings, which its own settings
     /// govern.

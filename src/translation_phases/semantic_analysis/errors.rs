@@ -169,6 +169,43 @@ pub(crate) enum InitializedObject {
     Scalar,
 }
 
+/// The errors bcc reports with `cl`'s code and words
+/// ([`SemanticErrorKind::ClError`]). Microsoft Learn: "Compiler Error C2039",
+/// "Compiler Error C2063", "Compiler Error C2084", "Compiler Error C2100",
+/// "Compiler Error C2106", "Compiler Error C2197", "Compiler Error C2198".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClErrorCode {
+    /// C2039: `'y': is not a member of 'S'`, with a note at the tag.
+    NotAMember,
+    /// C2063: `'x': not a function`.
+    NotAFunction,
+    /// C2084: `function 'int f(void)' already has a body`, with a note at
+    /// the first definition.
+    AlreadyHasBody,
+    /// C2100: `you cannot dereference an operand of type 'int'`.
+    Indirection,
+    /// C2106: `'=': left operand must be l-value`.
+    LeftOperand,
+    /// C2197: `'int g(int)': too many arguments for call`.
+    TooManyArguments,
+    /// C2198: `'int g(int,int)': too few arguments for call`.
+    TooFewArguments,
+}
+
+impl ClErrorCode {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            | Self::NotAMember => "C2039",
+            | Self::NotAFunction => "C2063",
+            | Self::AlreadyHasBody => "C2084",
+            | Self::Indirection => "C2100",
+            | Self::LeftOperand => "C2106",
+            | Self::TooManyArguments => "C2197",
+            | Self::TooFewArguments => "C2198",
+        }
+    }
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +280,10 @@ pub(crate) enum SemanticErrorKind {
     SignCompareEquality,
     /// `cl`'s error C2124: an integer constant divided by a constant zero.
     ClDivideByZero,
+    /// An error `cl` numbers, reported in its words (the name) under its
+    /// identity and formats, where bcc's own words would name the same
+    /// violation.
+    ClError(ClErrorCode),
     /// `cl`'s code generator's C4715 (some path reaches the end of a
     /// function that returns a value) or C4716 (`always`: no path returns
     /// one); `promoted`, `/WX` made it an error.
@@ -1347,6 +1388,7 @@ impl SemanticErrorKind {
             | Self::SignCompare | Self::SignCompareEquality =>
                 "signed operand converts to unsigned",
             | Self::ClDivideByZero => "the divisor is zero",
+            | Self::ClError(_) => "here",
             | Self::ClReturnFlow { .. } => "control reaches the end of the function",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
@@ -2156,6 +2198,10 @@ impl SemanticErrorKind {
             | Self::ClDivideByZero => (
                 "integer constant divided by zero",
                 "C99 §6.5.5p5: the result of dividing by zero is undefined",
+            ),
+            | Self::ClError(_) => (
+                "constraint violation",
+                "C99 §5.1.1.3p1: a violated constraint requires a diagnostic",
             ),
             | Self::ClReturnFlow { .. } => (
                 "control reaches the end of the function",
@@ -3369,6 +3415,7 @@ impl SemanticError {
         }
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
+            | SemanticErrorKind::ClError(code) => (code.code(), arena.alloc_str(name)),
             | SemanticErrorKind::Unused(UnusedRule::ClParameter) => (
                 "C4100",
                 format_in!(arena, "'{name}': unreferenced parameter"),
@@ -3770,6 +3817,13 @@ impl ToDiagnostic for SemanticError {
             diagnostic.back_end = true;
             if promoted {
                 diagnostic.treated_as_error = TreatedAsError::First;
+            }
+        }
+        // `cl`'s notes name places of their own.
+        if let SemanticErrorKind::ClError(_) = self.kind {
+            for &(site, words) in self.related.notes.iter().flatten() {
+                let words = arena.alloc_str(context.string_cache.at(words));
+                diagnostic = diagnostic.msvc_note(Some(site), words);
             }
         }
         if let Some(("C4706", _)) = msvc {

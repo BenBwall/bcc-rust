@@ -647,6 +647,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     ),
                     Some(token),
                 );
+                if let Some(operand) = e.operands.last() {
+                    self.cl_assignment_operand(operand.expression);
+                }
             }
             e.operators.push(incoming);
             e.operand = true;

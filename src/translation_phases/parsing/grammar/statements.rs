@@ -1076,10 +1076,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
         loop {
             let token = self.cursor.current();
             let Some(token) = token else {
+                // A block within this one met the end first.
+                let inner_ended = self.compound_end == CompoundEnd::EndOfInput;
                 self.report(
                     ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
                     None,
                 );
+                if !inner_ended && let Some(&open) = sources.first() {
+                    self.cl_unmatched_brace(open);
+                }
                 self.compound_end = CompoundEnd::EndOfInput;
                 break;
             };

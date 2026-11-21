@@ -2099,12 +2099,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entity.first = entity.first.or(Some(index));
         entity.latest = index;
         if let Some(FunctionBody::Unique(previous)) = entity.function_body {
-            self.error(
-                SemanticErrorKind::DuplicateDefinition,
-                b.name.source_vectors,
-                Some(b.name.name),
-                Some(previous),
-            );
+            // `cl`'s error C2084 names the function by its declaration.
+            // Microsoft Learn: "Compiler Error C2084".
+            let spelled = if self.context.configuration.msvc_wording() {
+                self.msvc_function_spelling(b.ty, b.name.name)
+            } else {
+                None
+            };
+            if let Some(function) = spelled {
+                let name = self.context.string_cache.at(b.name.name);
+                let words = crate::diagnostics::format_in!(
+                    self.scratch,
+                    "function '{function}' already has a body"
+                );
+                let note = crate::diagnostics::format_in!(
+                    self.scratch,
+                    "see previous definition of '{name}'"
+                );
+                self.cl_error(
+                    super::ClErrorCode::AlreadyHasBody,
+                    b.name.source_vectors,
+                    words,
+                    Some((previous, note)),
+                );
+            } else {
+                self.error(
+                    SemanticErrorKind::DuplicateDefinition,
+                    b.name.source_vectors,
+                    Some(b.name.name),
+                    Some(previous),
+                );
+            }
         } else {
             entity.function_body = Some(if entity.can_redefine {
                 FunctionBody::Replaceable(b.name.source_vectors)
