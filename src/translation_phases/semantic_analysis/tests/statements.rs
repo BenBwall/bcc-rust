@@ -450,7 +450,19 @@ fn return_mismatches_follow_the_identity_and_revision() {
         ] {
             with_configuration(source, configuration, |context, _| {
                 let errors = context.take_pending_errors();
-                let severities: Vec<_> = errors.iter().map(GetSeverity::severity).collect();
+                // `cl`'s code generator also says no path returns a value
+                // (C4716), apart from the mismatch.
+                let severities: Vec<_> = errors
+                    .iter()
+                    .filter(|error| {
+                        !matches!(
+                            error,
+                            TranslationError::Semantic(error)
+                                if matches!(error.kind, SemanticErrorKind::ClReturnFlow { .. })
+                        )
+                    })
+                    .map(GetSeverity::severity)
+                    .collect();
                 assert_eq!(
                     severities,
                     expected.into_iter().collect::<Vec<_>>(),
