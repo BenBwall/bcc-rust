@@ -3037,13 +3037,17 @@ same `refold` that strict initializers use, only where its value is final:
 
 A store or initializer counts only when every read of its object in the
 function is final as well: a return value or argument as above, the object
-whose address is passed to any function, a discarded expression statement,
-or a copy into another object whose own reads are final. Parentheses,
+whose address is passed to any function, an argument of a builtin or library
+function whose result is not floating (`printf`, `memcpy`), a discarded
+expression statement, or a copy into another object whose own reads are
+final. Parentheses,
 casts, unary `+`, `-` and `~`, `__real__`, `__imag__`, `&`, `*`, member
 access, subscripts, comma operators and conditional arms pass a value on.
 Reads in a GNU nested function count for the enclosing function's objects.
 Everything else (an operand of an arithmetic operation or compound
-assignment computed at run time, a builtin's argument, an expression this
+assignment computed at run time, a constant argument of a builtin or library
+function (one with a floating result may be computed inline, as `fmax` is,
+and another's folded value derives from it), an expression this
 does not follow, a `_Float16` or `__bf16` value, an integer
 derived from the NaN such as `__builtin_signbit(0.0 / 0.0)`) keeps the
 hardware's NaN. A context that requires a constant (`case` labels, static

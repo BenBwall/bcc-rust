@@ -32,6 +32,7 @@ use rustc_hash::FxBuildHasher;
 use super::{
     Analyzer,
     BindingKind,
+    TypeKind,
     constants::{
         Binary128Value,
         NanSource,
@@ -87,13 +88,17 @@ pub(super) struct FunctionNans<'tu, 's> {
 enum Final<'tu> {
     /// A returned value, or an argument of a function that is no builtin.
     Value(&'tu Expression<'tu>),
-    /// An argument of a builtin, which may compute at run time with it: only
-    /// an object whose address it passes is read finally.
+    /// An argument of a builtin or library function with a floating result,
+    /// which may compute it inline from its arguments: only an object whose
+    /// address it passes is read finally.
     BuiltinArgument(&'tu Expression<'tu>),
     /// The left and right operands of an assignment statement.
     Store(&'tu Expression<'tu>, &'tu Expression<'tu>),
-    /// Another expression statement, whose value is discarded.
-    Discarded(&'tu Expression<'tu>),
+    /// Another expression statement, whose value is discarded, or an
+    /// argument of a builtin or library function with another result,
+    /// which only observes it: its reads are final, but a constant in it is
+    /// not folded again, as the call's own folded value derives from it.
+    Observed(&'tu Expression<'tu>),
     /// The initializer of an automatic object.
     Initializer(usize, &'tu Initializer<'tu>),
 }
@@ -160,17 +165,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | ExpressionType::Identifier(name) => Some(name.name),
             | _ => None,
         };
+        // A builtin or library function whose result is floating may be
+        // computed inline from its arguments, as `fmax` is; one with another
+        // result (`printf`, `memcpy`, `__builtin_signbit`) only observes them.
+        let callee_info = self.expression_info(callee);
+        let floating_result = match self.types.nodes[self.types.non_atomic(callee_info.ty).index] {
+            | TypeKind::Function { result, .. } => matches!(
+                self.types.nodes[self.types.non_atomic(result).index],
+                TypeKind::Scalar(scalar) if scalar.floating()
+            ),
+            | _ => true,
+        };
         let builtin = name.is_some_and(|name| {
             let spelling = self.context.string_cache.at(name);
-            self.expression_info(callee)
+            callee_info
                 .binding
                 .is_some_and(|binding| self.bindings[binding].origin.is_intrinsic())
                 || crate::builtins::lookup(spelling).is_some()
                 || crate::builtins::ordinary(spelling).is_some()
         });
         for (index, &argument) in arguments.iter().enumerate() {
-            let place = if builtin {
+            let place = if builtin && floating_result {
                 Final::BuiltinArgument(argument)
+            } else if builtin {
+                Final::Observed(argument)
             } else if name.is_some_and(|name| {
                 self.functions
                     .nans
@@ -209,7 +227,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => Final::Store(left_expression, right_expression),
-            | _ => Final::Discarded(e),
+            | _ => Final::Observed(e),
         };
         self.functions.nans.finals.push(place);
     }
@@ -262,7 +280,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         for &place in &nans.finals {
             match place {
                 | Final::Value(e) => self.settle_value(e, &nans.folds),
-                | Final::BuiltinArgument(_) | Final::Discarded(_) => {},
+                | Final::BuiltinArgument(_) | Final::Observed(_) => {},
                 | Final::Store(target, value) =>
                     if self
                         .stored_binding(target)
@@ -303,7 +321,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 });
             };
             match place {
-                | Final::Value(e) | Final::BuiltinArgument(e) | Final::Discarded(e) =>
+                | Final::Value(e) | Final::BuiltinArgument(e) | Final::Observed(e) =>
                     Self::passed_identifiers(
                         self.scratch,
                         e,
@@ -497,7 +515,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
             let info = self.expression_info(e);
             if info.binary128().is_some() {
-                if !self.binary128_refoldable(e) {
+                if !Self::binary128_refoldable(e) {
                     return;
                 }
                 order.push(e);
@@ -651,7 +669,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether [`Self::binary128_refold`] folds `e`, a binary128 constant,
     /// again.
-    fn binary128_refoldable(&self, e: &'tu Expression<'tu>) -> bool {
+    fn binary128_refoldable(e: &'tu Expression<'tu>) -> bool {
         match e.kind {
             | ExpressionType::Parenthesized { .. } | ExpressionType::Cast { .. } => true,
             | ExpressionType::Unary { operator, .. } =>
