@@ -491,9 +491,9 @@ pub static TERMS: [Term; 51] = [
         id:         "dangling-pointer",
         name:       "Dangling pointer",
         phrases:    &["dangling pointer", "dangling"],
-        definition: "A pointer to an object whose lifetime has ended, such as a local of a \
-                     function that has returned. Its value is indeterminate, and using it is \
-                     undefined.",
+        definition: "A pointer to an object whose lifetime has ended, such as an automatic \
+                     (non-static) local of a function that has returned. Its value is \
+                     indeterminate, and using it is undefined.",
         clause:     "6.2.4p2",
         page:       44,
     },
