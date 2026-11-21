@@ -1,0 +1,12 @@
+werror-extra-gcc.c: In function 'f':
+werror-extra-gcc.c:4:11: error: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Werror=sign-compare]
+    4 |     if (u < v)
+      |           ^
+werror-extra-gcc.c:7:9: error: suggest braces around empty body in an 'if' statement [-Werror=empty-body]
+    7 |         ;
+      |         ^
+werror-extra-gcc.c: In function 'g':
+werror-extra-gcc.c:10:35: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   10 | int g(unsigned char c) { return c < 0; }
+      |                                   ^
+cc1: some warnings being treated as errors

@@ -264,6 +264,80 @@ int d[0];
         }
     }
 
+    /// A pragma naming an option that holds no extension diagnostic, a
+    /// `push` and `pop` around any, and under GCC a pragma naming one of its
+    /// own options such as `-Wlong-long`, leave the command line's
+    /// classification of the others standing: `-Werror`, `-Werror=pedantic`
+    /// and Clang's `-Werror=c11-extensions` still make them errors, and
+    /// `-Wno-error=` keeps them warnings. Each row was checked against GCC
+    /// 14 and Clang 23; GCC reports the `__FUNCTION__` line after the
+    /// others, which bcc reports in source order.
+    #[test]
+    fn other_pragmas_leave_extension_diagnostics_to_the_command_line() {
+        const CODE: &str = "_Static_assert(1, \"x\");\nconst char *n(void) { return \
+                            __FUNCTION__; }\nint z[0];\n";
+        let before = [
+            "#pragma GCC diagnostic ignored \"-Wformat\"\n\n\n",
+            "#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n\n",
+            "#pragma GCC diagnostic push\n#pragma GCC diagnostic error \"-Wpedantic\"\n#pragma \
+             GCC diagnostic pop\n",
+        ];
+        let long_long = "#pragma GCC diagnostic warning \"-Wlong-long\"\n\n\n";
+        let cases: [(&str, &[&str], &[&str]); 10] = [
+            (
+                "--gcc-mode",
+                &["-pedantic", "-Werror"],
+                &["4 error", "5 error", "6 error"],
+            ),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic"],
+                &["4 error", "5 error", "6 error"],
+            ),
+            (
+                "--gcc-mode",
+                &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+                &["4 warning", "5 warning", "6 warning"],
+            ),
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                &["4 warning", "5 warning", "6 warning"],
+            ),
+            ("--clang-mode", &["-pedantic", "-Werror"], &["4 error", "6 error"]),
+            ("--clang-mode", &["-Werror=pedantic"], &["4 error", "6 error"]),
+            (
+                "--clang-mode",
+                &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+                &["4 warning", "6 warning"],
+            ),
+            ("--clang-mode", &["-Werror=c11-extensions"], &["4 error"]),
+            (
+                "--clang-mode",
+                &["-pedantic", "-Werror", "-Wno-error=c11-extensions"],
+                &["4 warning", "6 error"],
+            ),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                &["4 warning", "6 warning"],
+            ),
+        ];
+        for (mode, flags, expected) in cases {
+            let mut flags = flags.to_vec();
+            flags.insert(0, "-std=c99");
+            let heads = before
+                .iter()
+                .chain((mode == "--gcc-mode").then_some(&long_long));
+            for head in heads {
+                let mut reported =
+                    compile("other-pragmas", mode, &flags, &format!("{head}{CODE}"));
+                reported.sort();
+                assert_eq!(reported, expected, "{mode} {flags:?} {head}");
+            }
+        }
+    }
+
     /// `-Wfatal-errors` stops GCC at the first error a pragma makes; Clang
     /// leaves such an error an error and goes on.
     #[test]
