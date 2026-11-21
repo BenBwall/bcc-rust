@@ -145,8 +145,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// `cl`'s C4018 (a relational comparison, at level 3) and C4389 (an
     /// equality comparison, at level 4): the operands' promoted types are of
-    /// one width and differ in sign, and neither operand is a constant,
-    /// whatever its value (`-1 < u` draws neither). `cl` keeps an unsigned
+    /// one width and differ in sign, neither operand is a constant, whatever
+    /// its value (`-1 < u` draws neither), and the signed one is no
+    /// promoted `unsigned char` or `unsigned short`. `cl` keeps an unsigned
     /// bit-field unsigned where C promotes it to `int`, and warns about it
     /// where bcc does not. Microsoft Learn: "Compiler Warning (level 3)
     /// C4018", "Compiler Warning (level 4) C4389".
@@ -170,6 +171,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if left_signed == right_signed || left_bits != right_bits {
             return;
         }
+        let signed = if left_signed { left } else { right };
+        if self.cl_narrow_unsigned(signed.expression) {
+            return;
+        }
         let (group, kind) = if matches!(operator, B::Equal | B::NotEqual) {
             (
                 DiagnosticGroup::SignCompareEquality,
@@ -186,6 +191,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let name = self.context.string_cache.intern(text);
         let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
         self.spelled_group_diagnostic(group, kind, site, Some(name), site);
+    }
+
+    /// Whether `e`, under its parentheses and casts, has an unsigned type
+    /// narrower than `int` other than `_Bool`, whose promoted value `cl`
+    /// knows is not negative (`uc < u` and `(int)uc < u` draw no C4018).
+    fn cl_narrow_unsigned(&self, mut e: &'tu Expression<'tu>) -> bool {
+        while let E::Parenthesized { expression: inner }
+        | E::Cast {
+            operand_expression: inner,
+            ..
+        } = e.kind
+        {
+            e = inner;
+        }
+        let ty = self
+            .types
+            .non_atomic(self.expression_info(e).ty)
+            .unqualified();
+        if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+            return false;
+        }
+        let int = self
+            .types
+            .target
+            .integer(Scalar::Int)
+            .map_or(32, |(bits, _)| bits);
+        self.integer_type(ty)
+            .is_some_and(|(bits, signed)| !signed && bits < int)
     }
 
     /// GCC's `warn_for_sign_compare`, and `shorten_compare`, which settles a

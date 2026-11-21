@@ -29,7 +29,7 @@ pub(crate) fn clang_knows_warning(option: &str) -> bool {
 }
 
 /// A warning the command line names by `cl`'s code: its level, and the group
-/// of bcc's own options that controls it.
+/// of bcc's own options that controls it, if one does.
 #[derive(Clone, Copy)]
 pub(crate) struct ClCodedWarning {
     pub(crate) code:   u16,
@@ -88,10 +88,10 @@ pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 19] = [
     enabled(4706, 4, "parentheses"),
     enabled(4293, 1, "shift-count-overflow"),
     enabled(4293, 1, "shift-count-negative"),
-    // The code generator's, about the end of a function: one group holds
-    // both.
-    enabled(4715, 1, "return-type"),
-    enabled(4716, 1, "return-type"),
+    // The code generator's, about the end of a function, which its own
+    // states govern (`ClWarnings::shown`) rather than a group.
+    coded(4715, 1, ""),
+    coded(4716, 1, ""),
 ];
 
 /// What `cl` makes of one numbered warning: never shown (`/wd`, `disable`),

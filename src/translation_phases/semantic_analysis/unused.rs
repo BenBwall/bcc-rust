@@ -1117,14 +1117,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Holds `cl`'s warning about the end of the function `name`, which its
-    /// code generator gives once the front end is done.
+    /// code generator gives once the front end is done, and not under `/Zs`.
     pub(super) fn late_cl_return_flow(
         &mut self,
         name: StringCacheId,
         end: SourceVectors,
         always: bool,
     ) {
-        self.unused.cl_return_flow.push((name, end, always));
+        // `/Zs` generates no code.
+        if !self.context.configuration.syntax_only() {
+            self.unused.cl_return_flow.push((name, end, always));
+        }
     }
 
     /// Reports `cl`'s C4715 or C4716, which its code generator says of each
@@ -1138,6 +1141,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.context.error_count() != 0 {
             return;
         }
+        let outer = std::mem::replace(&mut self.report_order, ReportOrder::UnitEnd);
         for i in 0..self.unused.cl_return_flow.len() {
             let (name, end, always) = self.unused.cl_return_flow[i];
             let configuration = self.context.configuration_at(end);
@@ -1158,6 +1162,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 severity,
             );
         }
+        self.report_order = outer;
     }
 
     /// Reports the warnings [`Self::late_return_flow_warning`] held, in the

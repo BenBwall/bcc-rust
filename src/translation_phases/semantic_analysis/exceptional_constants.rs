@@ -564,7 +564,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `cl`'s C4293, at level 1, for a constant shift count that is negative
     /// or not below the width of the promoted left operand, whatever that
     /// operand is, and its error C2124 for an integer constant divided by a
-    /// constant zero (a variable divided by zero draws nothing).
+    /// constant zero (a variable divided by zero draws nothing) while the
+    /// unit has had no error.
     /// Microsoft Learn: "Compiler Warning (level 1) C4293", "Compiler Error
     /// C2124".
     /// C99: §6.5.7 paragraph 3, p. 84; PDF p. 96; §6.5.5 paragraph 5, p. 82;
@@ -582,8 +583,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         match op {
+            // `cl` reports none once the unit has had an error.
             | B::Division | B::Modulo
-                if count.is_zero() && left.ice && self.integer_type(left.ty).is_some() =>
+                if count.is_zero()
+                    && left.ice
+                    && self.integer_type(left.ty).is_some()
+                    && self.hard_errors == 0 =>
             {
                 self.error(
                     SemanticErrorKind::ClDivideByZero,
