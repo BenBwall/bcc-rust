@@ -730,6 +730,12 @@ fn show_ir(stage: RwSignal<Stage>) {
 /// Selects `entry` and moves the focus to its key in the stage strip.
 fn focus_stage(stage: RwSignal<Stage>, entry: Stage) {
     stage.set(entry);
+    focus_stage_key(entry);
+}
+
+/// Moves the focus to `entry`'s key in the stage strip, if the strip is on
+/// the page.
+pub fn focus_stage_key(entry: Stage) {
     #[cfg(feature = "hydrate")]
     if let Some(tab) = document()
         .get_element_by_id(&format!("stage-tab-{}", entry.key()))
@@ -737,6 +743,8 @@ fn focus_stage(stage: RwSignal<Stage>, entry: Stage) {
     {
         _ = tab.focus();
     }
+    #[cfg(not(feature = "hydrate"))]
+    let _ = entry;
 }
 
 /// Which stage an error stopped bcc in, and why.

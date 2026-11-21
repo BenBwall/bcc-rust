@@ -60,6 +60,7 @@ use crate::{
         Schematic,
         WasmListing,
         WasmView,
+        focus_stage_key,
         source_marks,
     },
     pipeline::{
@@ -789,6 +790,14 @@ impl State {
         }
         self.mode.set(mode);
         self.compile_now();
+    }
+
+    /// Open the pipeline at `stage` from a button of the machine's note,
+    /// which goes with the machine's view: the focus moves to the stage's
+    /// key once the pipeline is drawn, rather than falling to the page.
+    fn open_stage(self, stage: Stage) {
+        self.open_view(Mode::Pipeline, Some(stage));
+        Timeout::new(0, move || focus_stage_key(stage)).forget();
     }
 
     fn set_mode(self, mode: Mode) {
@@ -2519,7 +2528,7 @@ fn MachineView(state: State) -> impl IntoView {
                     recent=state.recent
                     group=state.group
                     on_jump=Callback::new(move |index| state.jump(index))
-                    on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
+                    on_preprocessor=Callback::new(move |()| state.open_stage(Stage::Preprocessor))
                     placeholder=state.placeholder
                     running=state.running.into()
                     reel
