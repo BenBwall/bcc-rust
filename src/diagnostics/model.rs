@@ -63,6 +63,9 @@ pub(crate) struct Diagnostic<'d> {
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
     pub(crate) reading:          Option<SourceVectors>,
+    /// `cl`'s code generator reported it, which `cl` leads with the file's
+    /// full path and the line alone: `C:\src\a.c(3) : warning C4715: ...`.
+    pub(crate) back_end:         bool,
     /// `cl`'s notes, which the MSVC formats write after the message, each
     /// on a line of its own led by its place: `file(line): note: text`.
     pub(crate) msvc_notes:       ArenaVec<'d, MsvcNote<'d>>,
@@ -251,6 +254,7 @@ impl<'d> Explanation<'d> {
             help: self.help,
             fix_its: ArenaVec::new_in(self.arena),
             reading: None,
+            back_end: false,
             msvc_notes: ArenaVec::new_in(self.arena),
         }
         .primary(source, self.label)

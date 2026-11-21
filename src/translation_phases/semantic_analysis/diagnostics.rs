@@ -244,6 +244,41 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
+    /// Reports a diagnostic of no group at `severity`, which the caller has
+    /// decided: `cl`'s code generator's warnings, which its own settings
+    /// govern.
+    pub(super) fn report_with_severity(
+        &mut self,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+        severity: crate::translation_phases::ErrorSeverity,
+    ) {
+        if self.tainted || self.context.withholds(severity, false, source_vectors) {
+            return;
+        }
+        let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+        self.semantic_errors += errors;
+        self.error_diagnostics += errors;
+        let at = source_vectors;
+        let error = SemanticError {
+            extension_severity: Some(severity),
+            gcc_werror: false,
+            kind,
+            source_vectors: self.context.file_location(source_vectors),
+            name,
+            previous: None,
+            highlights: self.format_highlights(),
+            origin: at,
+            order: self.report_order,
+            parameter: None,
+            related: super::RelatedNotes::default(),
+            fix_it: None,
+        };
+        self.context
+            .classified_error(at, TranslationError::Semantic(error));
+    }
+
     #[cold]
     #[inline(never)]
     pub(super) fn error(

@@ -243,6 +243,13 @@ pub(crate) enum SemanticErrorKind {
     SignCompareEquality,
     /// `cl`'s error C2124: an integer constant divided by a constant zero.
     ClDivideByZero,
+    /// `cl`'s code generator's C4715 (some path reaches the end of a
+    /// function that returns a value) or C4716 (`always`: no path returns
+    /// one); `promoted`, `/WX` made it an error.
+    ClReturnFlow {
+        always:   bool,
+        promoted: bool,
+    },
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
@@ -1340,6 +1347,7 @@ impl SemanticErrorKind {
             | Self::SignCompare | Self::SignCompareEquality =>
                 "signed operand converts to unsigned",
             | Self::ClDivideByZero => "the divisor is zero",
+            | Self::ClReturnFlow { .. } => "control reaches the end of the function",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
@@ -2148,6 +2156,11 @@ impl SemanticErrorKind {
             | Self::ClDivideByZero => (
                 "integer constant divided by zero",
                 "C99 §6.5.5p5: the result of dividing by zero is undefined",
+            ),
+            | Self::ClReturnFlow { .. } => (
+                "control reaches the end of the function",
+                "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
+                 reaches the closing brace",
             ),
             | Self::SignCompare | Self::SignCompareEquality => (
                 "comparison of integers of different signs",
@@ -3341,6 +3354,17 @@ impl SemanticError {
                 text,
             ) => return Some(("C4293", arena.alloc_str(context.string_cache.at(text)))),
             | SemanticErrorKind::ClDivideByZero => return Some(("C2124", "divide or mod by zero")),
+            | SemanticErrorKind::ClReturnFlow { always, .. } => {
+                let name = context.string_cache.at(self.name?);
+                return Some(if always {
+                    ("C4716", format_in!(arena, "'{name}': must return a value"))
+                } else {
+                    (
+                        "C4715",
+                        format_in!(arena, "'{name}': not all control paths return a value"),
+                    )
+                });
+            },
             | _ => {},
         }
         let name = context.string_cache.at(self.name?);
@@ -3738,6 +3762,16 @@ impl ToDiagnostic for SemanticError {
             | None => explanation,
         };
         let mut diagnostic = explanation.at(self.severity(), source);
+        // `cl`'s code generator names the file by its full path and no
+        // column, and `/WX` announces each of its warnings.
+        if let SemanticErrorKind::ClReturnFlow { promoted, .. } = self.kind
+            && msvc.is_some()
+        {
+            diagnostic.back_end = true;
+            if promoted {
+                diagnostic.treated_as_error = TreatedAsError::First;
+            }
+        }
         if let Some(("C4706", _)) = msvc {
             diagnostic = diagnostic.msvc_note(
                 None,

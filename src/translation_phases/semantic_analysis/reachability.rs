@@ -129,6 +129,10 @@ struct Exits {
     any_return:   bool,
     /// The first `return` statement the walk reached.
     live_return:  Option<SourceVectors>,
+    /// A `return` with a value the walk reached, which `cl` asks.
+    live_value:   bool,
+    /// A `return` without one the walk reached.
+    live_void:    bool,
     /// A call the walk reached does not return.
     abnormal:     bool,
     /// Any call, reached or not, to a function that does not return: GCC's
@@ -511,6 +515,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 flow.exits.any_return = true;
                 if live && flow.exits.live_return.is_none() {
                     flow.exits.live_return = Some(statement.source_vectors);
+                }
+                if live {
+                    flow.exits.live_value |= slot.is_some();
+                    flow.exits.live_void |= slot.is_none();
                 }
                 false
             },

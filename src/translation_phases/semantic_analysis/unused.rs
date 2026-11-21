@@ -201,6 +201,9 @@ pub(super) struct UnusedState<'s> {
     /// What GCC's middle end says of reaching a function's end, which it
     /// reports once the unit is parsed: the group, the place and the words.
     late_return_flow: ArenaVec<'s, (G, SourceVectors, &'static str)>,
+    /// What `cl`'s code generator says of the same: the function, its
+    /// closing brace, and whether no path returns a value (C4716).
+    cl_return_flow: ArenaVec<'s, (StringCacheId, SourceVectors, bool)>,
     /// The binding that defines each internal function, where GCC's symbol
     /// table gains the function.
     function_symbols: ArenaMap<'s, StringCacheId, usize>,
@@ -299,7 +302,8 @@ impl<'s> UnusedState<'s> {
             // generator finds it.
             return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn])
                 || (configuration.compiler_identity() == CompilerIdentity::Tcc
-                    && configuration.diagnostic_severity(G::ReturnType).is_some()),
+                    && configuration.diagnostic_severity(G::ReturnType).is_some())
+                || cl,
             sign_compare: on(&[G::SignCompare]) || cl_on(&[G::SignCompare, G::SignCompareEquality]),
             bool_operation: on(&[G::BoolOperation]),
             missing_fields: on(&[G::MissingFieldInitializers]),
@@ -318,6 +322,7 @@ impl<'s> UnusedState<'s> {
             gcc_functions: ArenaVec::new_in(scratch),
             local_typedefs: ArenaVec::new_in(scratch),
             late_return_flow: ArenaVec::new_in(scratch),
+            cl_return_flow: ArenaVec::new_in(scratch),
             function_symbols: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             cl_pending: ArenaVec::new_in(scratch),
         }
@@ -1111,9 +1116,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Holds `cl`'s warning about the end of the function `name`, which its
+    /// code generator gives once the front end is done.
+    pub(super) fn late_cl_return_flow(
+        &mut self,
+        name: StringCacheId,
+        end: SourceVectors,
+        always: bool,
+    ) {
+        self.unused.cl_return_flow.push((name, end, always));
+    }
+
+    /// Reports `cl`'s C4715 or C4716, which its code generator says of each
+    /// function in turn, if the front end reported no error (`/WX`'s
+    /// included) and the settings at the closing brace show it: as an
+    /// error under `/we`, and under `/WX` as a warning that `error C2220`
+    /// leads, before each one. Their numbers have no group of bcc's.
+    /// Microsoft Learn: "Compiler Error C2220".
+    fn report_cl_return_flow(&mut self) {
+        use crate::configuration::ClWarningState as State;
+        if self.context.error_count() != 0 {
+            return;
+        }
+        for i in 0..self.unused.cl_return_flow.len() {
+            let (name, end, always) = self.unused.cl_return_flow[i];
+            let configuration = self.context.configuration_at(end);
+            let code = if always { 4716 } else { 4715 };
+            let Some(state) = configuration.cl_warnings().shown(code) else {
+                continue;
+            };
+            let promoted = state != State::Error && configuration.warnings_are_errors();
+            let severity = if state == State::Error || promoted {
+                crate::translation_phases::ErrorSeverity::Error
+            } else {
+                crate::translation_phases::ErrorSeverity::Warning
+            };
+            self.report_with_severity(
+                SemanticErrorKind::ClReturnFlow { always, promoted },
+                end,
+                Some(name),
+                severity,
+            );
+        }
+    }
+
     /// Reports the warnings [`Self::late_return_flow_warning`] held, in the
     /// order of their functions.
     pub(super) fn report_late_return_flow(&mut self) {
+        if self.unused.cl {
+            self.report_cl_return_flow();
+            return;
+        }
         for i in 0..self.unused.late_return_flow.len() {
             let (group, site, text) = self.unused.late_return_flow[i];
             self.return_flow_warning(group, site, text);

@@ -150,6 +150,19 @@ impl ClWarnings {
             .map(|warning| warning.level)
     }
 
+    /// What the settings make of `code` at the current level: `None` when
+    /// it is not shown.
+    pub(crate) fn shown(self, code: u16) -> Option<ClWarningState> {
+        let index = CL_CODED_WARNINGS
+            .iter()
+            .position(|warning| warning.code == code)?;
+        match self.states[index] {
+            | ClWarningState::Level(level) if level > self.level => None,
+            | ClWarningState::Disabled => None,
+            | state => Some(state),
+        }
+    }
+
     /// Each entry's group and whether it is off, a warning or an error at
     /// the current level.
     pub(crate) fn classes(self) -> impl Iterator<Item = (&'static str, ClWarningState)> {
