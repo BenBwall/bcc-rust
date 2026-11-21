@@ -2753,8 +2753,18 @@ mod tests {
                     "unused-parameter error",
                 ],
             ),
-            ("gcc", "", &["-Werror=extra", "-Wno-error=extra"], GCC_ERRORS),
-            ("gcc", "", &["-Werror", "-Wextra", "-Wno-error=extra"], GCC_ERRORS),
+            (
+                "gcc",
+                "",
+                &["-Werror=extra", "-Wno-error=extra"],
+                GCC_ERRORS,
+            ),
+            (
+                "gcc",
+                "",
+                &["-Werror", "-Wextra", "-Wno-error=extra"],
+                GCC_ERRORS,
+            ),
             ("gcc", "", &["-Werror=extra", "-w"], &[]),
             (
                 "gcc",
@@ -2776,7 +2786,12 @@ mod tests {
                     "sign-compare warning",
                 ],
             ),
-            ("gcc", "#pragma GCC diagnostic error \"-Wextra\"\n", &[], GCC_ERRORS),
+            (
+                "gcc",
+                "#pragma GCC diagnostic error \"-Wextra\"\n",
+                &[],
+                GCC_ERRORS,
+            ),
             (
                 "gcc",
                 "#pragma GCC diagnostic ignored \"-Wformat\"\n",
@@ -2809,8 +2824,18 @@ mod tests {
                 CLANG_WARNINGS,
             ),
             ("clang", "", &["-Werror=extra", "-Wextra"], CLANG_ERRORS),
-            ("clang", "", &["-Wextra", "-Wno-extra"], &["empty-body warning"]),
-            ("clang", "", &["-Wno-sign-compare", "-Werror=extra"], CLANG_ERRORS),
+            (
+                "clang",
+                "",
+                &["-Wextra", "-Wno-extra"],
+                &["empty-body warning"],
+            ),
+            (
+                "clang",
+                "",
+                &["-Wno-sign-compare", "-Werror=extra"],
+                CLANG_ERRORS,
+            ),
             (
                 "clang",
                 "",
@@ -2875,7 +2900,12 @@ mod tests {
             (ERROR, &["-Werror"], "-Werror=pedantic", ALL),
             (ERROR, &["-Werror=pedantic"], "-Werror=pedantic", SOME),
             (ERROR, &["-pedantic-errors"], "-Wpedantic", ""),
-            (UNRELATED, &["-pedantic", "-Werror"], "-Werror=pedantic", ALL),
+            (
+                UNRELATED,
+                &["-pedantic", "-Werror"],
+                "-Werror=pedantic",
+                ALL,
+            ),
             (UNRELATED, &["-Werror=pedantic"], "-Werror=pedantic", SOME),
             (UNRELATED, &["-pedantic-errors"], "-Wpedantic", ""),
             (PUSH_POP, &["-pedantic", "-Werror"], "-Werror=pedantic", ALL),
@@ -3094,7 +3124,13 @@ mod tests {
                 "-Werror=pedantic",
                 ALL,
             ),
-            (UNRELATED, &["-Werror=pedantic"], "error", "-Werror=pedantic", SOME),
+            (
+                UNRELATED,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
             (
                 PUSH_POP,
                 &["-Wpedantic", "-Werror"],
@@ -3102,7 +3138,13 @@ mod tests {
                 "-Werror=pedantic",
                 ALL,
             ),
-            (PUSH_POP, &["-Werror=pedantic"], "error", "-Werror=pedantic", SOME),
+            (
+                PUSH_POP,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
             (
                 PUSH_POP,
                 &["-Wpedantic", "-Wno-error=pedantic", "-Werror"],
@@ -3117,7 +3159,13 @@ mod tests {
                 "-Werror=pedantic",
                 ALL,
             ),
-            (POPPED, &["-Werror=pedantic"], "error", "-Werror=pedantic", SOME),
+            (
+                POPPED,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
             (
                 LONG_LONG,
                 &["-Wpedantic", "-Werror"],
@@ -3125,7 +3173,13 @@ mod tests {
                 "-Werror=pedantic",
                 ALL,
             ),
-            (LONG_LONG, &["-Werror=pedantic"], "error", "-Werror=pedantic", SOME),
+            (
+                LONG_LONG,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
         ];
         let directory = Directory::new();
         for (pragma, options, severity, option, cc1) in table {

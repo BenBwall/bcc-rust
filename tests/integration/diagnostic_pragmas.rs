@@ -274,8 +274,8 @@ int d[0];
     /// others, which bcc reports in source order.
     #[test]
     fn other_pragmas_leave_extension_diagnostics_to_the_command_line() {
-        const CODE: &str = "_Static_assert(1, \"x\");\nconst char *n(void) { return \
-                            __FUNCTION__; }\nint z[0];\n";
+        const CODE: &str =
+            "_Static_assert(1, \"x\");\nconst char *n(void) { return __FUNCTION__; }\nint z[0];\n";
         let before = [
             "#pragma GCC diagnostic ignored \"-Wformat\"\n\n\n",
             "#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n\n",
@@ -304,8 +304,16 @@ int d[0];
                 &["-pedantic-errors", "-Wno-error=pedantic"],
                 &["4 warning", "5 warning", "6 warning"],
             ),
-            ("--clang-mode", &["-pedantic", "-Werror"], &["4 error", "6 error"]),
-            ("--clang-mode", &["-Werror=pedantic"], &["4 error", "6 error"]),
+            (
+                "--clang-mode",
+                &["-pedantic", "-Werror"],
+                &["4 error", "6 error"],
+            ),
+            (
+                "--clang-mode",
+                &["-Werror=pedantic"],
+                &["4 error", "6 error"],
+            ),
             (
                 "--clang-mode",
                 &["-pedantic", "-Werror", "-Wno-error=pedantic"],
@@ -330,8 +338,7 @@ int d[0];
                 .iter()
                 .chain((mode == "--gcc-mode").then_some(&long_long));
             for head in heads {
-                let mut reported =
-                    compile("other-pragmas", mode, &flags, &format!("{head}{CODE}"));
+                let mut reported = compile("other-pragmas", mode, &flags, &format!("{head}{CODE}"));
                 reported.sort();
                 assert_eq!(reported, expected, "{mode} {flags:?} {head}");
             }
