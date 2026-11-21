@@ -14,6 +14,15 @@ at a constant. Both match `cl` 19.44 under Wine (`/W4 /diagnostics:column`,
 `/diagnostics:column`) byte for byte. The code generator's C4715 and C4716,
 which name the file by its full path, are pinned by
 `tests/integration/personality_cli.rs` instead.
+`sema-cl-pragma-suppress-msvc` pins `#pragma warning(suppress: N)` on the
+pragma's line and the next (a blank line counts, a `__pragma` covers its own
+line, a `suppress` on a line another reaches extends both) and `once`.
+`sema-cl-seh-uses-msvc` pins names that only `__try`, `__except` and
+`__finally` use as used, and C4018, C4706 and C4293 inside them.
+`sema-cl-compound-shift-msvc` pins C4293 for `<<` and `>>` but not `<<=` and
+`>>=`. These three match `cl` 19.44 (`/diagnostics:column`) byte for byte.
+`pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
+group of `cl`'s C4389, as before it existed.
 
 C23 directives before C23 (2026-11-15): `pp-c23-directives-gcc` (`-std=gnu17
 -pedantic`) and `pp-c23-directives-strict-gcc` (`-std=c17 -pedantic`) pin GCC

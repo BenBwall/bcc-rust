@@ -1,0 +1,3 @@
+pragma-sign-compare-equality-gcc.c:2:32: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
+    2 | #pragma GCC diagnostic warning "-Wsign-compare-equality"
+      |                                ^~~~~~~~~~~~~~~~~~~~~~~~~

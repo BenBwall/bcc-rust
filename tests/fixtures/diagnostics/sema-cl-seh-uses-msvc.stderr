@@ -1,0 +1,5 @@
+sema-cl-seh-uses-msvc.c(31,15): warning C4018: '<': signed/unsigned mismatch
+sema-cl-seh-uses-msvc.c(33,15): warning C4706: assignment used as a condition
+sema-cl-seh-uses-msvc.c(33,15): note: if an assignment is intended you can enclose it in parentheses, '(e1 = e2)', to silence this warning
+sema-cl-seh-uses-msvc.c(37,18): warning C4293: '<<': shift count negative or too big, undefined behavior
+sema-cl-seh-uses-msvc.c(29,9): warning C4101: 'x': unreferenced local variable

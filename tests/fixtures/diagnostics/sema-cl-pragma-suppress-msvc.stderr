@@ -1,0 +1,6 @@
+sema-cl-pragma-suppress-msvc.c(7,9): warning C4101: 'y': unreferenced local variable
+sema-cl-pragma-suppress-msvc.c(11,12): warning C4100: 'q': unreferenced parameter
+sema-cl-pragma-suppress-msvc.c(18,9): warning C4101: 'g': unreferenced local variable
+sema-cl-pragma-suppress-msvc.c(25,9): warning C4189: 'k': local variable is initialized but not referenced
+sema-cl-pragma-suppress-msvc.c(31,9): warning C4101: 'blank': unreferenced local variable
+sema-cl-pragma-suppress-msvc.c(34,20): warning C4101: 'n': unreferenced local variable

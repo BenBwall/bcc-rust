@@ -1,0 +1,2 @@
+sema-cl-compound-shift-msvc.c(9,12): warning C4293: '<<': shift count negative or too big, undefined behavior
+sema-cl-compound-shift-msvc.c(10,12): warning C4293: '>>': shift count negative or too big, undefined behavior

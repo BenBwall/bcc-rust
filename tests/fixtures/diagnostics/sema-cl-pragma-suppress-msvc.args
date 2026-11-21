@@ -1,0 +1,1 @@
+--compiler-identity=msvc --diagnostic-format=msvc --target=x86_64-pc-windows-msvc -fms-extensions --cl-warning-level=4 -Wunused-parameter -Wunused-variable -Wunused-but-set-variable

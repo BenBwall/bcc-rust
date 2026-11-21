@@ -8864,6 +8864,161 @@ mod tests {
         assert!(!text.contains(" C4"), "{text}");
     }
 
+    /// What `cl` 19.44 writes, under Wine, where bcc once wrote more: no
+    /// C4715 or C4716 for a function its code generator skips or after
+    /// `__assume(0)`, and C4715 for a function whose only `return` with a
+    /// value no path reaches; nothing about names only SEH blocks use;
+    /// `#pragma warning(suppress: N)` on its own line and the next, and
+    /// `once`; no C4293 for a compound shift; and C4100 for an identifier
+    /// list's parameter at the list.
+    #[test]
+    fn cl_withholds_what_it_does_not_report() {
+        let directory = Directory::new();
+        directory.write(
+            "generated.c",
+            "static int s1(int a) { }\ninline int i1(int a) { if (a) return 1; }\nstatic int \
+             s2(int a) { }\nint use(int a) { return s2(a); }\nint z(int a) { if (a) return 1; \
+             __assume(0); }\nint d(int a) { if (0) return 1; }\n",
+        );
+        directory.write(
+            "seh.c",
+            "int work(int);\nint f(int p, int q)\n{\n    int rc;\n    __try {\n        rc = \
+             work(p);\n    }\n    __except (q) {\n        rc = 0;\n    }\n    return rc;\n}\nint \
+             g(int p)\n{\n    __try {\n        return work(p);\n    }\n    __finally {\n        \
+             p++;\n    }\n}\nint h(int p, unsigned u)\n{\n    int x;\n    __try {\n        if (p \
+             < u)\n            return 1;\n    }\n    __except (1) {\n        return 0;\n    }\n}\n",
+        );
+        directory.write(
+            "shifts.c",
+            "int s(int x, unsigned u)\n{\n    x <<= 32;\n    x >>= -2;\n    u <<= 40;\n    return \
+             x << 32;\n}\n",
+        );
+        directory.write(
+            "suppress.c",
+            "void a(void)\n{\n#pragma warning(suppress: 4101)\n    int x;\n    int y;\n}\n#pragma \
+             warning(suppress: 4100)\nvoid b(int p,\n       int q)\n{\n}\nvoid c(void)\n{\n    \
+             int d; __pragma(warning(suppress: 4101)) int e;\n    int f;\n    int g;\n}\nvoid \
+             h(void)\n{\n#pragma warning(suppress: 4101)\n#pragma warning(suppress: 4189)\n    \
+             int i; int j = 1;\n    int k = 2;\n}\n#pragma warning(suppress: 4716)\nint l(void) { \
+             }\n#pragma warning(once: 4101)\nvoid m(void) { int n; }\nvoid o(void) { int p; }\n",
+        );
+        directory.write(
+            "once.c",
+            "void a(void) { int x; }\nvoid b(void) { int y; }\n",
+        );
+        directory.write(
+            "knr.c",
+            "int knr(a, b)\n    int b;\n    int a;\n{\n    return 0;\n}\n",
+        );
+        let full = format!("{}", directory.path("").display());
+        // The lines with `cl`'s numbers: SEH draws lowering's refusal too.
+        let cl = |args: &[&str]| {
+            let output = directory.bcc("--msvc-mode", &[&["/nologo", "/c"], args].concat());
+            stdout(&output)
+                .lines()
+                .filter(|line| line.contains(": warning C") || line.contains(": error C"))
+                .map(|line| line.replace(&full, ""))
+                .collect::<Vec<_>>()
+        };
+        for (args, lines) in [
+            (
+                &["/W1", "generated.c"][..],
+                &[
+                    "generated.c(3) : warning C4716: 's2': must return a value",
+                    "generated.c(6) : warning C4715: 'd': not all control paths return a value",
+                ][..],
+            ),
+            (
+                &["/W4", "seh.c"],
+                &[
+                    "seh.c(26): warning C4018: '<': signed/unsigned mismatch",
+                    "seh.c(24): warning C4101: 'x': unreferenced local variable",
+                    "seh.c(32) : warning C4715: 'h': not all control paths return a value",
+                ],
+            ),
+            (
+                &["/W1", "shifts.c"],
+                &[
+                    "shifts.c(6): warning C4293: '<<': shift count negative or too big, undefined \
+                     behavior",
+                ],
+            ),
+            (
+                &["/W4", "suppress.c"],
+                &[
+                    "suppress.c(5): warning C4101: 'y': unreferenced local variable",
+                    "suppress.c(9): warning C4100: 'q': unreferenced parameter",
+                    "suppress.c(16): warning C4101: 'g': unreferenced local variable",
+                    "suppress.c(23): warning C4189: 'k': local variable is initialized but not \
+                     referenced",
+                    "suppress.c(28): warning C4101: 'n': unreferenced local variable",
+                ],
+            ),
+            (
+                &["/W3", "/wo4101", "once.c"],
+                &["once.c(1): warning C4101: 'x': unreferenced local variable"],
+            ),
+            (
+                &["/W4", "knr.c"],
+                &[
+                    "knr.c(1): warning C4100: 'b': unreferenced parameter",
+                    "knr.c(1): warning C4100: 'a': unreferenced parameter",
+                ],
+            ),
+        ] {
+            assert_eq!(cl(args), lines, "{args:?}");
+        }
+    }
+
+    /// bcc's group for `cl`'s C4389 has no name: GCC's and Clang's pragmas,
+    /// and bcc's own `-W` option, find no such warning, as before it.
+    #[test]
+    fn only_cls_numbers_reach_its_equality_sign_warning() {
+        let directory = Directory::new();
+        directory.write(
+            "leak.c",
+            "#pragma GCC diagnostic warning \"-Wsign-compare-equality\"\n#pragma clang diagnostic \
+             warning \"-Wsign-compare-equality\"\nint f(int i, unsigned u) { return i == u; }\n",
+        );
+        let gcc = stderr(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-Wall", "leak.c"]));
+        assert!(
+            gcc.contains(
+                "leak.c:1:32: warning: unknown option after `#pragma GCC diagnostic` kind \
+                 [-Wpragmas]"
+            ),
+            "{gcc}"
+        );
+        for mode in ["--clang-mode", "--zig-cc-mode"] {
+            let text = stderr(&directory.bcc(mode, &["-fsyntax-only", "-Wall", "leak.c"]));
+            for line in [
+                "leak.c:1:32: warning: unknown warning group `-Wsign-compare-equality`, ignored \
+                 [-Wunknown-warning-option]",
+                "leak.c:2:34: warning: unknown warning group `-Wsign-compare-equality`, ignored \
+                 [-Wunknown-warning-option]",
+            ] {
+                assert!(text.contains(line), "{mode}: {text}");
+            }
+        }
+        for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+            let text = stderr(&directory.bcc(
+                "",
+                &[
+                    "--syntax-only",
+                    identity,
+                    "-Wsign-compare-equality",
+                    "leak.c",
+                ],
+            ));
+            assert!(
+                text.contains(
+                    "warning: unknown warning option '-Wsign-compare-equality'; did you mean \
+                     '-Wsign-compare'? [-Wunknown-warning-option]"
+                ),
+                "{identity}: {text}"
+            );
+        }
+    }
+
     /// clang-cl is Clang with `cl`'s locations: Clang's words, snippets,
     /// notes and closing counts, `file(line,col):` before each, as the
     /// pinned clang-cl writes them. `/WX` makes each warning an error

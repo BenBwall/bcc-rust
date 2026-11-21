@@ -1,0 +1,7 @@
+pragma-sign-compare-equality-clang.c:2:32: warning: unknown warning group `-Wsign-compare-equality`, ignored [-Wunknown-warning-option]
+    2 | #pragma GCC diagnostic warning "-Wsign-compare-equality"
+      |                                ^~~~~~~~~~~~~~~~~~~~~~~~~
+pragma-sign-compare-equality-clang.c:3:34: warning: unknown warning group `-Wsign-compare-equality`, ignored [-Wunknown-warning-option]
+    3 | #pragma clang diagnostic warning "-Wsign-compare-equality"
+      |                                  ^~~~~~~~~~~~~~~~~~~~~~~~~
+2 warnings generated.
