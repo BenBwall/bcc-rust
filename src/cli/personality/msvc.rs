@@ -1694,11 +1694,13 @@ impl State {
         // The groups a setting or the level has turned off or made errors,
         // which a code sharing one of them does not turn on again.
         let mut settled: Vec<&str> = Vec::new();
-        for warning in CL_CODED_WARNINGS
-            .iter()
-            .filter(|warning| !warning.group.is_empty())
-        {
-            let group = warning.group;
+        // A group without a name follows `--cl-warning` alone.
+        for (warning, group) in CL_CODED_WARNINGS.iter().flat_map(|warning| {
+            warning
+                .groups
+                .iter()
+                .filter_map(move |group| Some((warning, group.name()?)))
+        }) {
             let setting = self
                 .warning_settings
                 .iter()

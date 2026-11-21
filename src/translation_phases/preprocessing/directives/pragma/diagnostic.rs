@@ -401,7 +401,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
 /// Whether `name` is bcc's own warning option, which neither compiler lists.
 fn is_bcc_warning(name: &str) -> bool {
-    matches!(name, "constant-promotion" | "sign-compare-equality")
+    name == "constant-promotion"
 }
 
 /// What a specifier of `#pragma warning` does to a warning it lists.

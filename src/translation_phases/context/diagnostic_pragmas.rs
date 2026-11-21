@@ -486,13 +486,11 @@ impl<'tu> Context<'tu> {
         state.configuration = state.configuration.with_cl_pragma(warnings, Some(code));
         // An error the pragma made is `cl`'s `error CNNNN`, not a warning
         // `/WX` makes an error after C2220.
-        for warning in CL_CODED_WARNINGS
+        for &group in CL_CODED_WARNINGS
             .iter()
             .filter(|warning| warning.code == code)
+            .flat_map(|warning| warning.groups)
         {
-            let Some(group) = DiagnosticGroup::parse(warning.group) else {
-                continue;
-            };
             let mask = crate::configuration::GroupMask::of(group);
             state.mapped = if setting == ClWarningState::Error {
                 state.mapped.union(mask)

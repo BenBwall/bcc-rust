@@ -406,7 +406,11 @@ impl Cli {
     /// `cl`'s warning level and numbered warnings, as the `cl` personality
     /// passes them.
     fn cl_warnings(&self) -> ClWarnings {
-        let mut warnings = ClWarnings::DEFAULT.with_level(self.cl_warning_level.unwrap_or(1));
+        let level = self
+            .cl_warning_level
+            .filter(|&level| level <= 4)
+            .unwrap_or(1);
+        let mut warnings = ClWarnings::DEFAULT.with_level(level);
         for setting in &self.cl_warning {
             let Some((code, value)) = setting.split_once(':') else {
                 continue;

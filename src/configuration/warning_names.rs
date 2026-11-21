@@ -28,80 +28,85 @@ pub(crate) fn clang_knows_warning(option: &str) -> bool {
     CLANG_WARNINGS.lines().any(|line| line == option)
 }
 
-/// A warning the command line names by `cl`'s code: its level, and the group
-/// of bcc's own options that controls it, if one does.
+use super::DiagnosticGroup as G;
+
+/// A warning the command line names by `cl`'s code: its level, and the
+/// groups of bcc's own options that control it, if any do.
 #[derive(Clone, Copy)]
 pub(crate) struct ClCodedWarning {
     pub(crate) code:   u16,
     pub(crate) level:  u8,
-    pub(crate) group:  &'static str,
-    /// The group is off by default in bcc, so a level that shows the warning
-    /// names it too.
+    pub(crate) groups: &'static [G],
+    /// The groups are off by default in bcc, so a level that shows the
+    /// warning names them too.
     pub(crate) enable: bool,
 }
 
-const fn coded(code: u16, level: u8, group: &'static str) -> ClCodedWarning {
+const fn coded(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
     ClCodedWarning {
         code,
         level,
-        group,
+        groups,
         enable: false,
     }
 }
 
-const fn enabled(code: u16, level: u8, group: &'static str) -> ClCodedWarning {
+const fn enabled(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
     ClCodedWarning {
         code,
         level,
-        group,
+        groups,
         enable: true,
     }
 }
 
 /// The warnings the command line names by `cl`'s code, each with its level
-/// and the group of bcc's own options that controls it. `cl`'s command line
+/// and the groups of bcc's own options that control it. `cl`'s command line
 /// shows level 1 by default. C4047 and C4133 are warnings in `cl`, where the
-/// identity's Clang rules make the groups errors. A code may name several
+/// identity's Clang rules make the groups errors. A code may hold several
 /// groups (C4293 a negative and a too-large shift count), and a group
-/// several codes, whose `/wd` and `/we` then set them all. Microsoft Learn:
-/// "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd, /we, /wo,
-/// /Wv, /WX (Warning level)" and each warning's page, as for C4090 and C4113.
-pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 19] = [
-    coded(4013, 3, "implicit-function-declaration"),
+/// several codes, whose `/wd` and `/we` then set them all. A group without
+/// a name (C4389's) is bcc's alone, which only these codes reach. Microsoft
+/// Learn: "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd,
+/// /we, /wo, /Wv, /WX (Warning level)" and each warning's page, as for C4090
+/// and C4113.
+pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 18] = [
+    coded(4013, 3, &[G::ImplicitFunctionDeclaration]),
     // One group holds both, so `/wd` and `/we` of either set both.
-    coded(4033, 1, "return-mismatch"),
-    coded(4098, 1, "return-mismatch"),
-    coded(4047, 1, "int-conversion"),
-    coded(4133, 1, "incompatible-pointer-types"),
+    coded(4033, 1, &[G::ReturnMismatch]),
+    coded(4098, 1, &[G::ReturnMismatch]),
+    coded(4047, 1, &[G::IntConversion]),
+    coded(4133, 1, &[G::IncompatiblePointerTypes]),
     // After C4133, whose group holds theirs. bcc keeps its own words for
     // these two, but `/wd`, `/we` and the levels name them.
-    enabled(4090, 1, "incompatible-pointer-types-discards-qualifiers"),
-    enabled(4113, 1, "incompatible-function-pointer-types"),
-    coded(4311, 1, "pointer-to-int-cast"),
-    coded(4312, 1, "int-to-pointer-cast"),
-    enabled(4100, 4, "unused-parameter"),
-    enabled(4101, 3, "unused-variable"),
+    enabled(4090, 1, &[G::PointerQualifiers]),
+    enabled(4113, 1, &[G::IncompatibleFunctionPointerTypes]),
+    coded(4311, 1, &[G::PointerToIntCast]),
+    coded(4312, 1, &[G::IntToPointerCast]),
+    enabled(4100, 4, &[G::UnusedParameter]),
+    enabled(4101, 3, &[G::UnusedVariable]),
     // `cl`'s variable whose initializer is its only reference.
-    enabled(4189, 4, "unused-but-set-variable"),
-    enabled(4018, 3, "sign-compare"),
-    enabled(4389, 4, "sign-compare-equality"),
-    enabled(4706, 4, "parentheses"),
-    enabled(4293, 1, "shift-count-overflow"),
-    enabled(4293, 1, "shift-count-negative"),
+    enabled(4189, 4, &[G::UnusedButSetVariable]),
+    enabled(4018, 3, &[G::SignCompare]),
+    enabled(4389, 4, &[G::SignCompareEquality]),
+    enabled(4706, 4, &[G::Parentheses]),
+    enabled(4293, 1, &[G::ShiftCountOverflow, G::ShiftCountNegative]),
     // The code generator's, about the end of a function, which its own
     // states govern (`ClWarnings::shown`) rather than a group.
-    coded(4715, 1, ""),
-    coded(4716, 1, ""),
+    coded(4715, 1, &[]),
+    coded(4716, 1, &[]),
 ];
 
 /// What `cl` makes of one numbered warning: never shown (`/wd`, `disable`),
-/// an error at any level (`/we`, `error`), or shown from a level (its own,
-/// or `/wL` and `L:`'s). Microsoft Learn: "warning pragma".
+/// an error at any level (`/we`, `error`), or shown from a level from 1 to 4
+/// (its own, or `/wL` and `L:`'s), every time or only the first time it is
+/// shown so (`/wo`, `once`). Microsoft Learn: "warning pragma".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ClWarningState {
     Disabled,
     Error,
     Level(u8),
+    Once(u8),
 }
 
 /// `cl`'s warning level and what it makes of each warning in
@@ -109,50 +114,48 @@ pub(crate) enum ClWarningState {
 /// the level until its `pop`, and `default` or a level specifier undoes a
 /// `/wd` or `/we` as `disable` and `error` replace a level.
 ///
-/// It packs three bits for the level and three for each warning's state, so
+/// It packs four bits for the level and four for each warning's state, so
 /// that every copy of the configuration stays small.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct ClWarnings(u64);
+pub(crate) struct ClWarnings(u128);
 
 const _: () = assert!(
-    3 * (CL_CODED_WARNINGS.len() + 1) <= 64,
-    "the level and each warning's state take three bits of a u64"
+    ClWarnings::BITS * (CL_CODED_WARNINGS.len() + 1) <= u128::BITS as usize,
+    "the level and each warning's state take four bits of a u128"
 );
 
-/// The low three bits of `value`.
-const fn three_bits(value: u64) -> u8 {
-    match value & 0b111 {
-        | 0 => 0,
-        | 1 => 1,
-        | 2 => 2,
-        | 3 => 3,
-        | 4 => 4,
-        | 5 => 5,
-        | 6 => 6,
-        | _ => 7,
-    }
-}
-
 impl ClWarningState {
-    /// The three bits [`ClWarnings`] keeps for the state.
-    const fn bits(self) -> u64 {
+    /// The four bits [`ClWarnings`] keeps for the state: 0 for disabled, the
+    /// level from 1 to 4, 5 for an error, and the level with 8 for `once`.
+    const fn bits(self) -> u128 {
         match self {
-            | Self::Level(level) => level as u64 & 0b111,
-            | Self::Disabled => 5,
-            | Self::Error => 6,
+            | Self::Disabled => 0,
+            | Self::Level(level) => Self::level_bits(level),
+            | Self::Once(level) => 8 | Self::level_bits(level),
+            | Self::Error => 5,
         }
+    }
+
+    const fn level_bits(level: u8) -> u128 {
+        assert!(
+            matches!(level, 1..=4),
+            "cl's warning levels run from 1 to 4"
+        );
+        level as u128
     }
 
     const fn from_bits(bits: u8) -> Self {
         match bits {
-            | 5 => Self::Disabled,
-            | 6 => Self::Error,
+            | 0 => Self::Disabled,
+            | 5 => Self::Error,
+            | 9..=12 => Self::Once(bits & 0b111),
             | level => Self::Level(level),
         }
     }
 }
 
 impl ClWarnings {
+    const BITS: usize = 4;
     /// `cl`'s command line without options: level 1, each warning at its
     /// own.
     pub(crate) const DEFAULT: Self = {
@@ -165,32 +168,38 @@ impl ClWarnings {
         }
         warnings
     };
+    const MASK: u128 = 0b1111;
 
     const fn with_index(self, index: usize, state: ClWarningState) -> Self {
-        let shift = 3 * (index + 1);
-        Self(self.0 & !(0b111 << shift) | state.bits() << shift)
+        let shift = Self::BITS * (index + 1);
+        Self(self.0 & !(Self::MASK << shift) | state.bits() << shift)
     }
 
+    #[expect(clippy::cast_possible_truncation, reason = "The mask keeps four bits.")]
     const fn state(self, index: usize) -> ClWarningState {
-        ClWarningState::from_bits(three_bits(self.0 >> (3 * (index + 1))))
+        ClWarningState::from_bits((self.0 >> (Self::BITS * (index + 1)) & Self::MASK) as u8)
     }
 
+    #[expect(clippy::cast_possible_truncation, reason = "The mask keeps four bits.")]
     const fn level(self) -> u8 {
-        three_bits(self.0)
+        (self.0 & Self::MASK) as u8
     }
 
+    /// The warning level, from 0 to 4.
     pub(crate) const fn with_level(self, level: u8) -> Self {
-        Self(self.0 & !0b111 | level as u64 & 0b111)
+        assert!(level <= 4, "cl's warning level runs from 0 to 4");
+        Self(self.0 & !Self::MASK | level as u128)
     }
 
-    /// `state` for every entry of `code`.
-    pub(crate) fn with_state(mut self, code: u16, state: ClWarningState) -> Self {
-        for (index, warning) in CL_CODED_WARNINGS.iter().enumerate() {
-            if warning.code == code {
-                self = self.with_index(index, state);
-            }
+    /// `state` for `code`, whose level, if it has one, runs from 1 to 4.
+    pub(crate) fn with_state(self, code: u16, state: ClWarningState) -> Self {
+        match CL_CODED_WARNINGS
+            .iter()
+            .position(|warning| warning.code == code)
+        {
+            | Some(index) => self.with_index(index, state),
+            | None => self,
         }
-        self
     }
 
     /// `code`'s own level, which `default` restores.
@@ -207,26 +216,38 @@ impl ClWarnings {
         let index = CL_CODED_WARNINGS
             .iter()
             .position(|warning| warning.code == code)?;
+        self.shown_at(index)
+    }
+
+    fn shown_at(self, index: usize) -> Option<ClWarningState> {
         match self.state(index) {
-            | ClWarningState::Level(level) if level > self.level() => None,
+            | ClWarningState::Level(level) | ClWarningState::Once(level) if level > self.level() =>
+                None,
             | ClWarningState::Disabled => None,
             | state => Some(state),
         }
     }
 
-    /// Each entry's group and whether it is off, a warning or an error at
-    /// the current level.
-    pub(crate) fn classes(self) -> impl Iterator<Item = (&'static str, ClWarningState)> {
+    /// The index of `code` in [`CL_CODED_WARNINGS`], if the settings show it
+    /// only once.
+    pub(crate) fn shown_once(self, code: u16) -> Option<usize> {
+        let index = CL_CODED_WARNINGS
+            .iter()
+            .position(|warning| warning.code == code)?;
+        matches!(self.shown_at(index), Some(ClWarningState::Once(_))).then_some(index)
+    }
+
+    /// Each entry with whether it is off, a warning or an error at the
+    /// current level.
+    pub(crate) fn classes(self) -> impl Iterator<Item = (&'static ClCodedWarning, ClWarningState)> {
         CL_CODED_WARNINGS
             .iter()
             .enumerate()
             .map(move |(index, warning)| {
-                let state = match self.state(index) {
-                    | ClWarningState::Level(level) if level > self.level() =>
-                        ClWarningState::Disabled,
-                    | other => other,
-                };
-                (warning.group, state)
+                (
+                    warning,
+                    self.shown_at(index).unwrap_or(ClWarningState::Disabled),
+                )
             })
     }
 }
