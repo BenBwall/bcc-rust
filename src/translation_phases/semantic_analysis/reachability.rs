@@ -174,6 +174,8 @@ struct Flow<'s> {
     revisits:      revisits::Revisits<'s>,
     /// This pass reached something it may already have passed.
     changed:       bool,
+    /// A `__leave` the walk reached in the innermost `__try` block.
+    leaves:        bool,
 }
 
 /// A statement `break` or `continue` jumps out of.
@@ -220,6 +222,7 @@ impl<'s> Flow<'s> {
             switch_facts:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             revisits:      revisits::Revisits::new(scratch),
             changed:       false,
+            leaves:        false,
         }
     }
 
@@ -539,6 +542,28 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 false
             },
             | S::NamedBreak(_) | S::NamedContinue(_) => false,
+            // An exception may leave the guarded block anywhere, so its
+            // filter and handler are reached where it begins; `__finally`
+            // runs however the block ends, and the code after it only if
+            // both ends are reached. `__leave` ends the guarded block.
+            // Microsoft Learn: "try-except statement", "try-finally
+            // statement".
+            | S::Seh(seh) => {
+                let outer = std::mem::replace(&mut flow.leaves, false);
+                let end = self.flow_statement(flow, seh.body, live);
+                let end = std::mem::replace(&mut flow.leaves, outer) || end;
+                match seh.filter {
+                    | Some(filter) => {
+                        let handler = self.flow_expression(flow, filter, live);
+                        self.flow_statement(flow, seh.handler, handler) || end
+                    },
+                    | None => self.flow_statement(flow, seh.handler, live) && end,
+                }
+            },
+            | S::SehLeave => {
+                flow.leaves |= live;
+                false
+            },
             | S::Expression(slot) => self.flow_slot(flow, slot, live),
             | S::Asm(asm) => {
                 if live && asm.qualifiers.goto {
