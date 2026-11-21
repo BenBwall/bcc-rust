@@ -1219,6 +1219,14 @@
     max-width: 100%; font: 700 11px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; text-align: left; cursor: pointer;
   }
   .stage-next:active { transform: translateY(2px); box-shadow: none; }
+  /* The front end's way past itself to the IR: a key of the same shape,
+     unlit, so Next stays the one to press. */
+  .stage-skip {
+    padding: 4px 10px; border: 2px solid var(--key-edge); background: var(--device); color: var(--ink); box-shadow: 0 2px 0 var(--key-edge);
+    max-width: 100%; font: 700 11px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; text-align: left; cursor: pointer;
+  }
+  .stage-skip:hover { background: var(--device-2); }
+  .stage-skip:active { transform: translateY(2px); box-shadow: none; }
   .stage-path-note { margin-bottom: 12px; padding: 8px 12px; max-width: 76ch; background: var(--ink); color: var(--device); font-size: 12.5px; line-height: 1.65; }
   .stage-path-note strong { color: var(--accent-on-ink); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
   .stage-path-note code { background: color-mix(in srgb, var(--device) 18%, var(--ink)); color: var(--device); }

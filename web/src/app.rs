@@ -320,7 +320,10 @@ impl State {
         let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
         let mode = RwSignal::new(Mode::Machine);
-        let (stage, unfolded) = (RwSignal::new(Stage::Ir), RwSignal::new(Unfolded::default()));
+        // The pipeline opens at its first stage, wherever it is opened from, so
+        // a reader meets the stages in their order; the stage keys and the
+        // front end's "Skip to bcc IR" lead straight to the IR.
+        let (stage, unfolded) = (RwSignal::new(Stage::Lines), RwSignal::new(Unfolded::default()));
         let compare = RwSignal::new(false);
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(

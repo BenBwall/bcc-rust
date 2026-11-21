@@ -289,6 +289,21 @@ pub fn PipelineView(
                         }}
                         <span aria-hidden="true">" →"</span>
                     </button>
+                    // The pipeline opens at its first stage; a reader who
+                    // came for the IR skips the front end from any of its
+                    // stages.
+                    <button
+                        type="button"
+                        class="stage-skip"
+                        hidden=move || {
+                            let stage = stage.get();
+                            stage.phase() != "Front end" || stage.next() == Some(Stage::Ir)
+                        }
+                        on:click=move |_| show_ir(stage)
+                    >
+                        {format!("Skip to {}", Stage::Ir.label())}
+                        <span aria-hidden="true">" ⇥"</span>
+                    </button>
                 </p>
                 <p class="stage-path-note" hidden=move || path_note().is_none()>
                     <strong>"In this program: "</strong>
