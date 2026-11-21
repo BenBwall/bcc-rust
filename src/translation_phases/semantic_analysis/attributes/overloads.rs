@@ -593,6 +593,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.context.append_pending_errors([
             crate::translation_phases::TranslationError::Semantic(super::super::SemanticError {
                 extension_severity: Some(severity),
+                gcc_werror: false,
                 kind: SemanticErrorKind::CallAttribute,
                 source_vectors,
                 name: Some(message.text),

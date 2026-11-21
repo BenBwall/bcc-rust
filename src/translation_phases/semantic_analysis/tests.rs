@@ -578,6 +578,7 @@ fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
     let context = Context::new(&tu);
     let error = SemanticError {
         extension_severity: None,
+        gcc_werror:         false,
         kind:               SemanticErrorKind::UnknownTypedef,
         source_vectors:     SourceVectors::empty(),
         name:               None,

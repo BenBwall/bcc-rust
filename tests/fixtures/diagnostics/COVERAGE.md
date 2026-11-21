@@ -1242,7 +1242,14 @@ Argument passing ("ISO C forbids passing argument 1 of 'f' between function
 pointer and 'void *'") is pinned by
 `gcc_reports_function_and_object_pointer_conversions` in
 `tests/integration/personality_cli.rs`, as GCC follows it with a note about
-the parameter that bcc does not write. GCC underlines only part of some
+the parameter that bcc does not write. The option each report names under
+`-Werror`, `-Werror=pedantic`, `-Wno-error=pedantic`, `-pedantic-errors` and
+`#pragma GCC diagnostic error` or `warning "-Wpedantic"`, with the existing
+`__FUNCTION__`, enumerator, case-label and static-assertion reports, is
+pinned by `gcc_names_the_werror_that_made_a_pedantic_report_an_error`,
+checked against GCC 14 on 21 November 2026. A call through an expression
+other than a name keeps bcc's words, as GCC names the callee expression.
+GCC underlines only part of some
 initializers, a point for a conditional or a parenthesized one and the name
 of a called function, where bcc underlines the whole expression, as it does
 for every initializer it reports in GCC's format.

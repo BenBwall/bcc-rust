@@ -3053,9 +3053,21 @@ common extension (§J.5.7). Both compilers accept them. Under GCC's identity,
   *' and function pointer", at its `:`. GCC takes the `void *` as the result,
   where bcc refused it as a pointer mismatch before.
 
-`-Werror` names `[-Werror=pedantic]`, an `__extension__` operand or a marked
-declaration silences each, and a system header spelling the place, as a
-system macro's body does, withholds it even under `-pedantic-errors`.
+An `__extension__` operand or a marked declaration silences each, and a
+system header spelling the place, as a system macro's body does, withholds it
+even under `-pedantic-errors`. A call through anything but a name
+(`s.cb(g)`, `ps->cb(g)`, `tab[1](g)`, `get()(g)`, `(*pf)(g)`) keeps bcc's
+"'conversion between function and void pointers' is a GNU extension", since
+GCC names the callee as it prints the expression, which bcc does not model.
+
+Like the `__FUNCTION__`, enumerator, case-label and
+static-assertion reports, these name the option as GCC's
+`compiler_diagnostic_option_name` does: `[-Werror=pedantic]` on an error that
+`-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error "-Wpedantic"`
+made, followed by `cc1:`'s line, and `[-Wpedantic]` on one that
+`-pedantic-errors` made and on a warning `-Wno-error=pedantic` or a pragma
+kept, in any order of the options. The extension machinery decides it
+(`Context::report_gcc_tagged_extension`) as it decides the severity.
 Clang reports no cast, words the rest as its own, and warns of the
 conditional by default (`-Wpointer-type-mismatch`); its identity is
 unchanged. GCC's note naming the parameter after an argument's report is not

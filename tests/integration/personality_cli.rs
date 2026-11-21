@@ -2730,6 +2730,129 @@ mod tests {
         assert!(text.contains("[-Wpointer-type-mismatch]"), "{text}");
     }
 
+    /// GCC 14 names `-Werror=pedantic` after a `-pedantic` report that
+    /// `-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error
+    /// "-Wpedantic"` made an error, and `cc1:` says warnings were treated as
+    /// errors; it names `-Wpedantic` after one `-pedantic-errors` made, and
+    /// after a warning `-Wno-error=pedantic` or a pragma kept. Each row was
+    /// checked against GCC: the pragma, the options, the severity, the
+    /// option named, and the `cc1:` line.
+    #[test]
+    fn gcc_names_the_werror_that_made_a_pedantic_report_an_error() {
+        const CODE: &str = "enum E { A = (int)(1.0 + 1) };\nint f(int x) { switch (x) { case \
+                            (int)(1.0 + 1): return 1; } return 0; }\n_Static_assert((int)(1.0 + \
+                            1), \"x\");\nconst char *name(void) { return __FUNCTION__; }\nvoid \
+                            g(void); void *p = (void *)g;\n";
+        const ERROR: &str = "#pragma GCC diagnostic error \"-Wpedantic\"\n";
+        const WARNING: &str = "#pragma GCC diagnostic warning \"-Wpedantic\"\n";
+        const ALL: &str = "cc1: all warnings being treated as errors\n";
+        const SOME: &str = "cc1: some warnings being treated as errors\n";
+        let table: [(&str, &[&str], &str, &str, &str); 13] = [
+            (
+                "",
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-Werror", "-Wpedantic", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Wno-error=pedantic", "-Werror"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            ("", &["-pedantic-errors"], "error", "-Wpedantic", ""),
+            (
+                "",
+                &["-pedantic-errors", "-Werror"],
+                "error",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (ERROR, &[], "error", "-Werror=pedantic", SOME),
+            (ERROR, &["-Werror"], "error", "-Werror=pedantic", ALL),
+            (ERROR, &["-pedantic-errors"], "error", "-Wpedantic", ""),
+            (
+                WARNING,
+                &["-Wpedantic", "-Werror"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (WARNING, &["-pedantic-errors"], "warning", "-Wpedantic", ""),
+        ];
+        let directory = Directory::new();
+        for (pragma, options, severity, option, cc1) in table {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                severity == "warning",
+                "{pragma}{options:?}: {text}"
+            );
+            let reports = text
+                .lines()
+                .filter(|line| {
+                    line.starts_with("c.c:")
+                        && (line.contains(": warning: ") || line.contains(": error: "))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reports.len(), 5, "{pragma}{options:?}: {text}");
+            for report in reports {
+                assert!(
+                    report.contains(&format!(": {severity}: "))
+                        && report.ends_with(&format!(" [{option}]")),
+                    "{pragma}{options:?}: {report}"
+                );
+            }
+            if cc1.is_empty() {
+                assert!(!text.contains("cc1:"), "{pragma}{options:?}: {text}");
+            } else {
+                assert!(text.ends_with(cc1), "{pragma}{options:?}: {text}");
+            }
+        }
+        for (pragma, options) in [("", &["-Wpedantic", "-w"][..]), (ERROR, &["-w"][..])] {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{pragma}{options:?}");
+        }
+    }
+
     /// Wider types and bit-precise ones of any width fold the same way, as
     /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
     #[test]

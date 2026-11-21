@@ -208,6 +208,7 @@ impl Analyzer<'_, '_, '_> {
             settings_at,
             TranslationError::Semantic(SemanticError {
                 extension_severity: Some(severity),
+                gcc_werror: false,
                 kind,
                 source_vectors,
                 name,
@@ -263,6 +264,7 @@ impl Analyzer<'_, '_, '_> {
             let highlights = self.format_highlights();
             let error = SemanticError {
                 extension_severity: None,
+                gcc_werror: false,
                 kind,
                 source_vectors,
                 name,
@@ -300,11 +302,11 @@ impl Analyzer<'_, '_, '_> {
             let error_diagnostics = &mut self.error_diagnostics;
             let gcc_errors = &mut self.unused.gcc_errors;
             let order = self.report_order;
-            self.context.report_extension_diagnostic(
+            self.context.report_gcc_tagged_extension(
                 feature,
                 baseline,
                 source_vectors,
-                |severity| {
+                |severity, gcc_werror| {
                     let errors =
                         usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
                     *semantic_errors += errors;
@@ -313,6 +315,7 @@ impl Analyzer<'_, '_, '_> {
                     *gcc_errors += errors;
                     TranslationError::Semantic(SemanticError {
                         extension_severity: Some(severity),
+                        gcc_werror,
                         kind,
                         source_vectors,
                         name,
