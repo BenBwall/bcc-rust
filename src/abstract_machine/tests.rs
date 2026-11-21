@@ -5620,6 +5620,52 @@ fn arrays_hold_pointers_and_take_a_list_s_length() {
         .expect_err("an array of unknown size needs an initializer");
 }
 
+/// What the site's "Limits of this model" says the machine runs and
+/// refuses: each claim it makes, checked.
+#[test]
+fn the_limits_the_site_states_hold() {
+    for source in [
+        // Decimal, octal and hexadecimal constants; every operator family.
+        "int main(void) { int a = 10 + 010 + 0x10; a = a * 2 / 3 % 7 << 1 >> 1; a = (a & 3) | (a \
+         ^ 5) | ~a; return a < 3 && a != 2 || !a ? -a : +a; }",
+        // `?:` with structures, and the comma operator.
+        "struct s { int x; }; int main(void) { struct s a = {1}; struct s b = {2}; struct s c = \
+         a.x > 1 ? a : b; int n = (c.x, 3); return c.x + n; }",
+        // Pointers to pointers and arrays of pointers.
+        "int main(void) { int x = 1; int *p = &x; int **pp = &p; int *v[2] = {p, *pp}; return \
+         *v[1]; }",
+        // Calls anywhere in an expression.
+        "int f(int n) { return n + 1; } int main(void) { return f(f(1)) * f(0) + (f(1) ? 2 : 3); }",
+        // A statement's commas, and one update in a condition.
+        "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
+    ] {
+        let session = run(source);
+        assert_eq!(session.state().status, "finished", "{source}");
+    }
+    for source in [
+        "int main(void) { switch (0) {} return 0; }",
+        "int main(void) { do {} while (0); return 0; }",
+        "int main(void) { while (1) { break; } return 0; }",
+        "typedef int number; int main(void) { return 0; }",
+        "enum e { A }; int main(void) { return 0; }",
+        "union u { int x; }; int main(void) { return 0; }",
+        "void f(void) {} int main(void) { return 0; }",
+        "static int f(void) { return 0; } int main(void) { return f(); }",
+        "int add(int a, int b) { return a + b; } int main(void) { int (*f)(int, int) = add; \
+         return f(1, 2); }",
+        "struct s { int x; }; int main(void) { struct s v[2]; return 0; }",
+        "int main(void) { int v[2][2]; return 0; }",
+        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return q - p; }",
+        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return p < q; }",
+        "int main(void) { int a = 0; int b = 1; a = b++; return a; }",
+        "int f(int n) { return n; } int main(void) { int i = 0; return f(i++); }",
+        "int main(void) { int a; int b; a = b = 0; return a; }",
+        "#include <string.h>\nint main(void) { return 0; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end except those that use function pointers.

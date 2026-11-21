@@ -4116,6 +4116,9 @@ impl Machine {
                 | _ => "int",
             };
             format!("moves it {}", movement(count, noun))
+        } else if matches!(operator, "&" | "|" | "^") {
+            // The bits it combines are the converted operand's.
+            format!("{verb} {}", self.short_value(&right_converted))
         } else {
             format!("{verb} {operand}")
         };

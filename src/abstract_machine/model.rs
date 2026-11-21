@@ -1041,9 +1041,12 @@ pub(super) enum Type {
 /// What a chain of pointers ends at: an arithmetic type, `const` when set,
 /// or a structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "A small copied type description; a structure's index is the larger variant."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "A small copied type description; a structure's index is the larger variant."
+    )
 )]
 pub(super) enum Target {
     Arithmetic(Arithmetic, bool),
