@@ -60,13 +60,26 @@ use crate::{
 
 /// What the diagnostic pragmas of one translation unit changed, in order.
 pub(crate) struct DiagnosticPragmas<'tu> {
-    changes:  ArenaVec<'tu, Change<'tu>>,
+    changes:      ArenaVec<'tu, Change<'tu>>,
+    /// The lines `cl`'s `#pragma warning(suppress: N)` withholds a warning
+    /// on, which apply over the settings `changes` record.
+    suppressions: ArenaVec<'tu, Suppression>,
     /// The settings each `push` not yet popped saved.
-    stack:    ArenaVec<'tu, &'tu PragmaState>,
+    stack:        ArenaVec<'tu, &'tu PragmaState>,
     /// Each retained copy of parser-token provenance made while the table
     /// has changes: where the copy starts, and the parser-token index its
     /// first vector came from. Retained ranges only grow, so this is sorted.
-    retained: ArenaVec<'tu, (u32, u32)>,
+    retained:     ArenaVec<'tu, (u32, u32)>,
+}
+
+/// `cl`'s warning `code`, which `suppress` withholds on lines `first` to
+/// `last` of the source file `file`.
+#[derive(Clone, Copy)]
+struct Suppression {
+    file:  u32,
+    first: u32,
+    last:  u32,
+    code:  u16,
 }
 
 /// One change: the settings from `token`, an index into the parser-token
@@ -168,9 +181,10 @@ impl PragmaState {
 impl<'tu> DiagnosticPragmas<'tu> {
     pub(super) fn new_in(tu: &'tu Bump) -> Self {
         Self {
-            changes:  ArenaVec::new_in(tu),
-            stack:    ArenaVec::new_in(tu),
-            retained: ArenaVec::new_in(tu),
+            changes:      ArenaVec::new_in(tu),
+            suppressions: ArenaVec::new_in(tu),
+            stack:        ArenaVec::new_in(tu),
+            retained:     ArenaVec::new_in(tu),
         }
     }
 }
@@ -408,7 +422,7 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
         error: TranslationError<'tu>,
     ) {
-        let Some(state) = self.pragma_state_at(source).copied() else {
+        let Some(state) = self.pragma_state_at(source) else {
             self.pending_errors.push_back(error);
             return;
         };
@@ -467,7 +481,12 @@ impl<'tu> Context<'tu> {
     /// again, undoing a `/wd` or `/we`. Microsoft Learn: "warning pragma".
     #[cold]
     #[inline(never)]
-    pub(crate) fn pragma_warning_number(&mut self, number: u32, specifier: WarningSpecifier) {
+    pub(crate) fn pragma_warning_number(
+        &mut self,
+        number: u32,
+        specifier: WarningSpecifier,
+        line: (u32, u32),
+    ) {
         let Some((code, default)) = u16::try_from(number)
             .ok()
             .and_then(|code| Some((code, ClWarnings::default_level(code)?)))
@@ -477,9 +496,13 @@ impl<'tu> Context<'tu> {
         let setting = match specifier {
             | WarningSpecifier::Disable => ClWarningState::Disabled,
             | WarningSpecifier::Error => ClWarningState::Error,
-            | WarningSpecifier::Default | WarningSpecifier::Once => ClWarningState::Level(default),
+            | WarningSpecifier::Default => ClWarningState::Level(default),
+            | WarningSpecifier::Once => ClWarningState::Once(default),
             | WarningSpecifier::Level(level) => ClWarningState::Level(level),
-            | WarningSpecifier::Suppress => return,
+            | WarningSpecifier::Suppress => {
+                self.pragma_warning_suppress(code, line);
+                return;
+            },
         };
         let mut state = self.current_pragma_state();
         let warnings = state.configuration.cl_warnings().with_state(code, setting);
@@ -499,6 +522,34 @@ impl<'tu> Context<'tu> {
             };
         }
         self.record_pragma_state(&state);
+    }
+
+    /// `#pragma warning(suppress: code)` under the `cl` identity on `line`
+    /// of a source file: `cl` withholds the warning on that line and the
+    /// next. A
+    /// `suppress` on a line another one reaches holds that one's warnings
+    /// to its own next line too. Its settings are those of the lines, where
+    /// the other changes are those of the tokens after them; it gives the
+    /// table a change, which a diagnostic then looks up.
+    /// Microsoft Learn: "warning pragma".
+    fn pragma_warning_suppress(&mut self, code: u16, (file, line): (u32, u32)) {
+        let next = line.saturating_add(1);
+        for suppression in self.diagnostic_pragmas.suppressions.iter_mut().rev() {
+            if suppression.file != file || suppression.last < line {
+                break;
+            }
+            suppression.last = next;
+        }
+        self.diagnostic_pragmas.suppressions.push(Suppression {
+            file,
+            first: line,
+            last: next,
+            code,
+        });
+        if self.diagnostic_pragmas.changes.is_empty() {
+            let state = self.current_pragma_state();
+            self.record_pragma_state(&state);
+        }
     }
 
     /// `#pragma warning(push, n)` under the `cl` identity, after its push:
@@ -627,11 +678,35 @@ impl<'tu> Context<'tu> {
     /// The settings at `source`, or `None` where only the command line's
     /// hold: in a unit without diagnostic pragmas, or before the first one.
     #[inline]
-    fn pragma_state_at(&self, source: SourceVectors) -> Option<&'tu PragmaState> {
+    fn pragma_state_at(&self, source: SourceVectors) -> Option<PragmaState> {
         if self.diagnostic_pragmas.changes.is_empty() {
             return None;
         }
-        self.pragma_state_in_table(source)
+        let state = *self.pragma_state_in_table(source)?;
+        if self.diagnostic_pragmas.suppressions.is_empty() || source.length() == 0 {
+            return Some(state);
+        }
+        Some(self.suppressed_state(state, source))
+    }
+
+    /// `state` with the warnings `suppress` withholds on the line of
+    /// `source`.
+    #[cold]
+    #[inline(never)]
+    fn suppressed_state(&self, mut state: PragmaState, source: SourceVectors) -> PragmaState {
+        let vector = self.file_vector(source);
+        let (file, line) = (vector.source_file_index, vector.line);
+        for suppression in &self.diagnostic_pragmas.suppressions {
+            if suppression.file == file && (suppression.first..=suppression.last).contains(&line) {
+                let code = suppression.code;
+                let warnings = state
+                    .configuration
+                    .cl_warnings()
+                    .with_state(code, ClWarningState::Disabled);
+                state.configuration = state.configuration.with_cl_pragma(warnings, Some(code));
+            }
+        }
+        state
     }
 
     #[cold]

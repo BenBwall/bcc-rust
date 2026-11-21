@@ -418,12 +418,16 @@ impl Cli {
             let Ok(code) = code.parse() else {
                 continue;
             };
+            let Some(default) = ClWarnings::default_level(code) else {
+                continue;
+            };
             let state = match value {
                 | "d" => ClWarningState::Disabled,
                 | "e" => ClWarningState::Error,
+                | "o" => ClWarningState::Once(default),
                 | level => match level.parse() {
-                    | Ok(level) => ClWarningState::Level(level),
-                    | Err(_) => continue,
+                    | Ok(level @ 1..=4) => ClWarningState::Level(level),
+                    | _ => continue,
                 },
             };
             warnings = warnings.with_state(code, state);

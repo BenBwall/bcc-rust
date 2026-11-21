@@ -213,8 +213,8 @@ struct Cli {
     /// `default` read; the `cl` personality passes it.
     #[arg(long, hide = true, value_name = "LEVEL")]
     cl_warning_level: Option<u8>,
-    /// `cl`'s `/wd`, `/we` or `/wL` of one numbered warning: `CODE:d`,
-    /// `CODE:e` or `CODE:L`.
+    /// `cl`'s `/wd`, `/we`, `/wo` or `/wL` of one numbered warning:
+    /// `CODE:d`, `CODE:e`, `CODE:o` or `CODE:L`, with `L` from 1 to 4.
     #[arg(long, hide = true, value_name = "CODE:SETTING")]
     cl_warning: Vec<String>,
     /// GCC startup preprocessing options, normalized with their operation.

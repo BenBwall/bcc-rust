@@ -186,6 +186,9 @@ impl Analyzer<'_, '_, '_> {
         else {
             return;
         };
+        if self.unused.cl && self.cl_shown_before(kind, settings_at) {
+            return;
+        }
         let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
@@ -221,6 +224,25 @@ impl Analyzer<'_, '_, '_> {
                 fix_it: self.conversion_fix_it,
             }),
         );
+    }
+
+    /// Whether `cl` withholds its warning `kind`, which its settings at
+    /// `settings_at` show only once (`/wo`, `#pragma warning(once: N)`), as
+    /// it has already shown it so; otherwise this shows it.
+    /// Microsoft Learn: "warning pragma".
+    fn cl_shown_before(&mut self, kind: SemanticErrorKind, settings_at: SourceVectors) -> bool {
+        let Some(index) = kind.cl_code().and_then(|code| {
+            self.context
+                .configuration_at(settings_at)
+                .cl_warnings()
+                .shown_once(code)
+        }) else {
+            return false;
+        };
+        let bit = 1 << index;
+        let before = self.unused.cl_once & bit != 0;
+        self.unused.cl_once |= bit;
+        before
     }
 
     /// [`Self::group_diagnostic`] for a warning GCC also withholds when a

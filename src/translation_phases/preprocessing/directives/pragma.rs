@@ -161,7 +161,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         };
         let position = self.context.preprocessed_tokens;
         let packs = self.context.pack_pragmas.len();
-        let consumed_newline = self.execute_pragma(from);
+        let consumed_newline = self.execute_pragma(from, at);
         // TCC writes a pack pragma's operands as it replaced them, so that
         // its text compiles as the source does.
         let line = match line {
@@ -196,8 +196,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         consumed_newline
     }
 
-    /// Carries out the pragma [`Self::parse_pragma_directive`] reads.
-    fn execute_pragma(&mut self, from: u32) -> bool {
+    /// Carries out the pragma [`Self::parse_pragma_directive`] reads, which
+    /// begins `at`.
+    fn execute_pragma(&mut self, from: u32, at: Option<(u32, SourcePosition)>) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
@@ -328,7 +329,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 || self.context.configuration.compiler_identity()
                                     == CompilerIdentity::Msvc =>
                         {
-                            self.pragma_warning();
+                            self.pragma_warning(at);
                             consumed_newline = true;
                             break 'base;
                         },

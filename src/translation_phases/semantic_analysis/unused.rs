@@ -146,6 +146,9 @@ pub(super) struct UnusedState<'s> {
     /// those it numbers and bcc gives its code (C4100, C4101, C4189, C4018,
     /// C4389, C4706) are on.
     pub(super) cl: bool,
+    /// The warnings `cl` has shown under a setting that shows them once, one
+    /// bit per index of [`crate::configuration::CL_CODED_WARNINGS`].
+    pub(super) cl_once: u32,
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
@@ -271,6 +274,7 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             cl,
+            cl_once: 0,
             values,
             type_limits: on(&[
                 G::TypeLimits,

@@ -465,7 +465,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 | WarningSetting::Disabled => "d".to_owned(),
                 | WarningSetting::Error => "e".to_owned(),
                 | WarningSetting::Level(level) => level.to_string(),
-                | WarningSetting::Once => continue,
+                | WarningSetting::Once => "o".to_owned(),
             };
             common.push(format!("--cl-warning={code}:{value}").into());
         }

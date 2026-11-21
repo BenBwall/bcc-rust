@@ -3178,6 +3178,36 @@ impl SemanticErrorKind {
             | _ => self.attribute_group(),
         }
     }
+
+    /// The number of `cl`'s warning that [`SemanticError::msvc_message`]
+    /// words this as, for one its settings name in [`CL_CODED_WARNINGS`].
+    ///
+    /// [`CL_CODED_WARNINGS`]: crate::configuration::CL_CODED_WARNINGS
+    pub(super) const fn cl_code(self) -> Option<u16> {
+        use crate::configuration::DiagnosticGroup as G;
+        Some(match self {
+            | Self::Unused(UnusedRule::ClParameter) => 4100,
+            | Self::Unused(UnusedRule::ClVariable) => 4101,
+            | Self::Unused(UnusedRule::ClInitialized) => 4189,
+            | Self::SignCompare => 4018,
+            | Self::SignCompareEquality => 4389,
+            | Self::Parentheses(G::Parentheses) => 4706,
+            | Self::ExceptionalConstant(G::ShiftCountOverflow | G::ShiftCountNegative, _) => 4293,
+            | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
+            | Self::VoidReturnMismatch => 4098,
+            | Self::ReturnMismatch => 4033,
+            | Self::PointerConstraint(G::IntConversion) => 4047,
+            | Self::PointerConstraint(G::IncompatiblePointerTypes) => 4133,
+            | Self::PointerConstraint(
+                G::PointerToIntCast
+                | G::VoidPointerToIntCast
+                | G::PointerToEnumCast
+                | G::VoidPointerToEnumCast,
+            ) => 4311,
+            | Self::PointerConstraint(G::IntToPointerCast | G::IntToVoidPointerCast) => 4312,
+            | _ => return None,
+        })
+    }
 }
 
 impl SemanticError {
