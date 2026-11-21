@@ -118,9 +118,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
             self.note_attribute_references(subject, specifier, attribute);
-            // GCC's `optimize` can turn trapping math back on
-            // (`floating_environment.rs`).
-            self.functions.optimize_attribute |= attribute.name == "optimize";
             // GCC ignores `scalar_storage_order` with a warning on anything
             // declared but a typedef, which `storage_order.rs` checks.
             if self.is_storage_order(specifier.syntax, attribute) {

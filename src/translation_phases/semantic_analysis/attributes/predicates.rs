@@ -21,6 +21,7 @@ use super::super::{
     TypeId,
     TypeKind,
     UnaryOperator,
+    constants::NanSource,
 };
 use crate::{
     builtins::BuiltinOperation,
@@ -516,7 +517,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     right,
                     precision,
                     domains,
-                    self.compiler_nan_source(),
+                    NanSource::Runtime,
                 )
                 .and_then(|value| self.round_floating(value, ty))
                 .map(PredicateConstant::Floating)

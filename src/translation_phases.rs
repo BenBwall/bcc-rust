@@ -46,7 +46,6 @@ pub(crate) mod semantic_analysis;
 // Shared state and provenance
 mod context;
 pub(crate) mod pragma_comment;
-pub(crate) mod pragma_floating;
 pub(crate) mod pragma_pack;
 pub(crate) mod pragma_storage_order;
 mod provenance;

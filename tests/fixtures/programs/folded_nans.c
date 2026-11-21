@@ -1,17 +1,14 @@
 /* The NaN an invalid floating operation (0/0, inf - inf, 0 * inf, inf/inf)
- * folds to, printed as bits. GCC's and Clang's arithmetic give the positive
- * quiet NaN in a static initializer, where x86-64 gives its default NaN,
- * whose sign bit is set, at run time. In a function Clang folds the
- * operation too, while GCC, as math may trap, leaves it for run time; a
- * complex quotient is computed by `__divdc3` at run time under both. A NaN
- * operand passes through with its sign, and a negation flips it. The tests
- * also build it with -fno-trapping-math, where GCC folds real arithmetic in
- * a function but still calls `__muldc3` and `__divdc3`, and with Clang's
- * strict exceptions (-ftrapping-math), where
- * Clang computes the operation in a function at run time unless it
- * initializes an automatic array or structure whose whole initializer its
- * evaluator folds: none with a run-time member, the address of an automatic
- * object, or another member that rounds, overflows or divides by zero. */
+ * folds to in the initializer of an object with static storage duration,
+ * printed as bits. GCC and Clang compute every such initializer at
+ * translation time, under every floating-point option, and their arithmetic
+ * gives the positive quiet NaN, where x86-64 gives its default NaN, whose
+ * sign bit is set, at run time. A NaN operand passes through with its sign,
+ * and a negation flips it. The tests build it with no options,
+ * -fno-trapping-math, -ftrapping-math, -ffast-math and -fcx-limited-range.
+ * In a function bcc computes every invalid operation as x86-64 does, which
+ * GCC and Clang do only in some cases, so nothing here prints one.
+ * C99 §6.7.8p4, §F.7.5p1. */
 #include <stdio.h>
 #include <string.h>
 
@@ -102,49 +99,21 @@ int main(void) {
     show_quad("-(0Q/0Q)", q_negated);
     show_half("0f16/0f16", h_div);
 
-    puts("automatic");
-    double a_div = 0.0 / 0.0, a_sub = INF - INF, a_mul = 0 * INF, a_quotient = INF / INF;
-    double a_negated = -(0.0 / 0.0), a_minus = 1.0 - (0.0 / 0.0);
-    float a_float = 0.0f / 0.0f;
-    long double a_long_double = 0.0L / 0.0L, a_long_double_sub = __builtin_infl() - __builtin_infl();
-    _Complex double a_complex_quotient = (0.0 + 0.0i) / (0.0 + 0.0i);
-    _Complex double a_complex_product = (INF + 0.0i) * (0.0 + 1.0i);
-    _Complex double a_complex_sum = (INF + 1.0i) + (-INF + 1.0i);
-    __float128 a_quad = 0.0Q / 0.0Q;
-    static double a_static = 0.0 / 0.0;
-    double a_literal = (double){0.0 / 0.0};
-    double a_array[2] = {0.0 / 0.0, INF - INF};
-    struct { int tag; double value; } a_struct = {1, 0 * INF};
-    static volatile double one = 1.0;
-    double run_time = one;
-    double a_run_time[2] = {0.0 / 0.0, run_time};
-    double a_inexact[2] = {1.0 / 3.0, 0.0 / 0.0};
-    float a_rounded[2] = {0.1, 0.0f / 0.0f};
-    struct { double *where; double value; } a_address = {&run_time, 0.0 / 0.0};
-    double a_exact[3] = {0.5 + 0.25, -(0.0 / 0.0), (double)(0.0f / 0.0f)};
-    show_double("0/0", a_div);
-    show_double("inf-inf", a_sub);
-    show_double("0*inf", a_mul);
-    show_double("inf/inf", a_quotient);
-    show_double("-(0/0)", a_negated);
-    show_double("1-(0/0)", a_minus);
-    show_float("0f/0f", a_float);
-    show_long_double("0L/0L", a_long_double);
-    show_long_double("infl-infl", a_long_double_sub);
-    show_complex("(0+0i)/(0+0i)", a_complex_quotient);
-    show_complex("(inf+0i)*(0+1i)", a_complex_product);
-    show_complex("(inf+i)+(-inf+i)", a_complex_sum);
-    show_quad("0Q/0Q", a_quad);
-    show_double("static 0/0", a_static);
-    show_double("(double){0/0}", a_literal);
-    show_double("{0/0, ...}", a_array[0]);
-    show_double("{..., inf-inf}", a_array[1]);
-    show_double("{1, 0*inf}", a_struct.value);
-    show_double("{0/0, run_time}", a_run_time[0]);
-    show_double("{1/3, 0/0}", a_inexact[1]);
-    show_float("{0.1f, 0f/0f}", a_rounded[1]);
-    show_double("{&run_time, 0/0}", a_address.value);
-    show_double("{.75, -(0/0), ...}", a_exact[1]);
-    show_double("{..., (double)(0f/0f)}", a_exact[2]);
+    puts("block-scope static");
+    static double b_div = 0.0 / 0.0, b_mul = 0 * INF;
+    static float b_float = __builtin_inff() / __builtin_inff();
+    static long double b_long_double = __builtin_infl() - __builtin_infl();
+    static _Complex double b_complex_quotient = (0.0 + 0.0i) / (0.0 + 0.0i);
+    static __float128 b_quad = 0.0Q / 0.0Q;
+    static _Thread_local double b_thread = 0.0 / 0.0;
+    static double b_negated = -(INF - INF);
+    show_double("0/0", b_div);
+    show_double("0*inf", b_mul);
+    show_float("inff/inff", b_float);
+    show_long_double("infl-infl", b_long_double);
+    show_complex("(0+0i)/(0+0i)", b_complex_quotient);
+    show_quad("0Q/0Q", b_quad);
+    show_double("_Thread_local 0/0", b_thread);
+    show_double("-(inf-inf)", b_negated);
     return 0;
 }

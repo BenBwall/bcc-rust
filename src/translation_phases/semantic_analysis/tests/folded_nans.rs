@@ -1,10 +1,10 @@
 //! The NaN an invalid floating operation folds to ([`NanSource`]): the
-//! positive quiet NaN GCC's and Clang's arithmetic give, except where the
-//! operation is computed at run time: by GCC in a function while math may
-//! trap, by Clang in a function under strict exception behavior, and where
-//! either calls a complex routine; there it is the x86-64 default NaN, sign
-//! bit set. C99: §F.7.4 paragraph 1, p. 449; PDF p. 461; §F.7.5
-//! paragraph 1, p. 450; PDF p. 462.
+//! positive quiet NaN GCC's and Clang's arithmetic give in the initializer
+//! of an object with static storage duration, which both compute at
+//! translation time, and the x86-64 default NaN, sign bit set, in a function
+//! body, where bcc computes every invalid operation as the hardware does.
+//! C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1,
+//! p. 449; PDF p. 461; §F.7.5 paragraph 1, p. 450; PDF p. 462.
 //!
 //! [`NanSource`]: super::super::constants::NanSource
 
@@ -58,6 +58,14 @@ impl Rules {
     }
 }
 
+const ALL_RULES: [Rules; 5] = [
+    Rules::Clang,
+    Rules::ClangTrappingMath,
+    Rules::Gcc,
+    Rules::GccNoTrappingMath,
+    Rules::GccLimitedComplex,
+];
+
 /// The `double` bits of the real part of every folded `operator`
 /// expression in `source`, in order of analysis.
 fn folded(source: &str, rules: Rules, operator: BinaryOperator) -> Vec<u128> {
@@ -89,20 +97,21 @@ fn folded_in(
 }
 
 /// A static initializer folds as the compiler's arithmetic does, positive,
-/// under every identity: at file scope and for a block-scope static.
+/// under every option: at file scope, for a block-scope static or
+/// thread-local object, and in an aggregate or a file-scope compound
+/// literal.
 #[test]
 fn a_static_initializer_folds_the_positive_nan() {
-    for rules in [
-        Rules::Clang,
-        Rules::ClangTrappingMath,
-        Rules::Gcc,
-        Rules::GccNoTrappingMath,
-    ] {
+    for rules in ALL_RULES {
         for source in [
             "double d = 0.0 / 0.0;",
             "static double d = (1.0 / 0.0 - 1.0 / 0.0) / 1.0;",
             "void f(void) { static double d = 0.0 / 0.0; (void)d; }",
+            "void f(void) { static _Thread_local double d = 0.0 / 0.0; (void)d; }",
+            "_Thread_local double d = 0.0 / 0.0;",
             "struct S { double d; } s = { 0.0 / 0.0 };",
+            "double *p = &(double){ 0.0 / 0.0 };",
+            "_Complex double z = (0.0 + 0.0i) / (0.0 + 0.0i);",
         ] {
             let bits = folded(source, rules, BinaryOperator::Division);
             assert_eq!(bits.last(), Some(&POSITIVE), "{rules:?}: {source}");
@@ -110,27 +119,50 @@ fn a_static_initializer_folds_the_positive_nan() {
     }
 }
 
-/// In a function Clang folds the operation, and GCC does only without
-/// trapping math; otherwise it computes it at run time, where x86-64 gives
-/// its negative default NaN.
+/// In a function body every invalid operation keeps the hardware's
+/// negative default NaN, as if computed at run time, under every option:
+/// GCC and Clang fold some of these too, but a NaN folded there would take
+/// the wrong sign wherever it later meets one computed at run time.
 #[test]
-fn a_function_folds_the_nan_its_compiler_computes() {
-    for (rules, expected) in [
-        (Rules::Clang, POSITIVE),
-        (Rules::Gcc, NEGATIVE),
-        (Rules::GccNoTrappingMath, POSITIVE),
-    ] {
+fn a_function_keeps_the_hardware_nan() {
+    for rules in ALL_RULES {
         for source in [
             "void f(void) { double d = 0.0 / 0.0; (void)d; }",
             "double f(void) { return 0.0 / 0.0; }",
             "void g(double); void f(void) { g(0.0 / 0.0); }",
+            "void f(void) { double a[2] = { 0.0 / 0.0, 1.0 }; (void)a; }",
+            "double f(void) { return (double){ 0.0 / 0.0 }; }",
+            "void f(void) { _Complex double z = (0.0 + 0.0i) / (0.0 + 0.0i); (void)z; }",
+            "void f(void) { static double s = 1.0; double d = 0.0 / 0.0; (void)s; (void)d; }",
         ] {
             assert_eq!(
                 folded(source, rules, BinaryOperator::Division),
-                [expected],
+                [NEGATIVE],
                 "{rules:?}: {source}"
             );
         }
+        // A complex product folds each part the same way.
+        let product = "(__builtin_inf() + 0.0i) * (0.0 + 1.0i)";
+        assert_eq!(
+            folded(
+                &format!("_Complex double z = {product};"),
+                rules,
+                BinaryOperator::Multiplication
+            )
+            .last(),
+            Some(&POSITIVE),
+            "{rules:?}"
+        );
+        assert_eq!(
+            folded(
+                &format!("void f(void) {{ _Complex double z = {product}; (void)z; }}"),
+                rules,
+                BinaryOperator::Multiplication
+            )
+            .last(),
+            Some(&NEGATIVE),
+            "{rules:?}"
+        );
     }
 }
 
@@ -193,382 +225,18 @@ fn every_standard_format_folds_the_positive_nan() {
     );
 }
 
-/// The quotient of two complex values is `__divdc3`'s at run time under
-/// Clang in a function, and the compiler's in a static initializer.
-#[test]
-fn a_complex_quotient_in_a_function_is_the_routines() {
-    let quotient = "(0.0 + 0.0i) / (0.0 + 0.0i)";
-    assert_eq!(
-        folded(
-            &format!("_Complex double z = {quotient};"),
-            Rules::Clang,
-            BinaryOperator::Division
-        ),
-        [POSITIVE]
-    );
-    for rules in [Rules::Clang, Rules::Gcc] {
-        assert_eq!(
-            folded(
-                &format!("void f(void) {{ _Complex double z = {quotient}; (void)z; }}"),
-                rules,
-                BinaryOperator::Division
-            ),
-            [NEGATIVE],
-            "{rules:?}"
-        );
-    }
-    // Clang's inline product folds when only one part is a NaN.
-    assert_eq!(
-        folded(
-            "void f(void) { _Complex double z = (__builtin_inf() + 0.0i) * (0.0 + 1.0i); (void)z; \
-             }",
-            Rules::Clang,
-            BinaryOperator::Multiplication
-        )
-        .last(),
-        Some(&POSITIVE)
-    );
-}
-
-/// Without trapping math GCC folds real arithmetic in a function, but the
-/// product or quotient of two complex values still calls `__muldc3` or
-/// `__divdc3` at run time, unless `-fcx-limited-range` has GCC compute it
-/// inline, where it folds. A complex sum folds componentwise.
-#[test]
-fn gcc_without_trapping_math_calls_the_complex_routines() {
-    let in_function =
-        |expression: &str| format!("void f(void) {{ _Complex double z = {expression}; (void)z; }}");
-    let quotient = in_function("(0.0 + 0.0i) / (0.0 + 0.0i)");
-    let product = in_function("(__builtin_inf() + 0.0i) * (0.0 + 1.0i)");
-    let sum = in_function("(__builtin_inf() + 1.0i) + (-__builtin_inf() + 1.0i)");
-    for (rules, expected) in [
-        (Rules::GccNoTrappingMath, NEGATIVE),
-        (Rules::GccLimitedComplex, POSITIVE),
-    ] {
-        assert_eq!(
-            folded(&quotient, rules, BinaryOperator::Division),
-            [expected],
-            "{rules:?}"
-        );
-        assert_eq!(
-            folded(&product, rules, BinaryOperator::Multiplication).last(),
-            Some(&expected),
-            "{rules:?}"
-        );
-        assert_eq!(
-            folded(&sum, rules, BinaryOperator::Addition).last(),
-            Some(&POSITIVE),
-            "{rules:?}"
-        );
-    }
-}
-
-/// Under Clang's strict exception behavior, from `-ftrapping-math` or
-/// `#pragma STDC FENV_ACCESS ON`, an invalid operation in a function is
-/// computed at run time. Under `-ftrapping-math` alone, Clang's evaluator
-/// still folds the initializer of a constant automatic array or structure,
-/// unless a complex quotient by a real divisor raises an exception; under
-/// the pragma bcc keeps that at run time too. A static initializer folds.
-#[test]
-fn clang_strict_exceptions_compute_the_nan_at_run_time() {
-    let (n, p) = (NEGATIVE, POSITIVE);
-    let cases = [
-        ("void f(void) { double d = 0.0 / 0.0; (void)d; }", n, n),
-        (
-            "void f(void) { double d = (double){0.0 / 0.0}; (void)d; }",
-            n,
-            n,
-        ),
-        ("double f(void) { return 0.0 / 0.0; }", n, n),
-        ("void f(void) { double a[1] = {0.0 / 0.0}; (void)a; }", p, n),
-        (
-            "void f(void) { struct { int i; double d; } s = {1, 0.0 / 0.0}; (void)s; }",
-            p,
-            n,
-        ),
-        (
-            "void f(void) { _Complex double z[1] = {(1.0i) / 0.0}; (void)z; }",
-            n,
-            n,
-        ),
-        (
-            "void f(void) { static double d = 0.0 / 0.0; (void)d; }",
-            p,
-            p,
-        ),
-    ];
-    for (source, trapping, pragma_expected) in cases {
-        assert_eq!(
-            folded(source, Rules::ClangTrappingMath, BinaryOperator::Division).last(),
-            Some(&trapping),
-            "{source}"
-        );
-        let pragma = format!("#pragma STDC FENV_ACCESS ON\n{source}");
-        assert_eq!(
-            folded(&pragma, Rules::Clang, BinaryOperator::Division).last(),
-            Some(&pragma_expected),
-            "{pragma}"
-        );
-    }
-}
-
-/// Under Clang's strict exception behavior an automatic array or
-/// structure takes the compiler's NaN only when Clang's evaluator folds its
-/// whole initializer, and the hardware's otherwise: a run-time member, the
-/// address of an automatic object, a builtin it does not fold, an unordered
-/// comparison, or an operation or conversion that rounds, overflows or
-/// divides by zero has Clang compute every member at run time. Under a
-/// floating-point pragma, which bcc does not follow, every member stays at
-/// run time.
-#[test]
-fn clang_strict_exceptions_fold_only_a_whole_constant_aggregate() {
-    let folds = [
-        "double a[2] = {0.5, 0.0 / 0.0};",
-        "double a[2] = {1.0 / 4.0 + 0.5, 0.0 / 0.0};",
-        "double a[2] = {[1] = 0.0 / 0.0};",
-        "double a[2] = {-(0.0 / 0.0), (float)(0.0 / 0.0) * 2.0};",
-        "float a[2] = {0.5, 0.0f / 0.0f};",
-        "float a[2] = {16777216, 0.0 / 0.0};",
-        "long double a[2] = {1.0L / 4.0L, 0.0L / 0.0L};",
-        "struct { double *p; double v; } s = {&g, 0.0 / 0.0};",
-        "struct { struct { int i; double d; } s; double w[2]; } n = {{1, 0.0 / 0.0}, {1, 2}};",
-        "_Complex double z[2] = {(1.0 + 1.0i) / 2.0, 0.0 / 0.0};",
-        "_Complex double z[2] = {(0.1 + 0.2i) * (3.0 + 1.0i), 0.0 / 0.0};",
-        "double a[2] = {__builtin_inf() / 0.0, 0.0 / 0.0};",
-        "double a[2] = {(double)(0.5 < 1.0) + __builtin_inf(), 0.0 / 0.0};",
-    ];
-    let computes = [
-        "double a[2] = {0.0 / 0.0, x};",
-        "struct { double *p; double v; } s = {&x, 0.0 / 0.0};",
-        "double a[2] = {0.0 / 0.0, (double)(long)&x};",
-        "double a[2] = {0.0 / 0.0, x = 1};",
-        "double a[2] = {0.0 / 0.0, (int)(0.0 / 0.0 == 0.0 / 0.0)};",
-        "double a[2] = {1.0 / 3.0, 0.0 / 0.0};",
-        "float a[2] = {0.1, 0.0f / 0.0f};",
-        "double a[2] = {(float)16777217, 0.0 / 0.0};",
-        "double a[2] = {(float)0.1, 0.0 / 0.0};",
-        "double a[2] = {1.0 / 0.0, 0.0 / 0.0};",
-        "double a[2] = {1e308 * 10.0, 0.0 / 0.0};",
-        "double a[2] = {0x1p-1022 / 3.0, 0.0 / 0.0};",
-        "long double a[2] = {1.0L / 3.0L, 0.0L / 0.0L};",
-        "_Complex double z[2] = {(1.0 + 1.0i) / 3.0, 0.0 / 0.0};",
-        "_Complex double z[2] = {3.0 * (0.1 + 0.1i), 0.0 / 0.0};",
-        "_Complex double z[2] = {(1.0i) / 0.0, 0.0 / 0.0};",
-        "struct { struct { int i; double d; } s; double w[2]; } n = {{1, 0.0 / 0.0}, {x, 1}};",
-        "double a[2][1] = {{0.0 / 0.0}, {x}};",
-        "struct { int i; double d; } s[2] = {{1, 0.0 / 0.0}, {2, 1.0 / 3.0}};",
-        "struct { int *p; double v; } s = {(int[]){1, 2}, 0.0 / 0.0};",
-        "double a[2] = {__builtin_sqrt(4.0), 0.0 / 0.0};",
-        "double a[2] = {(1.0 / 3.0, 0.5), 0.0 / 0.0};",
-    ];
-    let nans = |source: &str, rules| {
-        let mut bits = folded(source, rules, BinaryOperator::Division);
-        bits.retain(|&bits| bits >> 52 & 0x7FF == 0x7FF && bits & 0xF_FFFF_FFFF_FFFF != 0);
-        bits
-    };
-    for (sources, expected) in [(&folds[..], POSITIVE), (&computes[..], NEGATIVE)] {
-        for declaration in sources {
-            let source = format!(
-                "static double g;
-void f(double x) {{ {declaration} (void)x; }}"
-            );
-            let pragma = format!(
-                "#pragma STDC FENV_ACCESS ON
-{source}"
-            );
-            for (source, rules, expected) in [
-                (&source, Rules::ClangTrappingMath, expected),
-                (&pragma, Rules::Clang, NEGATIVE),
-            ] {
-                let bits = nans(source, rules);
-                assert!(!bits.is_empty(), "{source}");
-                assert!(
-                    bits.iter().all(|&bits| bits == expected),
-                    "{source}: {bits:x?}"
-                );
-            }
-        }
-    }
-}
-
-/// A function whose `0.0 / 0.0` the tests below fold.
-fn function(name: &str) -> String {
-    format!("void {name}(void) {{ double d = 0.0 / 0.0; (void)d; }}\n")
-}
-
-/// A floating-point environment pragma that Clang or `cl` reads, anywhere
-/// in the translation unit and with any operand, keeps every function's
-/// invalid operations at run time under their rules: bcc does not follow
-/// where one is in effect. A static initializer still folds, and GCC
-/// ignores the pragmas.
-#[test]
-fn a_floating_pragma_anywhere_keeps_every_nan_at_run_time() {
-    let pragmas = [
-        "#pragma STDC FENV_ACCESS ON\n",
-        "#pragma STDC FENV_ACCESS OFF\n",
-        "#pragma STDC FENV_ROUND FE_TONEAREST\n",
-        "#pragma STDC FENV_ROUND FE_UPWARD\n",
-        "#pragma clang fp exceptions(ignore)\n",
-        "#pragma clang fp contract(fast) exceptions(strict)\n",
-        "#define X exceptions(strict)\n#pragma clang fp X\n",
-        "#pragma float_control(precise, on)\n",
-        "#pragma float_control(except, on, push)\n",
-        "#pragma float_control(pop)\n",
-        "#pragma fenv_access(on)\n",
-        "_Pragma(\"STDC FENV_ACCESS ON\")\n",
-    ];
-    let quiet = |rules: Rules| rules.configuration().with_suppress_warnings(true);
-    let (n, p) = (NEGATIVE, POSITIVE);
-    for pragma in pragmas {
-        // Before the functions, inside one, after a declaration's
-        // attributes, and at the end.
-        let placements = [
-            format!("{pragma}{}{}", function("f"), function("g")),
-            format!(
-                "void f(void) {{\n{pragma} double d = 0.0 / 0.0; (void)d;\n}}\n{}",
-                function("g")
-            ),
-            format!(
-                "__attribute__((noinline))\n{pragma}{}{}",
-                function("f"),
-                function("g")
-            ),
-            format!(
-                "{}{}static double s = 0.0 / 0.0;\n{pragma}",
-                function("f"),
-                function("g")
-            ),
-        ];
-        for source in placements {
-            let static_nan: &[u128] = if source.contains("static double") {
-                &[p]
-            } else {
-                &[]
-            };
-            let runtime = [&[n, n][..], static_nan].concat();
-            let folds = [&[p, p][..], static_nan].concat();
-            for configuration in [
-                quiet(Rules::Clang),
-                quiet(Rules::Clang).with_compiler_identity(CompilerIdentity::ClangCl),
-            ] {
-                assert_eq!(
-                    folded_in(&source, configuration, BinaryOperator::Division),
-                    runtime,
-                    "{configuration:?}: {source}"
-                );
-            }
-            // The msvc identity keeps every NaN at run time regardless.
-            let msvc =
-                quiet(Rules::GccNoTrappingMath).with_compiler_identity(CompilerIdentity::Msvc);
-            assert!(
-                folded_in(&source, msvc, BinaryOperator::Division)
-                    .iter()
-                    .all(|&bits| bits == n),
-                "{source}"
-            );
-            assert_eq!(
-                folded_in(
-                    &source,
-                    quiet(Rules::GccNoTrappingMath),
-                    BinaryOperator::Division
-                ),
-                folds,
-                "{source}"
-            );
-        }
-    }
-    // Other `clang fp` clauses leave the environment alone.
-    let source = format!(
-        "#pragma clang fp contract(fast) reassociate(off)\n{}",
-        function("f")
-    );
-    assert_eq!(
-        folded_in(&source, quiet(Rules::Clang), BinaryOperator::Division),
-        [p]
-    );
-}
-
-/// Under `-fno-trapping-math`, GCC's `optimize` attribute or
-/// `#pragma GCC optimize` can turn trapping math back on for a function
-/// (`trapping-math`, `no-fast-math`, or an `-O` level after `-Ofast`).
-/// `#pragma GCC optimize` or `push_options` anywhere keeps every function's
-/// NaN at run time, and an `optimize` attribute every function's after it;
-/// `pop_options` and `reset_options` alone do not. Clang ignores them.
-#[test]
-fn gcc_optimize_options_keep_the_nan_at_run_time() {
-    let (n, p) = (NEGATIVE, POSITIVE);
-    let attribute = [
-        function("plain"),
-        "__attribute__((optimize(\"trapping-math\"))) ".into(),
-        function("attribute"),
-        function("later"),
-    ]
-    .concat();
-    assert_eq!(
-        folded(
-            &attribute,
-            Rules::GccNoTrappingMath,
-            BinaryOperator::Division
-        ),
-        [p, n, n]
-    );
-    assert_eq!(
-        folded(&attribute, Rules::Clang, BinaryOperator::Division),
-        [p; 3]
-    );
-    for (pragma, expected) in [
-        ("#pragma GCC optimize(\"no-fast-math\")\n", n),
-        ("#pragma GCC push_options\n", n),
-        ("#pragma GCC pop_options\n#pragma GCC reset_options\n", p),
-    ] {
-        let source = [function("before"), pragma.into(), function("after")].concat();
-        assert_eq!(
-            folded(&source, Rules::GccNoTrappingMath, BinaryOperator::Division),
-            [expected; 2],
-            "{source}"
-        );
-        assert_eq!(
-            folded(&source, Rules::Clang, BinaryOperator::Division),
-            [p; 2],
-            "{source}"
-        );
-    }
-}
-
 /// Binary128 folds the same way: positive in a static initializer, and
-/// libgcc's negative default NaN where GCC leaves the operation for run
-/// time.
+/// libgcc's negative default NaN in a function.
 #[test]
-fn binary128_folds_the_nan_its_compiler_computes() {
-    for (source, rules, negative) in [
-        ("__float128 q = 0.0Q / 0.0Q;", Rules::Gcc, false),
-        ("__float128 q = 0.0Q / 0.0Q;", Rules::Clang, false),
-        (
-            "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
-            Rules::Clang,
-            false,
-        ),
-        (
-            "__float128 f(__float128 x) { __float128 q = 0.0Q / 0.0Q; return q + x; }",
-            Rules::Clang,
-            true,
-        ),
-        (
-            "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
-            Rules::Gcc,
-            true,
-        ),
+fn binary128_folds_the_positive_nan_only_in_a_static_initializer() {
+    for (source, negative) in [
+        ("__float128 q = 0.0Q / 0.0Q;", false),
+        ("void f(void) { static __float128 q = 0.0Q / 0.0Q; (void)q; }", false),
+        ("void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }", true),
+        ("__float128 f(void) { return 0.0Q / 0.0Q; }", true),
     ] {
-        let identity = match rules {
-            | Rules::Clang => CompilerIdentity::Clang,
-            | _ => CompilerIdentity::Gcc,
-        };
-        with_configuration(
-            source,
-            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
-                .with_gnu_extensions(true)
-                .with_compiler_identity(identity),
-            |context, unit| {
+        for rules in ALL_RULES {
+            with_configuration(source, rules.configuration(), |context, unit| {
                 assert_eq!(context.pending_error_count(), 0, "{source}");
                 let value = unit
                     .expressions
@@ -587,8 +255,8 @@ fn binary128_folds_the_nan_its_compiler_computes() {
                     .expect("a folded binary128 value");
                 assert!(value.real.is_nan(), "{source}");
                 assert_eq!(value.real.is_negative(), negative, "{rules:?}: {source}");
-            },
-        );
+            });
+        }
     }
 }
 
@@ -621,122 +289,5 @@ fn tcc_and_msvc_keep_every_nan_at_run_time() {
                 );
             }
         }
-    }
-}
-
-/// In a function a folded NaN takes its compiler's sign only where it is
-/// the value the code produces: returned, passed to a function that is no
-/// builtin, stored, or initializing an object every read of which is such a
-/// value too, or copied into one. Where it meets a NaN computed at run time
-/// in one operation, whose result is its first operand's NaN on x86 and
-/// GCC, Clang and bcc order the operands differently, it keeps the
-/// hardware's NaN: a constant operand of such an operation, an object one
-/// reads, a copy of that object, an object read through a pointer or by a
-/// nested function, a builtin's or library function's argument, and an
-/// argument for a parameter that a function defined before reads in such an
-/// operation, which inlining the call would meet.
-#[test]
-fn a_nan_that_meets_a_run_time_operation_stays_at_run_time() {
-    let (n, p) = (NEGATIVE, POSITIVE);
-    let cases = [
-        ("double f(void) { return 0.0 / 0.0; }", p),
-        ("void g(double); void f(void) { g(-(0.0 / 0.0)); }", p),
-        (
-            "void g(double *); void f(void) { double r = 0.0 / 0.0; g(&r); }",
-            p,
-        ),
-        ("double f(void) { double r = 0.0 / 0.0; return r; }", p),
-        ("double f(void) { double r; r = 0.0 / 0.0; return r; }", p),
-        ("double h; void f(void) { double r = 0.0 / 0.0; h = r; }", p),
-        (
-            "double f(void) { double r = 0.0 / 0.0, y = r; return y; }",
-            p,
-        ),
-        (
-            "void g(double); void f(void) { struct { int i; double d[2]; } s = {1, {0.0 / 0.0, \
-             1}}; g(s.d[0]); }",
-            p,
-        ),
-        ("double f(double x) { return 0.0 / 0.0 + x; }", n),
-        ("double f(double x) { return x - (0.0 / 0.0 + 1.0); }", n),
-        (
-            "double f(double x) { double r = 0.0 / 0.0; return r + x; }",
-            n,
-        ),
-        (
-            "double f(double x) { double r = 0.0 / 0.0; return x * r; }",
-            n,
-        ),
-        (
-            "double f(double x) { double r = 0.0 / 0.0; x += r; return x; }",
-            n,
-        ),
-        (
-            "double f(double x) { double r = 0.0 / 0.0, y = r; return y + x; }",
-            n,
-        ),
-        (
-            "double f(double x) { double r = 0.0 / 0.0, *p = &r; return *p + x; }",
-            n,
-        ),
-        (
-            "double f(double x) { return __builtin_fmax(0.0 / 0.0, x); }",
-            n,
-        ),
-        (
-            "double fmax(double, double); double f(double x) { return fmax(0.0 / 0.0, x); }",
-            n,
-        ),
-        (
-            "static void put(double d) { (void)d; } void f(void) { put(0.0 / 0.0); }",
-            p,
-        ),
-        (
-            "void g(const char *); static void put(double d) { g((const char *)&d + 4); } void \
-             f(void) { put(0.0 / 0.0); }",
-            p,
-        ),
-        (
-            "static double add(const double *p, double y) { return *p + y; } double f(double x) { \
-             double r = 0.0 / 0.0; return add(&r, x); }",
-            n,
-        ),
-        (
-            "static double add(double a, double y) { return a + y; } double f(double x) { return \
-             add(0.0 / 0.0, x); }",
-            n,
-        ),
-        ("int f(void) { return __builtin_signbit(0.0 / 0.0); }", n),
-    ];
-    for rules in [Rules::Clang, Rules::GccNoTrappingMath] {
-        for (source, expected) in cases {
-            assert_eq!(
-                folded(source, rules, BinaryOperator::Division),
-                [expected],
-                "{rules:?}: {source}"
-            );
-        }
-    }
-    // A GNU nested function's reads count for the object it reads.
-    assert_eq!(
-        folded(
-            "double f(double x) { double r = 0.0 / 0.0; double n(void) { return r * x; } return \
-             n(); }",
-            Rules::GccNoTrappingMath,
-            BinaryOperator::Division
-        ),
-        [n]
-    );
-    // Clang folds a scalar compound literal's read; its stored value is
-    // final where the literal's value is.
-    for (source, expected) in [
-        ("double f(void) { return (double){0.0 / 0.0}; }", p),
-        ("double f(double x) { return (double){0.0 / 0.0} + x; }", n),
-    ] {
-        assert_eq!(
-            folded(source, Rules::Clang, BinaryOperator::Division),
-            [expected],
-            "{source}"
-        );
     }
 }

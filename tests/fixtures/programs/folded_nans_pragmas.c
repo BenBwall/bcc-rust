@@ -1,20 +1,12 @@
-/* The NaN of an invalid floating operation in a translation unit that holds
- * floating-point pragmas, printed as bits. bcc does not follow where such a
- * pragma is in effect: one anywhere in the translation unit computes every
- * function's invalid operations at run time (the x86-64 default NaN, sign
- * bit set) under the rules of a compiler that reads it, while a static
- * initializer still folds to the positive NaN. Clang reads `clang fp
- * exceptions`, `float_control` and `STDC FENV_ACCESS`, and GCC `#pragma GCC
- * optimize`. So that the compilers compute every function's operations at
- * run time too, the first pragma of each kind makes them strict for the
- * rest of the file: Clang's comes after a declaration's attributes, where
- * it still reaches every later function, and GCC's turns trapping math back
- * on under -fno-trapping-math. The later pragmas keep it strict, in the
- * forms bcc once scoped itself: after `__extension__`, through `_Pragma`, in
- * a block, and around `float_control`'s `push` and `pop`. A function where
- * Clang or GCC would fold the NaN, and bcc gives up that precision, is in
- * the unit tests (`folded_nans.rs`) instead. The tests build it with no
- * options, -ftrapping-math and -fno-trapping-math, at -O0. C99 §7.6.1. */
+/* The NaN of an invalid floating operation in the initializer of an object
+ * with static storage duration, under the floating-point pragmas that make
+ * Clang's code for a function strict, printed as bits. Such an initializer
+ * is still computed at translation time (C99 §F.7.5p1), so GCC and Clang
+ * store their arithmetic's positive quiet NaN whatever pragma is in effect:
+ * Clang's `STDC FENV_ACCESS`, `clang fp exceptions` and `float_control`,
+ * and GCC's `#pragma GCC optimize`, which each compiler alone reads. The
+ * tests build it with no options, -ftrapping-math and -fno-trapping-math,
+ * at -O0. Clang rejects these pragmas under -ffast-math. C99 §7.6.1. */
 #include <stdio.h>
 #include <string.h>
 
@@ -32,60 +24,32 @@ static void show_float(const char *name, float value) {
     printf("%-24s %08x\n", name, bits);
 }
 
-static double static_quotient = 0.0 / 0.0;
-
-#define BODY(name)                                                          \
-    {                                                                       \
-        static double kept = INF - INF;                                     \
-        double quotient = 0.0 / 0.0;                                        \
-        show(name " static", kept);                                         \
-        show(name " quotient", quotient);                                   \
-        show(name " negated", -(INF - INF));                                \
-        show_float(name " float", 0.0f * __builtin_inff());                 \
-        double members[2] = {INF / INF, x};                                 \
-        show(name " members", members[0]);                                  \
-    }
-
 #pragma GCC optimize("trapping-math")
+static double after_optimize = 0.0 / 0.0;
 
-__attribute__((noinline))
+#pragma STDC FENV_ACCESS ON
+static double fenv_access = INF - INF;
+static float fenv_access_float = 0.0f * __builtin_inff();
+
 #pragma clang fp exceptions(strict)
-static void after_attributes(double x) BODY("after-attributes")
-
-__extension__
-#pragma float_control(except, on)
-static void after_extension(double x) BODY("after-extension")
+static double fp_exceptions = INF / INF;
 
 #pragma float_control(push)
-#pragma STDC FENV_ACCESS ON
-static void fenv_pushed(double x) BODY("fenv-pushed")
+#pragma float_control(except, on)
+static _Complex double float_control = (0.0 + 0.0i) / (0.0 + 0.0i);
 #pragma float_control(pop)
-static void fenv_popped(double x) BODY("fenv-popped")
 
-#define STRICT _Pragma("clang fp exceptions(strict)")
-static void in_block(double x) {
-    {
-        STRICT
-        double inside = 0.0 / 0.0;
-        show("in-block inside", inside);
-    }
-    double after = 0.0 / 0.0;
-    show("in-block after", after);
-    (void)x;
-}
-
-#pragma STDC FENV_ACCESS OFF
-static void fenv_off(double x) BODY("fenv-off")
-
-int main(int argc, char **argv) {
-    (void)argv;
-    double x = argc;
-    show("static", static_quotient);
-    after_attributes(x);
-    after_extension(x);
-    fenv_pushed(x);
-    fenv_popped(x);
-    in_block(x);
-    fenv_off(x);
+int main(void) {
+#pragma STDC FENV_ACCESS ON
+    static double in_block = 0.0 / 0.0;
+    static _Thread_local double thread_local_in_block = 0 * INF;
+    show("optimize", after_optimize);
+    show("FENV_ACCESS", fenv_access);
+    show_float("FENV_ACCESS float", fenv_access_float);
+    show("fp exceptions", fp_exceptions);
+    show("float_control real", __real__ float_control);
+    show("float_control imag", __imag__ float_control);
+    show("block FENV_ACCESS", in_block);
+    show("block _Thread_local", thread_local_in_block);
     return 0;
 }

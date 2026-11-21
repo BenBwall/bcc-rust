@@ -102,11 +102,8 @@ mod compiler_parity;
 mod constants;
 mod exceptional_constants;
 mod excess;
-mod floating_environment;
-mod function_nans;
 mod integer;
 mod named_constants;
-mod strict_initializers;
 mod types;
 mod wide_integers;
 
@@ -746,7 +743,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.work
                         .push(Work::InitializeDone(entry.binding, initializer));
                     self.functions.initializer = Some(entry.binding);
-                    self.begin_strict_initializer(entry.binding);
                 }
                 self.work.push(Work::Initializer(initializer));
             },
@@ -762,8 +758,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::InitializeDone(binding, initializer) => {
                 self.record_constant_initializer(binding, initializer);
                 self.initialize_declaration(binding, initializer);
-                self.settle_strict_initializer(binding, initializer);
-                self.note_automatic_initializer(binding, initializer);
                 if let Some(errors_before) = self.constexpr_objects.remove(&binding) {
                     self.constexpr_initialized(binding, initializer, errors_before);
                 }

@@ -53,56 +53,32 @@ mod tests {
         matches_the_claimed_compiler("imaginary_interchange_constants.c");
     }
 
-    /// The NaN an invalid floating operation folds to: positive in a static
-    /// initializer under both identities and in Clang's code for a
-    /// function, the x86-64 default NaN, sign bit set, where GCC leaves the
-    /// operation for run time.
+    /// The NaN an invalid floating operation folds to in the initializer of
+    /// an object with static storage duration: positive under both
+    /// identities, where x86-64 computes its default NaN, sign bit set.
     #[test]
     fn folded_nans_match_the_claimed_compiler() {
         matches_the_claimed_compiler("folded_nans.c");
     }
 
-    /// The same NaNs without trapping math: GCC then folds real arithmetic
-    /// in a function too, but still computes the product or quotient of
-    /// two complex values with `__muldc3` or `__divdc3` at run time, unless
-    /// `-fcx-limited-range` has it compute them inline.
+    /// The same NaNs under the options that decide whether GCC and Clang
+    /// fold an invalid operation in a function: both still compute a static
+    /// initializer at translation time.
     #[test]
-    fn folded_nans_without_trapping_math_match_the_claimed_compiler() {
-        matches_the_claimed_compiler_with(
-            "folded_nans.c",
-            "-std=gnu17",
-            &["-fno-trapping-math"],
-            false,
-        );
-        matches_the_claimed_compiler_with(
-            "folded_nans.c",
-            "-std=gnu17",
+    fn folded_nans_under_floating_options_match_the_claimed_compiler() {
+        for options in [
+            &["-fno-trapping-math"][..],
             &["-fno-trapping-math", "-fcx-limited-range"],
-            false,
-        );
-    }
-
-    /// The same NaNs with strict exception behavior, which Clang's
-    /// `-ftrapping-math` asks for: Clang then computes an invalid operation
-    /// in a function at run time, but for an automatic array or structure
-    /// whose whole initializer its evaluator folds. GCC traps by default.
-    #[test]
-    fn folded_nans_with_strict_exceptions_match_the_claimed_compiler() {
-        matches_the_claimed_compiler_with(
-            "folded_nans.c",
-            "-std=gnu17",
             &["-ftrapping-math"],
-            false,
-        );
+            &["-ffast-math"],
+        ] {
+            matches_the_claimed_compiler_with("folded_nans.c", "-std=gnu17", options, false);
+        }
     }
 
-    /// The same NaNs in a translation unit that holds floating-point
-    /// pragmas, which keep every function's NaNs at run time in bcc:
-    /// Clang's `clang fp exceptions`, `float_control` with its `push` and
-    /// `pop`, and `STDC FENV_ACCESS`, after a declaration's attributes,
-    /// through `_Pragma` and in a block, and GCC's `#pragma GCC optimize`,
-    /// which each compiler alone reads. The fixture makes both compilers
-    /// strict throughout, so that their output matches.
+    /// The same NaNs under the floating-point pragmas that make Clang's
+    /// code for a function strict, and GCC's `#pragma GCC optimize`: a static
+    /// initializer still folds to the positive NaN.
     #[test]
     fn folded_nans_under_floating_pragmas_match_the_claimed_compiler() {
         for options in [&[][..], &["-ftrapping-math"], &["-fno-trapping-math"]] {

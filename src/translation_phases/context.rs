@@ -211,13 +211,6 @@ pub(crate) struct Context<'tu> {
     /// out of the values Clang's evaluator folds, each with its output-token
     /// ordinal ([`Self::preprocessed_tokens`] before the next token).
     pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
-    /// The pragmas anywhere in the translation unit that can change a
-    /// function's floating-point environment: Clang's and `cl`'s
-    /// environment pragmas, and GCC's option pragmas. Semantic analysis
-    /// computes every function's invalid operations at run time under the
-    /// rules of a compiler that honors one (`floating_environment.rs`).
-    /// C99: §7.6.1 paragraph 2, p. 189; PDF p. 201.
-    pub(crate) floating_pragmas: super::pragma_floating::FloatingPragmas,
     /// A pragma the identity's compiler hands to its parser was read,
     /// which keeps a translation unit that declares nothing from being
     /// empty.

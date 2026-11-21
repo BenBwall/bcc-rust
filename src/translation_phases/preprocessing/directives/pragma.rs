@@ -36,7 +36,6 @@ use crate::{
         TextEvent,
         TextEventKind,
         interface::StrExt,
-        pragma_floating::PragmaWord,
         preprocessor_tokenizer::{
             OutputSpacing,
             PreprocessorToken,
@@ -128,9 +127,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
-    /// `on-off-switch`; they are checked, and the pragmas that can change
-    /// the floating-point environment are recorded for semantic analysis
-    /// ([`Self::record_floating_pragma`]). `#pragma
+    /// `on-off-switch`; they are checked but have no effect yet. `#pragma
     /// once`, `#pragma pack`, `#pragma GCC system_header`, `#pragma GCC
     /// warning`/`error` and the diagnostic pragmas are bcc's
     /// implementation-defined pragmas. `#pragma
@@ -162,7 +159,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             None
         };
-        self.record_floating_pragma();
         let position = self.context.preprocessed_tokens;
         let packs = self.context.pack_pragmas.len();
         let consumed_newline = self.execute_pragma(from);
@@ -198,30 +194,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
         }
         consumed_newline
-    }
-
-    /// Notes whether the pragma about to be read can change the
-    /// floating-point environment ([`Context::floating_pragmas`]). Its
-    /// tokens are looked at, not read, so the pragma is carried out and
-    /// diagnosed as before. An identifier that names a macro is marked,
-    /// since Clang replaces it in some operands.
-    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
-    fn record_floating_pragma(&mut self) {
-        let string_cache = &self.context.string_cache;
-        let macros = &self.state.macro_definitions;
-        let words = self
-            .tokenizer
-            .spellings()
-            .take_while(|&(kind, _)| kind != PreprocessorTokenType::Newline)
-            .filter(|&(kind, _)| kind != PreprocessorTokenType::Whitespace)
-            .map(|(kind, contents)| PragmaWord {
-                spelling:   string_cache.at(contents).trim_end_matches('\0'),
-                macro_name: match kind {
-                    | PreprocessorTokenType::Identifier => macros.contains_key(&contents),
-                    | kind => kind.is_identifier(),
-                },
-            });
-        self.context.floating_pragmas.note(words);
     }
 
     /// Carries out the pragma [`Self::parse_pragma_directive`] reads.

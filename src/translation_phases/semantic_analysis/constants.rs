@@ -39,129 +39,46 @@ use crate::{
 /// `0 × ∞`, `∞/∞`), which decides its sign. IEC 60559 leaves a NaN's sign
 /// unspecified (IEEE 754-2008 §6.3), and the two computers differ: the
 /// x86-64 hardware gives its default NaN, whose sign bit is set, while GCC's
-/// `real.c` and LLVM's `APFloat` give the positive quiet NaN. A static
-/// initializer is computed at translation time, and any other constant
-/// expression as if during execution, but GCC and Clang fold most of those
-/// too, so the folded value is the one their code holds.
-/// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459; §F.7.4 paragraph
-/// 1, p. 449; PDF p. 461; §F.7.5 paragraph 1, p. 450; PDF p. 462.
+/// `real.c` and LLVM's `APFloat` give the positive quiet NaN. Only the
+/// initializer of an object with static storage duration is computed at
+/// translation time; any other floating constant expression is evaluated as
+/// if during execution, and there bcc keeps the hardware's NaN.
+/// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1,
+/// p. 449; PDF p. 461; §F.7.5 paragraph 1, p. 450; PDF p. 462.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NanSource {
     /// The compiler's own arithmetic, as in a static initializer.
     Compiler,
-    /// GCC's code for a function without trapping math: its real arithmetic
-    /// folds as the compiler's does, but the product or quotient of two
-    /// complex values calls `__muldc3` or `__divdc3`, which compute at run
-    /// time. GCC folds those through MPC only in an initializer
-    /// (`const_binop`'s `do_nonfinite`), or computes them inline under
-    /// `-fcx-limited-range` and `-fcx-fortran-rules`, where they fold.
-    GccFunction,
-    /// Clang's code for a function: its real arithmetic folds as the
-    /// compiler's does, but a complex quotient, or a complex product whose
-    /// parts are both NaNs, calls `__divdc3` or `__muldc3`, which compute
-    /// at run time.
-    ClangFunction,
-    /// The hardware at run time: GCC leaves an operation that raises the
-    /// invalid exception in a function unfolded while math may trap
-    /// (`-ftrapping-math`, its default, or an `optimize` attribute or
-    /// pragma that may turn it back on), and Clang emits it as a
-    /// constrained operation under `-ftrapping-math`,
-    /// `#pragma STDC FENV_ACCESS ON` or another pragma that may make the
-    /// environment strict, which bcc assumes everywhere once the unit holds
-    /// one (`floating_environment.rs`), unless it copies the initializer of
-    /// an automatic array or structure from a constant image
-    /// ([`Analyzer::settle_strict_initializer`]).
+    /// The hardware at run time.
     Runtime,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Who computes an invalid operation analyzed now ([`NanSource`]): the
-    /// compiler outside a function and in a static or thread-local object's
-    /// initializer ([`Self::compiler_nan_source`]), and the compiler's code
-    /// for the function in a context that requires a constant, whose value
-    /// never reaches run time as a floating value. Any other operation in a
-    /// function folds with the hardware's NaN, as if computed at run time;
-    /// [`Self::settle_function_nans`] folds it again with the NaN of
-    /// [`Self::function_nan_source`] where its value is final.
+    /// compiler outside a function and in the initializer of a static or
+    /// thread-local object, which GCC and Clang fold at translation time
+    /// under every floating-point option and pragma, and the hardware in a
+    /// function body. GCC and Clang fold some operations there too, but
+    /// which ones depends on trapping math, pragmas, inlining and the
+    /// operand order of their code, so bcc computes every one as the
+    /// hardware does, and leaves its operand order to decide which NaN
+    /// survives where two meet. The tcc and msvc identities keep the
+    /// hardware's NaN everywhere: TCC folds no operation whose result is not
+    /// finite (its `gen_opif`) and rejects one in a static initializer, and
+    /// there is no `cl` to check against.
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1,
+    /// p. 449; PDF p. 461.
     pub(super) fn nan_source(&self) -> NanSource {
-        if self.functions.current.is_none() || self.initializing_static() {
-            self.compiler_nan_source()
-        } else if self.constant_contexts != 0 {
-            self.function_nan_source()
+        use crate::configuration::CompilerIdentity;
+        let folds = !matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Tcc | CompilerIdentity::Msvc
+        );
+        if folds && (self.functions.current.is_none() || self.initializing_static()) {
+            NanSource::Compiler
         } else {
             NanSource::Runtime
         }
-    }
-
-    /// The NaN source an operation analyzed now with the hardware's NaN
-    /// folds with where its value is final ([`Self::settle_function_nans`]);
-    /// `None` where [`Self::nan_source`] already decides.
-    pub(super) fn deferred_nan_source(&self) -> Option<NanSource> {
-        if self.functions.current.is_none()
-            || self.initializing_static()
-            || self.constant_contexts != 0
-        {
-            return None;
-        }
-        Some(self.function_nan_source()).filter(|&source| source != NanSource::Runtime)
-    }
-
-    /// Who computes an invalid operation at translation time: the compiler,
-    /// except under the tcc and msvc identities, whose NaNs bcc leaves to
-    /// the hardware everywhere. TCC folds no operation whose result is not
-    /// finite (its `gen_opif`), and rejects one in a static initializer;
-    /// there is no `cl` to check against.
-    pub(super) fn compiler_nan_source(&self) -> NanSource {
-        use crate::configuration::CompilerIdentity;
-        match self.context.configuration.compiler_identity() {
-            | CompilerIdentity::Tcc | CompilerIdentity::Msvc => NanSource::Runtime,
-            | _ => NanSource::Compiler,
-        }
-    }
-
-    /// Who computes an invalid operation in the function analyzed now,
-    /// which differs between the rule sets: the hardware under the tcc and
-    /// msvc identities ([`Self::compiler_nan_source`]), which accept GCC's
-    /// `-fno-trapping-math` and `-ffast-math` but fold nothing for them.
-    pub(super) fn function_nan_source(&self) -> NanSource {
-        use crate::configuration::RuleSet;
-        let configuration = self.context.configuration;
-        if self.compiler_nan_source() == NanSource::Runtime {
-            return NanSource::Runtime;
-        }
-        let limited_complex = configuration.limited_complex_arithmetic();
-        match configuration.compiler_identity().rules() {
-            | RuleSet::Clang if self.clang_strict_exceptions() => NanSource::Runtime,
-            | RuleSet::Clang if limited_complex => NanSource::Compiler,
-            | RuleSet::Clang => NanSource::ClangFunction,
-            | RuleSet::Gcc if !configuration.no_trapping_math() || self.gcc_function_runtime() =>
-                NanSource::Runtime,
-            | RuleSet::Gcc if limited_complex => NanSource::Compiler,
-            | RuleSet::Gcc => NanSource::GccFunction,
-        }
-    }
-
-    /// `left op right` for operands of types `left_type` and `right_type`,
-    /// whose values are already converted to the real or complex floating
-    /// type `operand_type`, with the NaN of `source`: the value
-    /// [`Self::floating_binary`] gives, not yet rounded to the result type.
-    pub(super) fn floating_operation(
-        &self,
-        op: BinaryOperator,
-        [left, right]: [Floating; 2],
-        [left_type, right_type]: [TypeId; 2],
-        operand_type: TypeId,
-        source: NanSource,
-    ) -> Option<Floating> {
-        let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
-            unreachable!("floating scalar operation")
-        };
-        let precision = self
-            .floating_precision(scalar)
-            .expect("foldable real precision");
-        let domains =
-            u8::from(self.complex_type(left_type)) | (u8::from(self.complex_type(right_type)) << 1);
-        Self::floating_binary(op, left, right, precision, domains, source)
     }
 
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
@@ -230,15 +147,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 operation,
                 precision,
             );
-            // Whether a routine or the hardware computes the result.
-            let routine = match source {
-                | NanSource::Compiler => false,
-                | NanSource::GccFunction => matches!(op, B::Multiplication | B::Division),
-                | NanSource::ClangFunction =>
-                    op == B::Division || (op == B::Multiplication && real.is_nan() && imag.is_nan()),
-                | NanSource::Runtime => true,
-            };
-            if routine {
+            if !folded {
                 return Some(Floating { real, imag });
             }
             let operands = [left.real, left.imag, right.real, right.imag];
@@ -772,8 +681,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::Division => Binary128::div,
             | _ => return None,
         };
-        // The compiler's NaN for an invalid operation ([`NanSource`]); none
-        // of these calls a routine of its own.
+        // The NaN of `source` for an invalid operation ([`NanSource`]).
         let operation = |a: Binary128, b: Binary128| {
             let result = exact(a, b);
             if source != NanSource::Runtime && result.is_nan() && !a.is_nan() && !b.is_nan() {

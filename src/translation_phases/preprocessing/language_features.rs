@@ -1451,7 +1451,13 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
     } else {
         2
     };
-    let limited_complex = configuration.limited_complex_arithmetic();
+    // `-f[no-]cx-fortran-rules`, when given, decides the complex
+    // arithmetic alone; `-fcx-limited-range` only otherwise.
+    let limited_complex = if configuration.gives_floating_point(Relaxed::CxFortranRules) {
+        relaxed(Relaxed::CxFortranRules)
+    } else {
+        relaxed(Relaxed::CxLimitedRange)
+    };
     // GCC's soft-float mode, as `-mgeneral-regs-only` selects it, claims no
     // IEC 60559 conformance.
     let iec_559 = if configuration.general_regs_only() {

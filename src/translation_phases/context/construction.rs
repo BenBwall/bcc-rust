@@ -15,7 +15,6 @@ use super::{
 use crate::{
     configuration::CompilerConfiguration,
     translation_phases::{
-        pragma_floating::FloatingPragmas,
         preprocessing::KeywordTokenType,
         provenance::SourceVectorStack,
     },
@@ -66,7 +65,6 @@ impl<'tu> Context<'tu> {
             pragma_content: false,
             parsing_started: false,
             weak_pragmas: ArenaVec::new_in(tu),
-            floating_pragmas: FloatingPragmas::default(),
             diagnostic_pragmas: super::diagnostic_pragmas::DiagnosticPragmas::new_in(tu),
             text_events: ArenaVec::new_in(tu),
             source_map: super::source_map::SourceMap::new_in(tu),

@@ -109,7 +109,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .and_then(NonZeroU8::new);
                     }
                     info.binding = Some(index);
-                    self.note_function_read(index, e);
                     if self.unused.tracking {
                         self.note_identifier_use(index, e);
                     }

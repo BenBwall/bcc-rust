@@ -527,9 +527,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     analyzer.report_unused_at_function_end();
                 });
                 self.report_uninitialized_uses();
-                if previous.is_none() {
-                    self.settle_function_nans();
-                }
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
@@ -546,7 +543,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | FunctionWork::CallArguments(callee, arguments) => {
                 let callee = self.selected_designator(callee);
-                self.note_call_arguments(callee, &arguments);
                 if self.expression_info(callee).binding.is_some_and(|binding| {
                     self.bindings[binding]
                         .origin
@@ -3398,15 +3394,6 @@ pub(super) struct State<'tu, 's> {
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
-    /// An `optimize` attribute was read, which can turn trapping math back
-    /// on under GCC's rules ([`Analyzer::gcc_function_runtime`]).
-    pub(super) optimize_attribute: bool,
-    /// The initializers being analyzed whose NaNs
-    /// [`Analyzer::settle_strict_initializer`] settles, innermost last:
-    /// each binding, and where its conversions begin.
-    pub(super) strict_initializers: ArenaVec<'s, (usize, usize)>,
-    /// The outermost function's NaNs ([`Analyzer::settle_function_nans`]).
-    pub(super) nans: super::function_nans::FunctionNans<'tu, 's>,
     /// Root expression of the initializer value currently being analyzed.
     pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
@@ -3493,9 +3480,6 @@ impl<'s> State<'_, 's> {
             reference_contexts: ArenaVec::new_in(scratch),
             reference_function: None,
             initializer: None,
-            optimize_attribute: false,
-            strict_initializers: ArenaVec::new_in(scratch),
-            nans: super::function_nans::FunctionNans::new(scratch),
             initializer_value: None,
             current: None,
             next_function: 0,
