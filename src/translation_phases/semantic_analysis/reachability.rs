@@ -133,8 +133,9 @@ struct Exits {
     any_return:   bool,
     /// The first `return` statement the walk reached.
     live_return:  Option<SourceVectors>,
-    /// A `return` with a value the walk reached, which `cl` asks.
-    live_value:   bool,
+    /// Any `return` with a value, reached or not, which `cl` asks: its
+    /// C4716 is for a function without one.
+    any_value:    bool,
     /// A `return` without one the walk reached.
     live_void:    bool,
     /// A call the walk reached does not return.
@@ -520,13 +521,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     live
                 };
                 flow.exits.any_return = true;
+                flow.exits.any_value |= slot.is_some();
                 if live && flow.exits.live_return.is_none() {
                     flow.exits.live_return = Some(statement.source_vectors);
                 }
-                if live {
-                    flow.exits.live_value |= slot.is_some();
-                    flow.exits.live_void |= slot.is_none();
-                }
+                flow.exits.live_void |= live && slot.is_none();
                 false
             },
             | S::Break => {
@@ -1158,6 +1157,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let E::Identifier(name) = designator.kind else {
             return false;
         };
+        // `cl`'s intrinsic `__assume(0)` says the path never gets there,
+        // whatever bcc made of the name, which it does not declare.
+        // Microsoft Learn: "__assume".
+        if self.unused.cl && self.context.string_cache.at(name.name) == "__assume" {
+            return arguments
+                .first()
+                .is_some_and(|&condition| self.known_condition(flow, condition) == Some(false));
+        }
         let intrinsic = self
             .expression_info(designator)
             .binding

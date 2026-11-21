@@ -201,9 +201,10 @@ pub(super) struct UnusedState<'s> {
     /// What GCC's middle end says of reaching a function's end, which it
     /// reports once the unit is parsed: the group, the place and the words.
     late_return_flow: ArenaVec<'s, (G, SourceVectors, &'static str)>,
-    /// What `cl`'s code generator says of the same: the function, its
-    /// closing brace, and whether no path returns a value (C4716).
-    cl_return_flow: ArenaVec<'s, (StringCacheId, SourceVectors, bool)>,
+    /// What `cl`'s code generator says of the same: the function's binding,
+    /// its closing brace, and whether it has no `return` with a value
+    /// (C4716).
+    cl_return_flow: ArenaVec<'s, (usize, SourceVectors, bool)>,
     /// The binding that defines each internal function, where GCC's symbol
     /// table gains the function.
     function_symbols: ArenaMap<'s, StringCacheId, usize>,
@@ -1116,35 +1117,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Holds `cl`'s warning about the end of the function `name`, which its
-    /// code generator gives once the front end is done, and not under `/Zs`.
-    pub(super) fn late_cl_return_flow(
-        &mut self,
-        name: StringCacheId,
-        end: SourceVectors,
-        always: bool,
-    ) {
+    /// Holds `cl`'s warning about the end of the function `binding`, which
+    /// its code generator gives once the front end is done, and not under
+    /// `/Zs`.
+    pub(super) fn late_cl_return_flow(&mut self, binding: usize, end: SourceVectors, always: bool) {
         // `/Zs` generates no code.
         if !self.context.configuration.syntax_only() {
-            self.unused.cl_return_flow.push((name, end, always));
+            self.unused.cl_return_flow.push((binding, end, always));
         }
     }
 
     /// Reports `cl`'s C4715 or C4716, which its code generator says of each
-    /// function in turn, if the front end reported no error (`/WX`'s
-    /// included) and the settings at the closing brace show it: as an
-    /// error under `/we`, and under `/WX` as a warning that `error C2220`
-    /// leads, before each one. Their numbers have no group of bcc's.
-    /// Microsoft Learn: "Compiler Error C2220".
+    /// function it generates in turn, if the front end reported no error
+    /// (`/WX`'s included) and the settings at the function's name show it,
+    /// every time (`once` aside): as an error under `/we`, and under `/WX` as
+    /// a warning that `error C2220` leads, before each one. Their numbers
+    /// have no group of bcc's. Microsoft Learn: "Compiler Error C2220".
     fn report_cl_return_flow(&mut self) {
         use crate::configuration::ClWarningState as State;
-        if self.context.error_count() != 0 {
+        if self.context.error_count() != 0 || self.unused.cl_return_flow.is_empty() {
             return;
         }
+        let scratch = self.scratch;
+        let generated = self.cl_generated_functions(scratch);
         let outer = std::mem::replace(&mut self.report_order, ReportOrder::UnitEnd);
         for i in 0..self.unused.cl_return_flow.len() {
-            let (name, end, always) = self.unused.cl_return_flow[i];
-            let configuration = self.context.configuration_at(end);
+            let (binding, end, always) = self.unused.cl_return_flow[i];
+            if !generated.contains_key(&self.function_identity(binding)) {
+                continue;
+            }
+            let name = self.bindings[binding].name;
+            // Not those at its closing brace, where the warning goes.
+            let configuration = self.context.configuration_at(name.source_vectors);
             let code = if always { 4716 } else { 4715 };
             let Some(state) = configuration.cl_warnings().shown(code) else {
                 continue;
@@ -1158,7 +1162,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.report_with_severity(
                 SemanticErrorKind::ClReturnFlow { always, promoted },
                 end,
-                Some(name),
+                Some(name.name),
                 severity,
             );
         }

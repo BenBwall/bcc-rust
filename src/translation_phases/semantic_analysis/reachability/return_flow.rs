@@ -161,15 +161,17 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
-    /// `cl`'s C4715 (not all control paths return a value) and C4716 (none
-    /// does), level 1 warnings of its code generator: some path reaches the
-    /// closing brace or a `return` without a value. They wait for the end of
-    /// the unit, as the code generator runs after the front end, and only if
-    /// that reported no error (`Analyzer::report_late_return_flow`). A call
-    /// to a function declared `noreturn` ends its path; `cl` takes `abort`
-    /// and its kin to return unless a declaration says otherwise, where bcc
+    /// `cl`'s C4715 (not all control paths return a value) and C4716 (the
+    /// function has no `return` with a value, even one no path reaches),
+    /// level 1 warnings of its code generator: some path reaches the closing
+    /// brace or a `return` without a value. They wait for the end of the
+    /// unit, as the code generator runs after the front end, and only if
+    /// that reported no error, for a function it generates
+    /// (`Analyzer::report_late_return_flow`). A call to a function declared
+    /// `noreturn`, or `__assume(0)`, ends its path; `cl` takes `abort` and
+    /// its kin to return unless a declaration says otherwise, where bcc
     /// knows them. Microsoft Learn: "Compiler Warning (level 1) C4715",
-    /// "Compiler Warning (level 1) C4716".
+    /// "Compiler Warning (level 1) C4716", "__assume".
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
     fn cl_return_flow(
         &mut self,
@@ -183,7 +185,7 @@ impl Analyzer<'_, '_, '_> {
             return;
         }
         if end_reached || flow.exits.live_void {
-            self.late_cl_return_flow(name, end, !flow.exits.live_value);
+            self.late_cl_return_flow(binding, end, !flow.exits.any_value);
         }
     }
 
