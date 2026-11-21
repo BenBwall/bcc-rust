@@ -276,6 +276,11 @@ impl CompilerConfiguration {
         for &child in children {
             self.warning_options[child as usize].apply(option, clang);
         }
+        if group == DiagnosticGroup::Extra
+            && let WarningOption::Error(error) = option
+        {
+            self = self.with_extra_classification(error);
+        }
         if group == DiagnosticGroup::Overflow {
             self.warning_options[DiagnosticGroup::PedanticOverflow as usize]
                 .apply_to_pedantic(option);
@@ -400,27 +405,55 @@ impl CompilerConfiguration {
     }
 
     /// `-Wextra` (true) or `-Wno-extra` at its argv position, for the groups
-    /// bcc models under it. Clang's holds the parameter groups directly;
-    /// GCC's holds them only with `-Wunused`, which
-    /// [`Self::diagnostic_severity`] asks when it reads them.
+    /// bcc models under it. Clang's holds the parameter groups directly, and
+    /// its `-Wno-extra` maps the groups off, which forgets an earlier
+    /// `-Werror=` of theirs as their own `-Wno-` does; GCC's holds them only
+    /// with `-Wunused`, which [`Self::diagnostic_severity`] asks when it
+    /// reads them.
     pub(crate) fn with_extra_warnings(mut self, enabled: bool) -> Self {
         self.warning_options[DiagnosticGroup::Extra as usize].apply_all(enabled);
-        for group in [
-            DiagnosticGroup::SignCompare,
-            DiagnosticGroup::MissingFieldInitializers,
-            DiagnosticGroup::EmptyBody,
-        ] {
-            self.warning_options[group as usize].apply_all(enabled);
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        let groups = if clang {
+            DiagnosticGroup::CLANG_EXTRA
+        } else {
+            DiagnosticGroup::GCC_EXTRA
+        };
+        for &group in groups {
+            let settings = &mut self.warning_options[group as usize];
+            settings.apply_all(enabled);
+            if clang && !enabled && settings.error() == Some(true) {
+                settings.set(WarningSettings::ERROR, None);
+            }
         }
-        if self.identity.rules() != super::RuleSet::Clang {
-            self.warning_options[DiagnosticGroup::TypeLimits as usize].apply_all(enabled);
-        }
+        self
+    }
+
+    /// `-Werror=extra` (true) or `-Wno-error=extra` at its argv position.
+    /// Clang's makes every diagnostic of the group an error, enabling it,
+    /// or takes the error back, as the group's own forms do
+    /// (`DiagnosticsEngine::setDiagnosticGroupWarningAsError` in Clang 23's
+    /// `Diagnostic.cpp`). GCC's `-Werror=extra` also enables `-Wextra`,
+    /// whose options it makes errors unless a `-W`, `-Wno-` or `-Werror=`
+    /// form of their own came first, and a later `-Wno-error=` of one takes
+    /// that back; its `-Wno-error=extra` reaches none of them. GCC 14,
+    /// `control_warning_option` in `opts-common.cc`, which passes the kind
+    /// to the options `EnabledBy(Wextra)` names in `c.opt` and `common.opt`
+    /// unless the command line set them.
+    fn with_extra_classification(mut self, error: bool) -> Self {
         if self.identity.rules() == super::RuleSet::Clang {
-            for group in [
-                DiagnosticGroup::UnusedParameter,
-                DiagnosticGroup::UnusedButSetParameter,
-            ] {
-                self.warning_options[group as usize].apply_all(enabled);
+            for &group in DiagnosticGroup::CLANG_EXTRA {
+                self.warning_options[group as usize].apply(WarningOption::Error(error), true);
+            }
+            return self;
+        }
+        if !error {
+            return self;
+        }
+        self = self.with_extra_warnings(true);
+        for &group in DiagnosticGroup::UNDER_EXTRA {
+            let settings = &mut self.warning_options[group as usize];
+            if settings.enabled().is_none() {
+                settings.set(WarningSettings::ERROR, Some(true));
             }
         }
         self
@@ -533,7 +566,10 @@ impl CompilerConfiguration {
     }
 
     /// `-Wextra` named by a pragma, which holds what `-Wextra` on the command
-    /// line does ([`Self::with_extra_warnings`]).
+    /// line does ([`Self::with_extra_warnings`]). GCC's classifies only the
+    /// options no `-W`, `-Wno-` or `-Werror=` form of their own (or pragma
+    /// naming them) has set, as its `-Werror=extra` does
+    /// ([`Self::with_extra_classification`]).
     fn with_pragma_extra(self, class: PragmaClass) -> Self {
         // GCC's `-Wshift-negative-value` follows the command line's
         // `-Wextra` alone, so it keeps what that made of it.
@@ -541,9 +577,16 @@ impl CompilerConfiguration {
         let pinned = (self.identity == super::CompilerIdentity::Gcc
             && self.warning_options[shift].enabled().is_none())
         .then(|| self.gcc_extra_shifts());
-        let mut configuration = self
-            .with_extra_warnings(class != PragmaClass::Ignored)
-            .with_pragma_class_of(DiagnosticGroup::UNDER_EXTRA, class);
+        let mut configuration = self.with_extra_warnings(class != PragmaClass::Ignored);
+        if self.identity.rules() == super::RuleSet::Clang {
+            configuration = configuration.with_pragma_class_of(DiagnosticGroup::CLANG_EXTRA, class);
+        } else {
+            for &group in DiagnosticGroup::UNDER_EXTRA {
+                if self.warning_options[group as usize].enabled().is_none() {
+                    configuration = configuration.with_pragma_class_of(&[group], class);
+                }
+            }
+        }
         if let Some(enabled) = pinned {
             configuration.warning_options[shift].apply(WarningOption::Enable(enabled), false);
         }
@@ -1442,6 +1485,14 @@ impl DiagnosticGroup {
         Self::ImplicitConstIntFloatConversion,
         Self::ImplicitIntFloatConversion,
     ];
+    /// The groups bcc models under Clang's `-Wextra`, which does not hold
+    /// its `-Wempty-body` (Clang 23, `DiagnosticGroups.td`).
+    const CLANG_EXTRA: &[Self] = &[
+        Self::SignCompare,
+        Self::MissingFieldInitializers,
+        Self::UnusedParameter,
+        Self::UnusedButSetParameter,
+    ];
     /// What Clang's `-Wformat` holds.
     const CLANG_FORMAT: &[Self] = &[
         Self::FormatExtraArgs,
@@ -1461,6 +1512,13 @@ impl DiagnosticGroup {
         Self::BitwiseConditionalParentheses,
         Self::LogicalNotParentheses,
         Self::DanglingElse,
+    ];
+    /// The groups bcc models that GCC's `-Wextra` enables by itself.
+    const GCC_EXTRA: &[Self] = &[
+        Self::SignCompare,
+        Self::MissingFieldInitializers,
+        Self::EmptyBody,
+        Self::TypeLimits,
     ];
     /// The groups GCC's `-Wformat` enables, unless their own options say
     /// otherwise.
@@ -1492,8 +1550,8 @@ impl DiagnosticGroup {
         Self::ReturnMismatch,
         Self::VoidReturnMismatch,
     ];
-    /// The groups bcc models under `-Wextra`, as a pragma naming it reaches
-    /// them.
+    /// The groups bcc models under GCC's `-Wextra`, as a pragma naming it or
+    /// its `-Werror=extra` classifies them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
         Self::TypeLimits,
