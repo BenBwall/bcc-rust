@@ -36,6 +36,7 @@ use super::{
         Object,
         Place,
         Program,
+        Target,
         Type,
         Undefined,
         Value,
@@ -55,8 +56,10 @@ impl Machine {
         parameter: bool,
     ) -> Result<usize, Diagnostic> {
         let value = match (ty, value) {
-            | (Type::Array(..) | Type::Struct(_), Value::Indeterminate) =>
-                ty.indeterminate(&self.structures),
+            | (
+                Type::Array(..) | Type::PointerArray(..) | Type::Struct(_),
+                Value::Indeterminate,
+            ) => ty.indeterminate(&self.structures),
             | (pointer, Value::Integer(0)) if pointer.is_pointer() => Value::null(),
             // A parameter receives its argument converted as if by
             // assignment (C99 §6.5.2.2p7, §6.3.1.3, §6.3.1.4, §6.3.1.5).
@@ -105,7 +108,10 @@ impl Machine {
         metadata.typedef = Some(typedef);
         let named = match metadata.ty {
             | Type::Integer(integer) => integer.spelling(),
-            | Type::Pointer(element, _) | Type::Array(element, _) => element.spelling(),
+            | Type::Pointer(element, _)
+            | Type::Array(element, _)
+            | Type::Indirect(Target::Arithmetic(element, _), _)
+            | Type::PointerArray(Target::Arithmetic(element, _), ..) => element.spelling(),
             | _ => return,
         };
         let object = &mut self.state.objects[id - 1];

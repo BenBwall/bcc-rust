@@ -584,7 +584,6 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { if (0) { _Bool x; } return 0; }",
         "int main(void) { int i = 0; return i++ + i; }",
         "int main(void) { return missing(); }",
-        "int main(void) { int x = 1; int **p; return x; }",
         "int f(int x) { return x; } int main(void) { return f(); }",
         "int main(void) { int *p; int x = 0; p = x; return 0; }",
         "int main(void) { int a[2]; a = 0; return 0; }",
@@ -1565,13 +1564,8 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
         increment.event.explanation
     );
     returned("int main(void) { char c = 127; c++; return c; }", -128);
-    for rejected in [
-        "int main(void) { char c = 1; int *p = &c; return 0; }",
-        "int main(void) { char *s[2]; return 0; }",
-    ] {
-        let _diagnostic = compile(rejected)
-            .expect_err("a char's address is no int pointer, and arrays of pointers are outside");
-    }
+    let _diagnostic = compile("int main(void) { char c = 1; int *p = &c; return 0; }")
+        .expect_err("a char's address is no int pointer");
 }
 
 #[test]
@@ -5535,6 +5529,97 @@ fn calls_are_operands_of_larger_expressions() {
     );
 }
 
+// C99 §6.5.3.2p3-4: `&` of a pointer object makes a pointer to a pointer,
+// and each `*` follows one pointer.
+#[test]
+fn pointers_to_pointers_follow_one_pointer_per_star() {
+    let source = "int main(void) {\n    int x = 1;\n    int *p = &x;\n    int **pp = &p;\n    \
+                  **pp = 5;\n    return x;\n}\n";
+    returned(source, 5);
+    let states = stepped(source);
+    let declared = step(&states, EventKind::Declare, "Declare `pp`");
+    assert_eq!(declared.event.title, "Declare `pp` (int **)");
+    assert!(
+        declared.event.summary.contains("a pointer to an int *"),
+        "{}",
+        declared.event.summary
+    );
+    let pp = states
+        .last()
+        .and_then(|state| state.objects.iter().find(|object| object.name == "pp"))
+        .expect("pp");
+    assert_eq!((pp.r#type.as_str(), pp.size), ("int **", 8));
+    let outer = step(&states, EventKind::Dereference, "`*pp` designates `p`");
+    assert!(outer.event.summary.contains("follows the pointer `pp`"));
+    let inner = step(&states, EventKind::Dereference, "`**pp` designates `x`");
+    assert_eq!(
+        inner.event.summary,
+        "`**pp` follows the pointer `*pp` to the object it points to: `**pp` now stands for `x` \
+         itself."
+    );
+    // A function given a pointer to a caller's pointer can change it.
+    returned(
+        "int pick(int **out, int *choice) { *out = choice; return 0; }\nint main(void) { int a = \
+         3; int *chosen = 0; pick(&chosen, &a); return *chosen; }",
+        3,
+    );
+    returned(
+        "int main(void) { int x = 7; int *p = &x; int **pp = &p; int ***ppp = &pp; return ***ppp \
+         + (*pp == p) + (pp[0][0] == 7); }",
+        9,
+    );
+    for source in [
+        "int main(void) { int x = 1; int **pp = &x; return 0; }",
+        "int main(void) { int *p = 0; char **pp = &p; return 0; }",
+        "int main(void) { int *****p; return 0; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
+// C99 §6.7.5.2p3: an array may hold pointers; its name decays to a pointer
+// to its first pointer, and `[]` takes its length from a brace-enclosed
+// list (§6.7.8p22).
+#[test]
+fn arrays_hold_pointers_and_take_a_list_s_length() {
+    let source = "int main(void) {\n    int a = 1;\n    int b = 2;\n    int c = 3;\n    int \
+                  *slots[3] = {&a, &b, &c};\n    *slots[1] = 20;\n    return b;\n}\n";
+    returned(source, 20);
+    let states = stepped(source);
+    let declared = step(&states, EventKind::Declare, "Declare `slots`");
+    assert_eq!(declared.event.title, "Declare `slots` (int *[3])");
+    let slots = states
+        .last()
+        .and_then(|state| state.objects.iter().find(|object| object.name == "slots"))
+        .expect("slots");
+    assert_eq!(slots.size, 24);
+    assert!(matches!(&slots.value, Value::Array(elements) if elements.len() == 3));
+    let element = step(&states, EventKind::LvalueConversion, "Read slots[1]");
+    assert_eq!(element.event.title, "Read slots[1] → &b");
+    returned(
+        "#include <stdio.h>\nconst char *days[] = {\"Mon\", \"Tue\", \"Wed\"};\nint main(void) { \
+         char *names[] = {\"Ada\", \"Grace\"}; int v[] = {4, 5, 6,}; printf(\"%s %s\\n\", \
+         days[2], names[1]); char **next = names + 1; return (int)(sizeof v / sizeof v[0]) + \
+         (*next)[0] + (int)sizeof days; }",
+        3 + 71 + 24,
+    );
+    let output = stepped(
+        "#include <stdio.h>\nint main(void) { char *names[3] = {\"Ada\", \"Grace\", \"Linus\"}; \
+         for (int i = 0; i < 3; i++) { printf(\"%s\\n\", names[i]); } return 0; }",
+    );
+    assert_eq!(
+        output.last().map(|state| state.output.clone()),
+        Some(b"Ada\nGrace\nLinus\n".to_vec())
+    );
+    // An element left out of the list is a null pointer (C99 §6.7.8p21).
+    returned(
+        "int main(void) { int x = 1; int *p[2] = {&x}; return p[1] == 0; }",
+        1,
+    );
+    let _diagnostic = compile("int main(void) { int v[]; return 0; }")
+        .expect_err("an array of unknown size needs an initializer");
+}
+
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end except those that use function pointers.
@@ -5555,7 +5640,7 @@ fn the_corpus_of_beginner_programs_runs() {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let compiled = compile(&source);
-        if name.starts_with(['g', 'p']) {
+        if name.starts_with('g') {
             assert!(
                 compiled.is_err(),
                 "{name}: function pointers are outside the subset"

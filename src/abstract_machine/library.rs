@@ -1044,6 +1044,7 @@ fn type_text(ty: Type) -> String {
         | Type::Floating(floating) => article(floating.spelling()),
         | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
         | Type::StructPointer(_) => String::from("a pointer to a structure"),
+        | Type::Indirect(..) => String::from("a pointer to a pointer"),
         | _ => String::from("an aggregate"),
     }
 }

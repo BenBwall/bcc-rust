@@ -1253,6 +1253,18 @@ impl Machine {
                 "a {} object, a pointer to a structure (8 bytes on x86-64). Its value is",
                 object.r#type
             ),
+            | Type::Indirect(..) => format!(
+                "{} object, a pointer to {}: it holds the address of another pointer object (8 \
+                 bytes on x86-64). Its value is",
+                article(&object.r#type),
+                self.pointee_words(ty)
+            ),
+            | Type::PointerArray(target, depth, count) => format!(
+                "an array of {count} pointers, each {} (8 bytes each, {} bytes on x86-64). Each \
+                 element's value is",
+                article(&target.pointer(depth).spelling(&self.structures)),
+                count.saturating_mul(8)
+            ),
             | Type::Struct(id) => format!(
                 "a {} object, {}. Each member's value is",
                 object.r#type,
@@ -1280,6 +1292,8 @@ impl Machine {
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
+            | Type::Indirect(..) => format!("a pointer to {}", self.pointee_words(ty)),
+            | Type::PointerArray(_, _, count) => format!("an array of {count} pointers"),
             | Type::Struct(_) => format!("a {}", object.r#type),
             | Type::Integer(_) if let Some(typedef) = typedef =>
                 format!("a {qualifier}{typedef} object"),
@@ -1344,10 +1358,7 @@ impl Machine {
         }
         // Types other than int and char state their width, which C leaves
         // to the implementation within minimum ranges.
-        let element = match ty {
-            | Type::Array(element, _) => element.ty(),
-            | ty => ty,
-        };
+        let element = ty.element().unwrap_or(ty);
         let sized = matches!(
             element,
             Type::Integer(integer) if !matches!(integer, Integer::Int | Integer::Char)
@@ -1400,7 +1411,10 @@ impl Machine {
         let name = &object.name;
         let shown = self.short_value(&object.value);
         let pointer = declared.ty.is_pointer();
-        let aggregate = matches!(declared.ty, Type::Array(..) | Type::Struct(_));
+        let aggregate = matches!(
+            declared.ty,
+            Type::Array(..) | Type::PointerArray(..) | Type::Struct(_)
+        );
         let (place, scope) = declared.function.as_ref().map_or_else(
             || {
                 (
@@ -2055,6 +2069,10 @@ impl Machine {
                     bytes += within * element.bytes();
                     break;
                 },
+                | Type::PointerArray(..) => {
+                    bytes += within * 8;
+                    break;
+                },
                 | _ => break,
             }
         }
@@ -2546,13 +2564,13 @@ impl Machine {
              byte{plural} on x86-64."
         );
         let mut cited = vec![clauses::SIZEOF, clauses::SIZEOF_RESULT, clauses::SIZE_T];
-        if let Type::Array(element, count) = ty {
+        if let (Some(element), Some(count)) = (ty.element(), ty.length()) {
+            let bytes = element.size_align(&self.structures).0;
             let _ = write!(
                 text,
-                " That is the whole array, {count} elements of {} byte{} each: an array operand \
-                 of sizeof does not decay to a pointer.",
-                element.bytes(),
-                if element.bytes() == 1 { "" } else { "s" }
+                " That is the whole array, {count} elements of {bytes} byte{} each: an array \
+                 operand of sizeof does not decay to a pointer.",
+                if bytes == 1 { "" } else { "s" }
             );
             cited.push(clauses::ARRAY_DECAY);
         }
@@ -2621,7 +2639,9 @@ impl Machine {
         structure: Option<usize>,
     ) -> Event {
         let location = self.location_of(target, offset, structure);
-        let operand = snippet(source, range).trim_start_matches('*');
+        // Only the outer `*`: `**pp`'s operand is `*pp`.
+        let written = snippet(source, range);
+        let operand = written.strip_prefix('*').unwrap_or(written).trim_start();
         let summary = format!(
             "`*{operand}` follows the pointer `{operand}` to the object it points to: \
              `*{operand}` now stands for {location} itself."
@@ -2931,10 +2951,12 @@ impl Machine {
                         target: Some(target),
                         first,
                         ..
-                    } => self
-                        .leaf_type(target, first)
-                        .and_then(Type::arithmetic)
-                        .map_or("int", Arithmetic::spelling),
+                    } => match self.leaf_type(target, first) {
+                        | Some(ty) if ty.is_pointer() => "pointer",
+                        | ty => ty
+                            .and_then(Type::arithmetic)
+                            .map_or("int", Arithmetic::spelling),
+                    },
                     | _ => "int",
                 };
                 let moved = match count {
@@ -4090,6 +4112,7 @@ impl Machine {
             };
             let noun = match self.leaf_type(target, offset) {
                 | Some(Type::Pointer(element, _)) => element.spelling(),
+                | Some(Type::Indirect(..)) => "pointer",
                 | _ => "int",
             };
             format!("moves it {}", movement(count, noun))
@@ -5208,6 +5231,15 @@ impl Machine {
 
     /// Structure `id`'s layout in words: its size and each member's offset,
     /// with the padding between them.
+    /// What a pointer of type `ty` points to, with its article: "an int
+    /// *", "a char".
+    fn pointee_words(&self, ty: Type) -> String {
+        ty.pointee().map_or_else(
+            || String::from("an object"),
+            |pointee| article(&pointee.spelling(&self.structures)),
+        )
+    }
+
     fn layout_text(&self, id: usize) -> String {
         let Some(layout) = self.structures.get(id) else {
             return String::from("a structure");

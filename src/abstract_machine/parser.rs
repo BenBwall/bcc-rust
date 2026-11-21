@@ -41,6 +41,7 @@ use super::{
         SourceRange,
         Static,
         Structure,
+        Target,
         Type,
         Value,
     },
@@ -89,10 +90,10 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         let is_static = parser.take("static");
         let typedef = parser.typedef_name();
         let base = parser.base_type()?;
-        let pointer = parser.pointer()?;
+        let depth = parser.pointer()?;
         let name = parser.identifier()?;
         if !parser.at("(") {
-            parser.file_scope_object(base, typedef, pointer, name)?;
+            parser.file_scope_object(base, typedef, depth, name)?;
             continue;
         }
         if is_static {
@@ -102,9 +103,9 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 "static functions are outside this subset; drop the static",
             ));
         }
-        let returns = match (base, pointer) {
-            | (Base::Arithmetic(arithmetic, false), false) => arithmetic.ty(),
-            | (Base::Struct(id), false) => parser.complete_structure(id, name.range)?,
+        let returns = match (base, depth) {
+            | (Base::Arithmetic(arithmetic, false), 0) => arithmetic.ty(),
+            | (Base::Struct(id), 0) => parser.complete_structure(id, name.range)?,
             | _ =>
                 return Err(Diagnostic::new(
                     "unsupported",
@@ -512,19 +513,20 @@ impl<'a> Parser<'a> {
         let is_static = self.take("static");
         let typedef = self.typedef_name();
         let base = self.base_type()?;
-        let pointer = self.pointer()?;
+        let depth = self.pointer()?;
         let name = self.identifier()?;
         let array = self.declarator_array()?;
-        let ty = self.declared_type(base, pointer, array, name.range)?;
+        let ty = self.declared_type(base, depth, array, name.range)?;
         let specified = Specified {
-            constant: base.is_const() && !pointer,
+            constant: base.is_const() && depth == 0,
             typedef,
         };
         if is_static {
             return self.static_local(name, ty, specified);
         }
         match ty {
-            | Type::Array(..) | Type::Struct(_) => self.aggregate_declaration(name, ty, specified),
+            | Type::Array(..) | Type::PointerArray(..) | Type::Struct(_) =>
+                self.aggregate_declaration(name, ty, specified),
             | _ => self.scalar_declaration(name, ty, specified),
         }
     }
@@ -541,19 +543,30 @@ impl<'a> Parser<'a> {
         (self.peek(at) == "size_t" && self.includes_stdio()).then_some("size_t")
     }
 
-    /// A declarator's optional `*`. A `const` after it would make the
-    /// pointer itself `const`, which this subset leaves out.
-    pub fn pointer(&mut self) -> Result<bool, Diagnostic> {
-        if !self.take("*") {
-            return Ok(false);
+    /// A declarator's `*`s, how many there are: 0, 1 for `int *p`, 2 for
+    /// `int **pp`. A `const` after one would make that pointer itself
+    /// `const`, which this subset leaves out.
+    ///
+    /// C99: §6.7.5.1 paragraph 1, p. 115; PDF p. 127.
+    pub fn pointer(&mut self) -> Result<u8, Diagnostic> {
+        let mut depth = 0;
+        while self.at("*") {
+            if depth == super::model::MAX_INDIRECTION {
+                return Err(Diagnostic::limit(
+                    self.current().range,
+                    "a type may have at most four pointers in a row here (`int ****`)",
+                ));
+            }
+            self.position += 1;
+            depth += 1;
+            if self.at("const") {
+                return Err(self.error(
+                    "a const pointer (`* const`) is outside this subset; `const int *p` and \
+                     `const char *p`, pointers to const, are in it",
+                ));
+            }
         }
-        if self.at("const") {
-            return Err(self.error(
-                "a const pointer (`* const`) is outside this subset; `const int *p` and `const \
-                 char *p`, pointers to const, are in it",
-            ));
-        }
-        Ok(true)
+        Ok(depth)
     }
 
     /// List the automatic object `name` on its block's entry, which
@@ -603,9 +616,9 @@ impl<'a> Parser<'a> {
         is_type_specifier(self.current().text) || (self.at("size_t") && self.includes_stdio())
     }
 
-    /// A declarator's optional `[N]`, or `[]` when a string literal
-    /// initializer follows, whose length it takes: the literal's
-    /// characters and its null (C99 §6.7.8p22).
+    /// A declarator's optional `[N]`, or `[]` when an initializer follows,
+    /// whose length it takes: a string literal's characters and its null,
+    /// or the number of elements of a brace-enclosed list (C99 §6.7.8p22).
     fn declarator_array(&mut self) -> Result<Option<usize>, Diagnostic> {
         if !(self.at("[") && self.peek(1) == "]") {
             return self.array_suffix();
@@ -625,13 +638,57 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Some(length))
             },
+            | Some(brace) if self.at("=") && brace.text == "{" => {
+                let length = self.list_length(self.position + 1)?;
+                if length == 0 || length > MAX_CELLS {
+                    return Err(Diagnostic::limit(
+                        brace.range,
+                        "array size must be between 1 and 512",
+                    ));
+                }
+                Ok(Some(length))
+            },
             | _ => Err(Diagnostic::new(
                 "unsupported",
                 open.range,
-                "an array of unknown size needs a string literal initializer in this subset; give \
-                 its size",
+                "an array of unknown size needs an initializer, a brace-enclosed list or a string \
+                 literal, whose length it takes; give its size",
             )),
         }
+    }
+
+    /// How many elements the brace-enclosed list opening at token `at`
+    /// has: its commas outside nested parentheses, brackets and braces,
+    /// plus one, less a trailing comma (C99 §6.7.8p1).
+    fn list_length(&self, at: usize) -> Result<usize, Diagnostic> {
+        let mut depth = 0_usize;
+        let mut elements = 0;
+        let mut empty = true;
+        for token in &self.tokens[at..] {
+            match token.text {
+                | "{" | "(" | "[" => {
+                    if depth == 1 && empty {
+                        elements += 1;
+                        empty = false;
+                    }
+                    depth += 1;
+                },
+                | "}" | ")" | "]" => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Ok(elements);
+                    }
+                },
+                | "," if depth == 1 => empty = true,
+                | "" => break,
+                | _ if depth == 1 && empty => {
+                    elements += 1;
+                    empty = false;
+                },
+                | _ => {},
+            }
+        }
+        Err(self.error("expected the initializer list's closing brace"))
     }
 
     /// `int x`, `int *p`, `char c` or `struct point *p`, with an optional
@@ -775,14 +832,16 @@ impl<'a> Parser<'a> {
         let mut index = 0;
         while !self.at("}") {
             let (member_type, leaf) = match ty {
-                | Type::Array(element, length) => {
+                | Type::Array(..) | Type::PointerArray(..) => {
+                    let (element, length) =
+                        (ty.element().unwrap_or(Type::INT), ty.length().unwrap_or(0));
                     if self.at("[") {
                         return Err(self.error("array designators are outside this subset"));
                     }
                     if index >= length {
                         return Err(self.error("too many array initializer elements"));
                     }
-                    (element.ty(), offset + index)
+                    (element, offset + index)
                 },
                 | Type::Struct(id) => {
                     if self.take(".") {
@@ -809,7 +868,7 @@ impl<'a> Parser<'a> {
                     self.string_initializer(element, name.range, length, false)?;
                     mentioned[leaf..leaf + length].fill(true);
                 },
-                | Type::Array(..) | Type::Struct(_) if self.at("{") => {
+                | Type::Array(..) | Type::PointerArray(..) | Type::Struct(_) if self.at("{") => {
                     // A later initializer of the same subobject replaces it
                     // whole, so a scalar the new list leaves out is zero
                     // again, not what an earlier list stored (C99 §6.7.8p19,
@@ -1092,7 +1151,7 @@ impl<'a> Parser<'a> {
             let operand = &self.expressions[expression];
             if !matches!(
                 operand.ty,
-                Type::Integer(_) | Type::Floating(_) | Type::Pointer(..)
+                Type::Integer(_) | Type::Floating(_) | Type::Pointer(..) | Type::Indirect(..)
             ) {
                 return Err(Diagnostic::new(
                     "unsupported",
@@ -1231,7 +1290,8 @@ impl<'a> Parser<'a> {
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
                 )),
-            | (Type::Pointer(..), "+" | "-") if matches!(right, Type::Integer(_)) => {},
+            | (Type::Pointer(..) | Type::Indirect(..), "+" | "-")
+                if matches!(right, Type::Integer(_)) => {},
             | (Type::StructPointer(_), "+" | "-") if matches!(right, Type::Integer(_)) =>
                 return Err(Diagnostic::new(
                     "unsupported",
@@ -1702,26 +1762,22 @@ impl<'a> Parser<'a> {
         } else {
             loop {
                 let base = self.base_type()?;
-                let pointer = self.pointer()?;
+                let depth = self.pointer()?;
                 let parameter = if self.at(",") || self.at(")") {
                     None
                 } else {
                     Some(self.identifier()?)
                 };
                 let range = parameter.map_or(self.current().range, |token| token.range);
-                let ty = match (base, pointer) {
-                    | (Base::Arithmetic(arithmetic, false), false) => arithmetic.ty(),
-                    | (Base::Arithmetic(arithmetic, constant), true) =>
-                        Type::Pointer(arithmetic, constant),
-                    | (Base::Struct(id), false) => self.complete_structure(id, range)?,
-                    | (Base::Struct(id), true) => Type::StructPointer(id),
-                    | (Base::Arithmetic(_, true), false) =>
+                let ty = match (base, depth) {
+                    | (Base::Arithmetic(_, true), 0) =>
                         return Err(Diagnostic::new(
                             "unsupported",
                             range,
                             "const parameters are outside this subset; `const int *` and `const \
                              char *` parameters are in it",
                         )),
+                    | _ => self.declared_type(base, depth, None, range)?,
                 };
                 if self.at("[") {
                     return Err(self.error(
@@ -2026,27 +2082,36 @@ impl<'a> Parser<'a> {
         Ok(Some(length))
     }
 
-    /// The type a declarator gives its base type: an arithmetic type `T`,
-    /// `T *`, `const T *`, `T[N]`, `struct S` or `struct S *`.
+    /// The type a declarator with `depth` `*`s and an optional array
+    /// length gives its base type: an arithmetic type `T`, `T *`, `const T
+    /// *`, `T **`, `T[N]`, `T *[N]`, `struct S`, `struct S *` or `struct S
+    /// **`.
+    ///
+    /// C99: §6.7.5.1 paragraph 1, p. 115; PDF p. 127.
+    /// C99: §6.7.5.2 paragraph 3, p. 116; PDF p. 128.
     pub fn declared_type(
         &self,
         base: Base,
-        pointer: bool,
+        depth: u8,
         array: Option<usize>,
         range: SourceRange,
     ) -> Result<Type, Diagnostic> {
-        let unsupported = |message| Err(Diagnostic::new("unsupported", range, message));
-        match (base, pointer, array) {
-            | (Base::Arithmetic(arithmetic, _), false, None) => Ok(arithmetic.ty()),
-            | (Base::Arithmetic(arithmetic, constant), true, None) =>
-                Ok(Type::Pointer(arithmetic, constant)),
-            | (Base::Arithmetic(arithmetic, _), false, Some(length)) =>
+        let target = match base {
+            | Base::Arithmetic(arithmetic, constant) => Target::Arithmetic(arithmetic, constant),
+            | Base::Struct(id) => Target::Struct(id),
+        };
+        match (base, depth, array) {
+            | (Base::Arithmetic(arithmetic, _), 0, None) => Ok(arithmetic.ty()),
+            | (Base::Arithmetic(arithmetic, _), 0, Some(length)) =>
                 Ok(Type::Array(arithmetic, length)),
-            | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
-            | (Base::Struct(id), false, None) => self.complete_structure(id, range),
-            | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
-            | (Base::Struct(_), false, Some(_)) =>
-                unsupported("arrays of structures are outside this subset"),
+            | (Base::Struct(id), 0, None) => self.complete_structure(id, range),
+            | (Base::Struct(_), 0, Some(_)) => Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "arrays of structures are outside this subset",
+            )),
+            | (_, depth, None) => Ok(target.pointer(depth)),
+            | (_, depth, Some(length)) => Ok(Type::PointerArray(target, depth, length)),
         }
     }
 
@@ -2073,24 +2138,24 @@ impl<'a> Parser<'a> {
             }
             let base = self.base_type()?;
             loop {
-                let pointer = self.pointer()?;
+                let depth = self.pointer()?;
                 let name = self.identifier()?;
                 let array = self.array_suffix()?;
-                if base == Base::Struct(id) && !pointer {
+                if base == Base::Struct(id) && depth == 0 {
                     return Err(Diagnostic::new(
                         "unsupported",
                         name.range,
                         "a structure cannot contain itself; a pointer to it is fine",
                     ));
                 }
-                if base.is_const() && !pointer {
+                if base.is_const() && depth == 0 {
                     return Err(Diagnostic::new(
                         "unsupported",
                         name.range,
                         "const members are outside this subset",
                     ));
                 }
-                let ty = self.declared_type(base, pointer, array, name.range)?;
+                let ty = self.declared_type(base, depth, array, name.range)?;
                 if members.iter().any(|(existing, _)| existing == name.text) {
                     return Err(Diagnostic::new(
                         "unsupported",
@@ -2150,11 +2215,11 @@ impl<'a> Parser<'a> {
         &mut self,
         base: Base,
         typedef: Option<&'static str>,
-        pointer: bool,
+        depth: u8,
         name: Token<'a>,
     ) -> Result<(), Diagnostic> {
         let array = self.declarator_array()?;
-        let ty = self.declared_type(base, pointer, array, name.range)?;
+        let ty = self.declared_type(base, depth, array, name.range)?;
         self.library_conflict(name)?;
         if self
             .signatures
@@ -2168,7 +2233,7 @@ impl<'a> Parser<'a> {
             ));
         }
         let specified = Specified {
-            constant: base.is_const() && !pointer,
+            constant: base.is_const() && depth == 0,
             typedef,
         };
         let index = self.static_object(name, ty, None, specified)?;
@@ -2292,7 +2357,7 @@ impl<'a> Parser<'a> {
                 self.position += literal.parts;
                 Ok(())
             },
-            | Type::Array(..) | Type::Struct(_) => {
+            | Type::Array(..) | Type::PointerArray(..) | Type::Struct(_) => {
                 self.expect("{")?;
                 if self.at("}") {
                     return Err(self.error("empty initializer lists are outside the C99 subset"));
@@ -2300,11 +2365,11 @@ impl<'a> Parser<'a> {
                 let mut index = 0;
                 while !self.at("}") {
                     let (member, leaf) = match ty {
-                        | Type::Array(element, length) => {
-                            if index >= length {
+                        | Type::Array(..) | Type::PointerArray(..) => {
+                            if index >= ty.length().unwrap_or(0) {
                                 return Err(self.error("too many array initializer elements"));
                             }
-                            (element.ty(), offset + index)
+                            (ty.element().unwrap_or(Type::INT), offset + index)
                         },
                         | Type::Struct(id) => {
                             if self.take(".") {
@@ -2328,8 +2393,10 @@ impl<'a> Parser<'a> {
                     };
                     let string = matches!(member, Type::Array(Arithmetic::CHAR, _))
                         && self.current().text.starts_with('"');
-                    if matches!(member, Type::Array(..) | Type::Struct(_))
-                        && !self.at("{")
+                    if matches!(
+                        member,
+                        Type::Array(..) | Type::PointerArray(..) | Type::Struct(_)
+                    ) && !self.at("{")
                         && !string
                     {
                         return Err(self.error(
@@ -2423,7 +2490,7 @@ impl<'a> Parser<'a> {
                 leaves[offset] = Value::pointer(index + 1, 0, 0, length);
                 Ok(())
             },
-            | Type::Pointer(..) | Type::StructPointer(_) => {
+            | Type::Pointer(..) | Type::StructPointer(_) | Type::Indirect(..) => {
                 if !self.take("0") {
                     return Err(self.error(
                         "a static pointer's initializer must be a constant; this subset takes 0, \

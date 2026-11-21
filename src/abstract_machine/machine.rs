@@ -285,10 +285,10 @@ impl Machine {
             },
             | Op::Decay(place) => {
                 let id = self.named(place)?;
-                let length = match self.object_type(id) {
-                    | Some(Type::Array(_, length)) => i32::try_from(length).unwrap_or(i32::MAX),
-                    | _ => 1,
-                };
+                let length = self
+                    .object_type(id)
+                    .and_then(Type::length)
+                    .map_or(1, |length| i32::try_from(length).unwrap_or(i32::MAX));
                 let value = Value::pointer(id, 0, 0, length);
                 self.push(Operand::Value(value.clone()))?;
                 self.decay(range, id, value)

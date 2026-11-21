@@ -1029,6 +1029,37 @@ pub(super) enum Type {
     Struct(usize),
     /// A pointer to a structure.
     StructPointer(usize),
+    /// A pointer to a pointer: `depth` pointers (two or more) in a row to
+    /// `target`, so `int **` is `Indirect(int, 2)`.
+    Indirect(Target, u8),
+    /// An array of `length` pointers, each `depth` pointers (one or more)
+    /// in a row to `target`: `char *names[3]` is `PointerArray(char, 1,
+    /// 3)`.
+    PointerArray(Target, u8, usize),
+}
+
+/// What a chain of pointers ends at: an arithmetic type, `const` when set,
+/// or a structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    reason = "A small copied type description; a structure's index is the larger variant."
+)]
+pub(super) enum Target {
+    Arithmetic(Arithmetic, bool),
+    Struct(usize),
+}
+
+impl Target {
+    /// The type `depth` pointers in a row to this target make: `int *` for
+    /// one, `int **` for two.
+    pub(super) const fn pointer(self, depth: u8) -> Type {
+        match (self, depth) {
+            | (Self::Arithmetic(arithmetic, constant), 1) => Type::Pointer(arithmetic, constant),
+            | (Self::Struct(id), 1) => Type::StructPointer(id),
+            | _ => Type::Indirect(self, depth),
+        }
+    }
 }
 
 impl Type {
@@ -1039,12 +1070,64 @@ impl Type {
 
     /// Whether values of this type are pointers.
     pub(super) const fn is_pointer(self) -> bool {
-        matches!(self, Self::Pointer(..) | Self::StructPointer(_))
+        matches!(
+            self,
+            Self::Pointer(..) | Self::StructPointer(_) | Self::Indirect(..)
+        )
     }
 
     /// Whether this is an array type, which a name of it decays from.
     pub(super) const fn is_array(self) -> bool {
-        matches!(self, Self::Array(..))
+        matches!(self, Self::Array(..) | Self::PointerArray(..))
+    }
+
+    /// An array type's length.
+    pub(super) const fn length(self) -> Option<usize> {
+        match self {
+            | Self::Array(_, length) | Self::PointerArray(_, _, length) => Some(length),
+            | _ => None,
+        }
+    }
+
+    /// An array type's element type.
+    pub(super) const fn element(self) -> Option<Self> {
+        match self {
+            | Self::Array(element, _) => Some(element.ty()),
+            | Self::PointerArray(target, depth, _) => Some(target.pointer(depth)),
+            | _ => None,
+        }
+    }
+
+    /// A pointer type's chain: what it ends at and how many pointers deep
+    /// it is.
+    pub(super) const fn chain(self) -> Option<(Target, u8)> {
+        match self {
+            | Self::Pointer(arithmetic, constant) =>
+                Some((Target::Arithmetic(arithmetic, constant), 1)),
+            | Self::StructPointer(id) => Some((Target::Struct(id), 1)),
+            | Self::Indirect(target, depth) => Some((target, depth)),
+            | _ => None,
+        }
+    }
+
+    /// The type a pointer of this type points to: `int` for `int *`, `int
+    /// *` for `int **`, `struct point` for `struct point *`.
+    pub(super) const fn pointee(self) -> Option<Self> {
+        match self.chain() {
+            | Some((Target::Arithmetic(arithmetic, _), 1)) => Some(arithmetic.ty()),
+            | Some((Target::Struct(id), 1)) => Some(Self::Struct(id)),
+            | Some((target, depth)) => Some(target.pointer(depth - 1)),
+            | None => None,
+        }
+    }
+
+    /// The type of `&` applied to an object of this pointer type: one
+    /// pointer more.
+    pub(super) const fn pointer_to(self) -> Option<Self> {
+        match self.chain() {
+            | Some((target, depth)) if depth < MAX_INDIRECTION => Some(target.pointer(depth + 1)),
+            | _ => None,
+        }
     }
 
     /// The integer type, when this is one.
@@ -1083,6 +1166,7 @@ impl Type {
     pub(super) const fn decayed_qualified(self, constant: bool) -> Self {
         match self {
             | Self::Array(element, _) => Self::Pointer(element, constant),
+            | Self::PointerArray(target, depth, _) => target.pointer(depth + 1),
             | other => other,
         }
     }
@@ -1193,6 +1277,8 @@ impl Arithmetic {
 }
 
 pub(super) const MAX_SOURCE: usize = 32 * 1024;
+/// The most pointers in a row a type may have: `int ****`.
+pub(super) const MAX_INDIRECTION: u8 = 4;
 pub(super) const MAX_DEPTH: usize = 64;
 pub(super) const MAX_CODE: usize = 8192;
 pub(super) const MAX_STEPS: usize = 2048;

@@ -123,8 +123,7 @@ impl Parser<'_> {
                             left.promoted().common(right.promoted()).ty()
                         }),
                 | ("==" | "!=", Type::Pointer(a, _), Type::Pointer(b, _)) if a == b => Type::INT,
-                | ("==" | "!=", Type::StructPointer(a), Type::StructPointer(b)) if a == b =>
-                    Type::INT,
+                | ("==" | "!=", left, right) if left.is_pointer() && left == right => Type::INT,
                 | (_, Type::Struct(_), _) | (_, _, Type::Struct(_)) =>
                     return Err(self.error(
                         "structures are not operands of arithmetic or comparison; compare their \
@@ -135,8 +134,13 @@ impl Parser<'_> {
                         "arithmetic on structure pointers needs an array of structures, which is \
                          outside this subset",
                     )),
-                | ("+" | "-", pointer @ Type::Pointer(..), Type::Integer(_))
-                | ("+", Type::Integer(_), pointer @ Type::Pointer(..)) => pointer,
+                | (
+                    "+" | "-",
+                    pointer @ (Type::Pointer(..) | Type::Indirect(..)),
+                    Type::Integer(_),
+                )
+                | ("+", Type::Integer(_), pointer @ (Type::Pointer(..) | Type::Indirect(..))) =>
+                    pointer,
                 | ("==" | "!=", pointer, Type::Integer(_)) if pointer.is_pointer() && null(rhs) =>
                     Type::INT,
                 | ("==" | "!=", Type::Integer(_), pointer) if pointer.is_pointer() && null(lhs) =>
@@ -201,7 +205,7 @@ impl Parser<'_> {
                 .map_or(Type::INT, |(left, right)| {
                     left.promoted().common(right.promoted()).ty()
                 }),
-            | (left, right) if left == right => left,
+            | (left, right) if left == right && !left.is_array() => left,
             | (Type::Pointer(left, a), Type::Pointer(right, b)) if left == right =>
                 Type::Pointer(left, a || b),
             | (pointer, Type::Integer(_)) if pointer.is_pointer() && null(third) => pointer,
@@ -261,15 +265,9 @@ impl Parser<'_> {
                         &super::clauses::COMPLEMENT_CONSTRAINT,
                     )),
                 | ("+" | "-", floating @ Type::Floating(_)) => floating,
-                | (
-                    "!",
-                    Type::Integer(_)
-                    | Type::Floating(_)
-                    | Type::Pointer(..)
-                    | Type::StructPointer(_),
-                ) => Type::INT,
-                | ("*", Type::Pointer(element, _)) => element.ty(),
+                | ("!", ty) if ty.arithmetic().is_some() || ty.is_pointer() => Type::INT,
                 | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
+                | ("*", pointer) if let Some(pointee) = pointer.pointee() => pointee,
                 | ("&", ty @ (Type::Integer(_) | Type::Floating(_))) => {
                     self.check_lvalue(child)?;
                     Type::Pointer(ty.arithmetic().unwrap_or(Arithmetic::INT), readonly)
@@ -277,6 +275,12 @@ impl Parser<'_> {
                 | ("&", Type::Struct(id)) => {
                     self.check_lvalue(child)?;
                     Type::StructPointer(id)
+                },
+                // The address of a pointer object is a pointer to a pointer
+                // (C99 §6.5.3.2p3).
+                | ("&", pointer) if let Some(address) = pointer.pointer_to() => {
+                    self.check_lvalue(child)?;
+                    address
                 },
                 | _ =>
                     return Err(self.error(
@@ -466,17 +470,18 @@ impl Parser<'_> {
             // One operand is the pointer and the other the integer, in
             // either order: `i[v]` is `*(i + v)` (C99 §6.5.2.1p1-2).
             let pointer = match (base.ty, subscript.ty) {
-                | (pointer @ Type::Pointer(..), Type::Integer(_))
-                | (Type::Integer(_), pointer @ Type::Pointer(..)) => Some(pointer),
+                | (pointer @ (Type::Pointer(..) | Type::Indirect(..)), Type::Integer(_))
+                | (Type::Integer(_), pointer @ (Type::Pointer(..) | Type::Indirect(..))) =>
+                    Some(pointer),
                 | _ => None,
             };
-            let Some((pointer, element)) = pointer.and_then(|pointer| match pointer {
-                | Type::Pointer(element, _) => Some((pointer, element.ty())),
-                | _ => None,
-            }) else {
+            let Some((pointer, element)) =
+                pointer.and_then(|pointer| pointer.pointee().map(|element| (pointer, element)))
+            else {
                 return Err(self.error(
-                    "a subscript takes a pointer to an arithmetic type and an integer index, in \
-                     either order (C99 §6.5.2.1p1)",
+                    "a subscript takes a pointer to a number or to a pointer and an integer \
+                     index, in either order (C99 §6.5.2.1p1); arrays of structures are outside \
+                     this subset",
                 ));
             };
             let readonly = pointer.points_to_const();
@@ -508,7 +513,7 @@ impl Parser<'_> {
         let expression = &self.expressions[operand];
         if !matches!(
             expression.ty,
-            Type::Integer(_) | Type::Floating(_) | Type::Pointer(..)
+            Type::Integer(_) | Type::Floating(_) | Type::Pointer(..) | Type::Indirect(..)
         ) {
             return Err(self.error("++ and -- update a number or a pointer to one in this subset"));
         }
@@ -660,8 +665,8 @@ impl Parser<'_> {
         )
     }
 
-    /// A type name, as in a cast or `sizeof`: an integer type or a
-    /// structure, optionally `const`, optionally a pointer to it.
+    /// A type name, as in a cast or `sizeof`: an arithmetic type or a
+    /// structure, optionally `const`, optionally with pointers to it.
     ///
     /// C99: §6.7.6 paragraph 2, p. 122; PDF p. 134.
     fn type_name(&mut self) -> Result<Type, Diagnostic> {
@@ -673,16 +678,16 @@ impl Parser<'_> {
             ));
         }
         let base = self.base_type()?;
-        let pointer = self.pointer()?;
+        let depth = self.pointer()?;
         if !self.at(")") {
             return Err(self.error(
-                "a type name in this subset is an arithmetic type or a structure, or a pointer to \
-                 one (such as `unsigned int *` or `double`); pointers to pointers and other \
-                 declarators are outside it",
+                "a type name in this subset is an arithmetic type or a structure, or pointers to \
+                 one (such as `unsigned int *`, `char **` or `double`); arrays and functions in a \
+                 type name are outside it",
             ));
         }
         let range = combined(start.range, self.tokens[self.position - 1].range);
-        self.declared_type(base, pointer, None, range)
+        self.declared_type(base, depth, None, range)
     }
 
     /// The constant `token`, a preprocessing number: a floating constant
@@ -834,6 +839,7 @@ impl Parser<'_> {
         let allowed = match (from, to) {
             | (from, to) if from.arithmetic().is_some() && to.arithmetic().is_some() => true,
             | (Type::Pointer(a, _), Type::Pointer(b, _)) => a == b,
+            | (from, to) if from.is_pointer() => from == to,
             | (Type::Struct(_) | Type::Array(..), _) | (_, Type::Struct(_)) =>
                 return Err(Diagnostic::constraint(
                     combined(opening.range, operand.range),
@@ -1163,10 +1169,7 @@ impl Parser<'_> {
                     format!(".{name}")
                 };
                 let tree = self.tree(&label, range, vec![operand])?;
-                let array = match declared {
-                    | Type::Array(_, length) => Some(length),
-                    | _ => None,
-                };
+                let array = declared.length();
                 self.emit_node(
                     Op::Member {
                         name,
