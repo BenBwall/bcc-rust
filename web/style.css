@@ -1698,11 +1698,19 @@
      their icons alone and the step counter drops its word, as on a phone
      (both stay for screen readers, the keys' names in their tooltips too),
      so from 1024 px the status keeps to the strip's first row and the note
-     sits higher under the cells. */
+     sits higher under the cells. The view keys drop their numbers, which
+     only echo their order, and the strip's spacing tightens, so the
+     WebAssembly view's strip, with its two more keys and its switch, keeps
+     to one row from 1024 px too, a count in the thousands included. */
   @media (min-width: 821px) and (max-width: 1180px) {
     .transport .button:not(.primary, .labelled) .button-label,
     .step-counter-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-    .transport .button:not(.primary, .labelled) { padding-inline: 10px; }
+    .transport .button { padding-inline: 10px; }
+    .mode-icon { display: none; }
+    .mode-tab { padding: 0 10px; }
+    .toolbar { column-gap: 10px; }
+    .transport { gap: 4px; }
+    .run-status { gap: 10px; }
   }
   @container insight (max-width: 760px) {
     .notes-row { grid-template-columns: minmax(0, 1fr); }
