@@ -83,10 +83,9 @@ mod tests {
     }
 
     /// The same NaNs with strict exception behavior, which Clang's
-    /// `-ftrapping-math` and `#pragma STDC FENV_ACCESS ON` ask for: Clang
-    /// then computes an invalid operation in a function at run time, but
-    /// for an automatic array or structure whose whole initializer its
-    /// evaluator folds. GCC traps by default and ignores the pragma.
+    /// `-ftrapping-math` asks for: Clang then computes an invalid operation
+    /// in a function at run time, but for an automatic array or structure
+    /// whose whole initializer its evaluator folds. GCC traps by default.
     #[test]
     fn folded_nans_with_strict_exceptions_match_the_claimed_compiler() {
         matches_the_claimed_compiler_with(
@@ -95,14 +94,15 @@ mod tests {
             &["-ftrapping-math"],
             false,
         );
-        matches_the_claimed_compiler("folded_nans_fenv_access.c");
     }
 
-    /// The same NaNs in functions whose floating-point environment a
-    /// pragma or attribute may change: Clang's `clang fp exceptions`,
-    /// `float_control` with its `push` and `pop`, and `STDC FENV_ACCESS`,
-    /// at file scope and in a block, and GCC's `optimize("trapping-math")`
-    /// as an attribute or a pragma, which each compiler alone reads.
+    /// The same NaNs in a translation unit that holds floating-point
+    /// pragmas, which keep every function's NaNs at run time in bcc:
+    /// Clang's `clang fp exceptions`, `float_control` with its `push` and
+    /// `pop`, and `STDC FENV_ACCESS`, after a declaration's attributes,
+    /// through `_Pragma` and in a block, and GCC's `#pragma GCC optimize`,
+    /// which each compiler alone reads. The fixture makes both compilers
+    /// strict throughout, so that their output matches.
     #[test]
     fn folded_nans_under_floating_pragmas_match_the_claimed_compiler() {
         for options in [&[][..], &["-ftrapping-math"], &["-fno-trapping-math"]] {

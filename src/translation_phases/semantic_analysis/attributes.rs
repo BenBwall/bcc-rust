@@ -311,17 +311,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Applies the entity attributes of one declaration: those of its
     /// specifiers, its declarator, pointer levels and grouped declarators.
     /// GNU attributes in any of these positions describe the declaration,
-    /// as in Clang. A function declared where `#pragma GCC optimize` may be
-    /// in effect is noted first. C99: §6.7, p. 97; PDF p. 109.
+    /// as in Clang. C99: §6.7, p. 97; PDF p. 109.
     pub(super) fn declaration_attributes(
         &mut self,
         subject: Subject,
         specifiers: Option<&'tu SpecifierExtension<'tu>>,
         declarator: Option<Declarator<'tu>>,
     ) {
-        if let Subject::Function { binding, .. } = subject {
-            self.note_optimized_function(binding, false);
-        }
         let mut chain = specifiers;
         while let Some(item) = chain {
             // C11 §6.7.5p6: zero has no effect, including on target storage

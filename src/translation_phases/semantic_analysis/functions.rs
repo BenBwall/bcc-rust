@@ -189,7 +189,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             self.declaration_dll(subject, f.declaration_specifiers, false);
         }
-        self.enter_floating_function(binding);
         let ty = binding.map_or_else(|| self.types.unknown(), |i| self.bindings[i].ty);
         let derivation = function_derivation(f.declarator, self.scratch);
         if derivation.is_none()
@@ -3395,9 +3394,9 @@ pub(super) struct State<'tu, 's> {
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
-    /// The floating-point environment the pragmas give each root
-    /// ([`Analyzer::enter_floating_root`]).
-    pub(super) floating: super::floating_environment::FloatingEnvironment<'s>,
+    /// An `optimize` attribute was read, which can turn trapping math back
+    /// on under GCC's rules ([`Analyzer::gcc_function_runtime`]).
+    pub(super) optimize_attribute: bool,
     /// The initializers being analyzed whose NaNs
     /// [`Analyzer::settle_strict_initializer`] settles, innermost last:
     /// each binding, and where its conversions begin.
@@ -3488,7 +3487,7 @@ impl<'s> State<'_, 's> {
             reference_contexts: ArenaVec::new_in(scratch),
             reference_function: None,
             initializer: None,
-            floating: super::floating_environment::FloatingEnvironment::new(scratch),
+            optimize_attribute: false,
             strict_initializers: ArenaVec::new_in(scratch),
             initializer_value: None,
             current: None,

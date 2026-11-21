@@ -36,10 +36,7 @@ use crate::{
         TextEvent,
         TextEventKind,
         interface::StrExt,
-        pragma_floating::{
-            PragmaWord,
-            read_floating_pragma,
-        },
+        pragma_floating::PragmaWord,
         preprocessor_tokenizer::{
             OutputSpacing,
             PreprocessorToken,
@@ -165,8 +162,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             None
         };
+        self.record_floating_pragma();
         let position = self.context.preprocessed_tokens;
-        self.record_floating_pragma(position);
         let packs = self.context.pack_pragmas.len();
         let consumed_newline = self.execute_pragma(from);
         // TCC writes a pack pragma's operands as it replaced them, so that
@@ -203,52 +200,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         consumed_newline
     }
 
-    /// Records what the pragma about to be read, at output-token ordinal
-    /// `position`, does to the floating-point environment
-    /// ([`Context::floating_pragmas`]). Its tokens are looked at, not read,
-    /// so the pragma is carried out and diagnosed as before. An identifier
-    /// operand that names a macro is marked, since Clang replaces it.
+    /// Notes whether the pragma about to be read can change the
+    /// floating-point environment ([`Context::floating_pragmas`]). Its
+    /// tokens are looked at, not read, so the pragma is carried out and
+    /// diagnosed as before. An identifier that names a macro is marked,
+    /// since Clang replaces it in some operands.
     /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
-    fn record_floating_pragma(&mut self, position: usize) {
-        const WORDS: usize = 24;
-        let mut words = [PragmaWord {
-            spelling:   "",
-            macro_name: false,
-        }; WORDS];
-        let mut count = 0;
-        let mut complete = true;
-        for (kind, contents) in self.tokenizer.spellings() {
-            match kind {
-                | PreprocessorTokenType::Newline => break,
-                | PreprocessorTokenType::Whitespace => continue,
-                | _ => {},
-            }
-            let Some(word) = words.get_mut(count) else {
-                complete = false;
-                break;
-            };
-            *word = PragmaWord {
-                spelling:   self
-                    .context
-                    .string_cache
-                    .at(contents)
-                    .trim_end_matches('\0'),
+    fn record_floating_pragma(&mut self) {
+        let string_cache = &self.context.string_cache;
+        let macros = &self.state.macro_definitions;
+        let words = self
+            .tokenizer
+            .spellings()
+            .take_while(|&(kind, _)| kind != PreprocessorTokenType::Newline)
+            .filter(|&(kind, _)| kind != PreprocessorTokenType::Whitespace)
+            .map(|(kind, contents)| PragmaWord {
+                spelling:   string_cache.at(contents).trim_end_matches('\0'),
                 macro_name: match kind {
-                    | PreprocessorTokenType::Identifier =>
-                        self.state.macro_definitions.contains_key(&contents),
+                    | PreprocessorTokenType::Identifier => macros.contains_key(&contents),
                     | kind => kind.is_identifier(),
                 },
-            };
-            count += 1;
-        }
-        let configuration = self.context.configuration;
-        let ms_pragmas = configuration.compiler_identity().rules() == RuleSet::Clang
-            && configuration.accepts(crate::configuration::Feature::MsPragma)
-            || configuration.compiler_identity() == CompilerIdentity::Msvc;
-        let pragmas = read_floating_pragma(&words[..count], complete, ms_pragmas);
-        for pragma in pragmas.into_iter().flatten() {
-            self.context.floating_pragmas.push((position, pragma));
-        }
+            });
+        self.context.floating_pragmas.note(words);
     }
 
     /// Carries out the pragma [`Self::parse_pragma_directive`] reads.

@@ -1,10 +1,8 @@
 //! The NaNs of an automatic array or structure that Clang initializes under
-//! strict exception behavior (`-ftrapping-math`, or where
-//! `#pragma STDC FENV_ACCESS ON` or another pragma that may make the
-//! environment strict is in effect: `floating_environment.rs`), to nearest
-//! or in a dynamic rounding direction; under a constant directed rounding
-//! every NaN stays at run time ([`Analyzer::strict_aggregates_settle`]).
-//! Clang copies such an
+//! strict exception behavior from `-ftrapping-math`. Where the translation
+//! unit holds a floating-point pragma, which bcc does not follow
+//! (`floating_environment.rs`), every NaN stays at run time
+//! ([`Analyzer::strict_aggregates_settle`]). Clang copies such an
 //! object's initial value from a constant image when its evaluator folds the
 //! whole initializer (`EmitAutoVarInit`), with the positive NaN `APFloat`
 //! gives an invalid operation; otherwise its code computes every member at

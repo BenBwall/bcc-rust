@@ -2995,7 +2995,7 @@ hardware does, so `constants.rs` decides the sign afterwards, from
   Clang's rules with strict exception behavior, from an explicit
   `-ftrapping-math` (`CompilerConfiguration::requests_trapping_math`, which
   Clang's driver maps to `-ffp-exception-behavior=strict`; Clang's default
-  and `-fno-fast-math` ignore exceptions) or `#pragma STDC FENV_ACCESS ON`,
+  and `-fno-fast-math` ignore exceptions) or a floating-point pragma (below),
   Clang emits the operation as a constrained intrinsic that LLVM does not
   fold. Either way the value is the hardware's NaN.
 
@@ -3032,12 +3032,42 @@ derives its value from one (a builtin call, a statement expression,
 binary128, complex integer or vector value takes part, the whole
 initializer keeps the hardware's NaN, as before this rule.
 
-The preprocessor records each `#pragma STDC FENV_ACCESS` the identity
-checks, with its output-token ordinal (`Context::fenv_access_pragmas`), and
-the analyzer reads them as it enters each root
-(`Analyzer::enter_fenv_access_root`): pragmas between roots set the
-file-scope state, and a function is under the pragma if that state is on or
-a pragma inside it turns it on. GCC ignores the pragma, and its identity skips it unchecked.
+Floating-point pragmas follow a deliberately conservative rule, because
+their scope in Clang (a pragma after a declaration's attributes reaches the
+rest of the file, one in a compound statement only that statement at `-O2`,
+`float_control`'s `push` and `pop`, operands that name macros) defeated each
+attempt to follow it. The preprocessor notes, wherever it is written and in
+whatever form (`#pragma`, `_Pragma`, `__pragma`, a header), whether the
+translation unit holds a pragma that can change a function's floating-point
+environment (`Context::floating_pragmas`, `pragma_floating.rs`), and
+`floating_environment.rs` reads the notes:
+
+- Under Clang's rules (the Clang and clang-cl identities, and bcc's own
+  command line), `STDC FENV_ACCESS` or `STDC FENV_ROUND` with any operand,
+  `float_control` in any form, Microsoft's `fenv_access` whether or not
+  Microsoft's pragmas are on, or a `clang fp` pragma that may set
+  `exceptions`, anywhere in the translation unit, keeps every function's
+  invalid operations at run time (`Runtime`), automatic aggregates included:
+  `settle_strict_initializer` folds them only when the strict exception
+  behavior comes from `-ftrapping-math` alone. `cl` reads the same pragmas,
+  so under its identity they count as well.
+- Under GCC's rules, `#pragma GCC optimize` or `push_options` anywhere keeps
+  every function's invalid operations at run time, since an option such as
+  `trapping-math`, `no-fast-math`, or an `-O` level after `-Ofast` can turn
+  trapping math back on. An `optimize` attribute does so for every function
+  analyzed after it: GCC applies one only to the function it declares, from
+  that declaration on, and ignores one written after the definition.
+
+This keeps bcc's NaN where it was before folded NaNs, never worse, at the
+cost of precision: Clang folds the positive NaN in a function no strict
+pragma reaches (one before the pragma, after `exceptions(ignore)` or
+`FENV_ACCESS OFF`, after the compound statement that held it at `-O2`, or
+after a `float_control(pop)`), and for an automatic aggregate its evaluator
+folds whole under a pragma, and GCC folds it under `-fno-trapping-math` in a
+function no `optimize` option reaches, where bcc keeps the hardware's NaN in
+each case. Static initializers and code outside functions still fold with
+the compiler's NaN, and the command-line options keep their per-unit
+meaning. The pragmas' diagnostics and their other effects are unchanged.
 
 A NaN operand passes through with its sign in every case, as GCC's
 `const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
@@ -3055,12 +3085,9 @@ Binary128 folding follows the same rule. Remaining differences:
   in bcc when its value derives from one through such a call, a statement
   expression or `_Generic`, or when bcc does not take the initializer for a
   constant (a `const` automatic named in it, a builtin call bcc does not
-  fold, a binary128 or `_Float16` member). A pragma inside a compound
-  statement applies to the whole function in bcc. So it does in Clang at
-  `-O0`, which marks the whole function `strictfp`, so that code before
-  and after the compound statement computes its invalid operations at run
-  time too; at `-O2` Clang folds the code outside it, where bcc keeps the
-  hardware's NaN.
+  fold, a binary128 or `_Float16` member). Where a floating-point pragma or
+  GCC `optimize` option does not reach a function, the compiler folds what
+  the conservative rule above keeps at run time.
 - Clang folds a complex quotient in a constant automatic aggregate in every
   mode, which `ClangFunction` leaves to `__divdc3`.
 - bcc does not raise the invalid exception for an operation it folds that

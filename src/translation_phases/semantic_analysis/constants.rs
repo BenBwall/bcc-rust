@@ -67,8 +67,9 @@ pub(super) enum NanSource {
     /// pragma that may turn it back on), and Clang emits it as a
     /// constrained operation under `-ftrapping-math`,
     /// `#pragma STDC FENV_ACCESS ON` or another pragma that may make the
-    /// environment strict (`floating_environment.rs`), unless it copies the
-    /// initializer of an automatic array or structure from a constant image
+    /// environment strict, which bcc assumes everywhere once the unit holds
+    /// one (`floating_environment.rs`), unless it copies the initializer of
+    /// an automatic array or structure from a constant image
     /// ([`Analyzer::settle_strict_initializer`]).
     Runtime,
 }

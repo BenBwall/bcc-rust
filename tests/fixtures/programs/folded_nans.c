@@ -7,7 +7,7 @@
  * operand passes through with its sign, and a negation flips it. The tests
  * also build it with -fno-trapping-math, where GCC folds real arithmetic in
  * a function but still calls `__muldc3` and `__divdc3`, and with Clang's
- * strict exceptions (-ftrapping-math, folded_nans_fenv_access.c), where
+ * strict exceptions (-ftrapping-math), where
  * Clang computes the operation in a function at run time unless it
  * initializes an automatic array or structure whose whole initializer its
  * evaluator folds: none with a run-time member, the address of an automatic
