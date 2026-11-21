@@ -63,10 +63,12 @@ pub(super) enum NanSource {
     ClangFunction,
     /// The hardware at run time: GCC leaves an operation that raises the
     /// invalid exception in a function unfolded while math may trap
-    /// (`-ftrapping-math`, its default), and Clang emits it as a
-    /// constrained operation under `-ftrapping-math` or
-    /// `#pragma STDC FENV_ACCESS ON`, unless it copies the initializer of
-    /// an automatic array or structure from a constant image
+    /// (`-ftrapping-math`, its default, or an `optimize` attribute or
+    /// pragma that may turn it back on), and Clang emits it as a
+    /// constrained operation under `-ftrapping-math`,
+    /// `#pragma STDC FENV_ACCESS ON` or another pragma that may make the
+    /// environment strict (`floating_environment.rs`), unless it copies the
+    /// initializer of an automatic array or structure from a constant image
     /// ([`Analyzer::settle_strict_initializer`]).
     Runtime,
 }
@@ -87,41 +89,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | RuleSet::Clang if self.clang_strict_exceptions() => NanSource::Runtime,
             | RuleSet::Clang if limited_complex => NanSource::Compiler,
             | RuleSet::Clang => NanSource::ClangFunction,
-            | RuleSet::Gcc if !configuration.no_trapping_math() => NanSource::Runtime,
+            | RuleSet::Gcc if !configuration.no_trapping_math() || self.gcc_function_runtime() =>
+                NanSource::Runtime,
             | RuleSet::Gcc if limited_complex => NanSource::Compiler,
             | RuleSet::Gcc => NanSource::GccFunction,
-        }
-    }
-
-    /// Whether Clang's code for the function analyzed now has strict
-    /// exception behavior: under `-ftrapping-math`, or where
-    /// `#pragma STDC FENV_ACCESS ON` is in effect. C99: §7.6.1 paragraph 2,
-    /// p. 189; PDF p. 201.
-    pub(super) fn clang_strict_exceptions(&self) -> bool {
-        self.context.configuration.requests_trapping_math() || self.functions.fenv_access.root
-    }
-
-    /// Enters the root whose output tokens run from `start` to `end`:
-    /// `#pragma STDC FENV_ACCESS ON` is in effect in it if the file-scope
-    /// state before it is on, or a pragma inside it turns the state on.
-    /// Pragmas between roots set the file-scope state; one inside a root
-    /// lasts to the end of its compound statement, which bcc widens to the
-    /// whole root. C99: §7.6.1 paragraph 2, p. 189; PDF p. 201.
-    pub(super) fn enter_fenv_access_root(&mut self, start: usize, end: usize) {
-        let pragmas = &self.context.fenv_access_pragmas;
-        let state = &mut self.functions.fenv_access;
-        while let Some(&(position, on)) = pragmas.get(state.next)
-            && position <= start
-        {
-            state.file_scope = on;
-            state.next += 1;
-        }
-        state.root = state.file_scope;
-        while let Some(&(position, on)) = pragmas.get(state.next)
-            && position < end
-        {
-            state.root |= on;
-            state.next += 1;
         }
     }
 

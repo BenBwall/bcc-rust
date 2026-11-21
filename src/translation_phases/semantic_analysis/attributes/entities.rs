@@ -164,6 +164,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if ignored {
                 continue;
             }
+            // GCC's `optimize` can turn trapping math back on for the
+            // function (`floating_environment.rs`).
+            if attribute.name == "optimize"
+                && let Subject::Function { binding, .. } = subject
+            {
+                self.note_optimized_function(binding, true);
+            }
             if attribute.name == "weakref"
                 && let Subject::Function { binding, .. } | Subject::Object { binding, .. } = subject
             {

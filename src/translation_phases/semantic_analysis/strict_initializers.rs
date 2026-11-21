@@ -1,6 +1,10 @@
 //! The NaNs of an automatic array or structure that Clang initializes under
 //! strict exception behavior (`-ftrapping-math`, or where
-//! `#pragma STDC FENV_ACCESS ON` is in effect). Clang copies such an
+//! `#pragma STDC FENV_ACCESS ON` or another pragma that may make the
+//! environment strict is in effect: `floating_environment.rs`), to nearest
+//! or in a dynamic rounding direction; under a constant directed rounding
+//! every NaN stays at run time ([`Analyzer::strict_aggregates_settle`]).
+//! Clang copies such an
 //! object's initial value from a constant image when its evaluator folds the
 //! whole initializer (`EmitAutoVarInit`), with the positive NaN `APFloat`
 //! gives an invalid operation; otherwise its code computes every member at
@@ -113,6 +117,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.context.configuration.compiler_identity().rules()
                 == crate::configuration::RuleSet::Clang
             && self.clang_strict_exceptions()
+            && self.strict_aggregates_settle()
             && data.duration == Duration::Automatic
             && matches!(
                 self.types.nodes[data.ty.index],

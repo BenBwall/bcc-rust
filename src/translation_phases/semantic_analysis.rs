@@ -102,6 +102,7 @@ mod compiler_parity;
 mod constants;
 mod exceptional_constants;
 mod excess;
+mod floating_environment;
 mod integer;
 mod named_constants;
 mod strict_initializers;
@@ -283,7 +284,7 @@ pub(crate) fn analyze<'tu>(
         analyzer.assert_balanced();
         let root_end = unit.root_ends().get(index).copied().unwrap_or(usize::MAX);
         analyzer.functions.emission.root_end = root_end;
-        analyzer.enter_fenv_access_root(root_start, root_end);
+        analyzer.enter_floating_root(root_start, root_end);
         root_start = root_end;
         analyzer.work.push(Work::Root(root));
         while let Some(work) = analyzer.work.pop() {

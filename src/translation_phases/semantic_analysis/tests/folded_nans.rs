@@ -61,9 +61,18 @@ impl Rules {
 /// The `double` bits of the real part of every folded `operator`
 /// expression in `source`, in order of analysis.
 fn folded(source: &str, rules: Rules, operator: BinaryOperator) -> Vec<u128> {
+    folded_in(source, rules.configuration(), operator)
+}
+
+/// [`folded`] under `configuration`.
+fn folded_in(
+    source: &str,
+    configuration: CompilerConfiguration,
+    operator: BinaryOperator,
+) -> Vec<u128> {
     let mut bits = Vec::new();
-    with_configuration(source, rules.configuration(), |context, unit| {
-        assert_eq!(context.pending_error_count(), 0, "{rules:?}: {source}");
+    with_configuration(source, configuration, |context, unit| {
+        assert_eq!(context.pending_error_count(), 0, "{source}");
         bits.extend(
             unit.expressions
                 .iter()
@@ -390,6 +399,162 @@ fn fenv_access_applies_where_it_is_on() {
     assert_eq!(
         folded(source, Rules::GccNoTrappingMath, BinaryOperator::Division),
         [POSITIVE; 5]
+    );
+}
+
+/// A function whose `0.0 / 0.0` the tests below fold.
+fn function(name: &str) -> String {
+    format!("void {name}(void) {{ double d = 0.0 / 0.0; (void)d; }}\n")
+}
+
+/// Clang's other pragmas that make exceptions strict apply as
+/// `FENV_ACCESS` does: `clang fp exceptions(strict|maytrap)` and
+/// `float_control(except, on)` until `ignore` or `off`, and
+/// `float_control(push)` and `(pop)` save and restore the whole state,
+/// `FENV_ACCESS` included. A pragma at file scope overrides
+/// `-ftrapping-math`; `FENV_ACCESS ON` stays strict under
+/// `exceptions(ignore)`. Clang 23 at `-O0` gives these signs.
+#[test]
+fn clang_floating_pragmas_apply_where_they_are_in_effect() {
+    let source = [
+        function("plain"),
+        "#pragma clang fp exceptions(strict)\n".into(),
+        function("fp_strict"),
+        "#pragma clang fp exceptions(ignore)\n".into(),
+        function("fp_ignore"),
+        "#pragma clang fp contract(fast) exceptions(maytrap)\n".into(),
+        function("fp_maytrap"),
+        "#pragma float_control(except, off)\n".into(),
+        function("control_off"),
+        "#pragma float_control(except, on, push)\n".into(),
+        function("control_pushed"),
+        "#pragma float_control(pop)\n".into(),
+        function("control_popped"),
+        "#pragma float_control(push)\n#pragma STDC FENV_ACCESS ON\n".into(),
+        function("fenv_pushed"),
+        "#pragma float_control(pop)\n".into(),
+        function("fenv_popped"),
+        "void in_body(void) {\n#pragma float_control(except, on)\n double d = 0.0 / 0.0; \
+         (void)d;\n}\n"
+            .into(),
+        function("after_body"),
+        "#pragma STDC FENV_ACCESS ON\n#pragma clang fp exceptions(ignore)\n".into(),
+        function("fenv_ignore"),
+        "#pragma STDC FENV_ACCESS OFF\n".into(),
+        function("fenv_off"),
+    ]
+    .concat();
+    let (n, p) = (NEGATIVE, POSITIVE);
+    assert_eq!(
+        folded(&source, Rules::Clang, BinaryOperator::Division),
+        [p, n, p, n, p, n, p, n, p, n, p, n, p]
+    );
+    assert_eq!(
+        folded(&source, Rules::ClangTrappingMath, BinaryOperator::Division),
+        [n, n, p, n, p, n, p, n, p, n, p, n, p]
+    );
+    // GCC reads none of them, and traps by default.
+    assert_eq!(
+        folded(&source, Rules::GccNoTrappingMath, BinaryOperator::Division),
+        [p; 13]
+    );
+}
+
+/// Microsoft's `#pragma fenv_access(on)` is `FENV_ACCESS ON` where its
+/// pragmas are read (`-fms-extensions`), and ignored elsewhere.
+#[test]
+fn microsoft_fenv_access_applies_with_its_pragmas() {
+    let source = [
+        "#pragma fenv_access(on)\n".into(),
+        function("on"),
+        "#pragma fenv_access (off)\n".into(),
+        function("off"),
+    ]
+    .concat();
+    let microsoft = Rules::Clang.configuration().with_msvc_extensions(true);
+    assert_eq!(
+        folded_in(&source, microsoft, BinaryOperator::Division),
+        [NEGATIVE, POSITIVE]
+    );
+    assert_eq!(
+        folded(&source, Rules::Clang, BinaryOperator::Division),
+        [POSITIVE; 2]
+    );
+}
+
+/// `STDC FENV_ROUND` with a constant direction other than to nearest makes
+/// Clang compute the operation at run time at `-O0`; `FE_DYNAMIC` and
+/// `FE_TONEAREST` do not. Clang and bcc warn that the pragma is not
+/// supported, but Clang honors it.
+#[test]
+fn a_directed_rounding_pragma_computes_the_nan_at_run_time() {
+    let source = [
+        "#pragma STDC FENV_ROUND FE_UPWARD\n".into(),
+        function("upward"),
+        "#pragma STDC FENV_ROUND FE_DYNAMIC\n".into(),
+        function("dynamic"),
+        "#pragma STDC FENV_ROUND FE_TOWARDZERO\n".into(),
+        function("toward_zero"),
+        "#pragma STDC FENV_ROUND FE_TONEAREST\n".into(),
+        function("nearest"),
+    ]
+    .concat();
+    let quiet = Rules::Clang.configuration().with_suppress_warnings(true);
+    assert_eq!(
+        folded_in(&source, quiet, BinaryOperator::Division),
+        [NEGATIVE, POSITIVE, NEGATIVE, POSITIVE]
+    );
+}
+
+/// Clang replaces macros in these pragmas' operands, which bcc does not
+/// read, so every function after such a pragma keeps the run-time NaN.
+#[test]
+fn a_floating_pragma_naming_a_macro_keeps_the_nan_at_run_time() {
+    let source = [
+        "#define off on\n".into(),
+        function("before"),
+        "#pragma float_control(except, off)\n".into(),
+        function("replaced"),
+        "#pragma clang fp exceptions(ignore)\n".into(),
+        function("later"),
+    ]
+    .concat();
+    assert_eq!(
+        folded(&source, Rules::Clang, BinaryOperator::Division),
+        [POSITIVE, NEGATIVE, NEGATIVE]
+    );
+}
+
+/// Under `-fno-trapping-math`, GCC's `optimize` attribute or
+/// `#pragma GCC optimize` can turn trapping math back on for a function
+/// (`trapping-math`, `no-fast-math`, or an `-O` level after `-Ofast`), so a
+/// function any of its declarations has one on keeps the run-time NaN.
+/// `pop_options` and `reset_options` end the pragma. Clang ignores both.
+#[test]
+fn gcc_optimize_options_keep_the_nan_at_run_time() {
+    let source = [
+        function("plain"),
+        "__attribute__((optimize(\"trapping-math\"))) ".into(),
+        function("attribute"),
+        "void declared(void) __attribute__((optimize(\"O2\")));\n".into(),
+        function("declared"),
+        "#pragma GCC push_options\n#pragma GCC optimize(\"no-fast-math\")\n".into(),
+        function("pragma"),
+        "void pragma_declared(void);\n#pragma GCC pop_options\n".into(),
+        function("pragma_declared"),
+        function("popped"),
+        "#pragma GCC optimize(\"trapping-math\")\n#pragma GCC reset_options\n".into(),
+        function("reset"),
+    ]
+    .concat();
+    let (n, p) = (NEGATIVE, POSITIVE);
+    assert_eq!(
+        folded(&source, Rules::GccNoTrappingMath, BinaryOperator::Division),
+        [p, n, n, n, n, p, p]
+    );
+    assert_eq!(
+        folded(&source, Rules::Clang, BinaryOperator::Division),
+        [p; 7]
     );
 }
 

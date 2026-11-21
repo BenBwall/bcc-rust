@@ -36,6 +36,10 @@ use crate::{
         TextEvent,
         TextEventKind,
         interface::StrExt,
+        pragma_floating::{
+            PragmaWord,
+            read_floating_pragma,
+        },
         preprocessor_tokenizer::{
             OutputSpacing,
             PreprocessorToken,
@@ -127,9 +131,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
-    /// `on-off-switch`; they are checked, and only `FENV_ACCESS` has an
-    /// effect, which semantic analysis reads under Clang's rules
-    /// ([`Context::fenv_access_pragmas`]). `#pragma
+    /// `on-off-switch`; they are checked, and the pragmas that can change
+    /// the floating-point environment are recorded for semantic analysis
+    /// ([`Self::record_floating_pragma`]). `#pragma
     /// once`, `#pragma pack`, `#pragma GCC system_header`, `#pragma GCC
     /// warning`/`error` and the diagnostic pragmas are bcc's
     /// implementation-defined pragmas. `#pragma
@@ -162,6 +166,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             None
         };
         let position = self.context.preprocessed_tokens;
+        self.record_floating_pragma(position);
         let packs = self.context.pack_pragmas.len();
         let consumed_newline = self.execute_pragma(from);
         // TCC writes a pack pragma's operands as it replaced them, so that
@@ -196,6 +201,54 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
         }
         consumed_newline
+    }
+
+    /// Records what the pragma about to be read, at output-token ordinal
+    /// `position`, does to the floating-point environment
+    /// ([`Context::floating_pragmas`]). Its tokens are looked at, not read,
+    /// so the pragma is carried out and diagnosed as before. An identifier
+    /// operand that names a macro is marked, since Clang replaces it.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+    fn record_floating_pragma(&mut self, position: usize) {
+        const WORDS: usize = 24;
+        let mut words = [PragmaWord {
+            spelling:   "",
+            macro_name: false,
+        }; WORDS];
+        let mut count = 0;
+        let mut complete = true;
+        for (kind, contents) in self.tokenizer.spellings() {
+            match kind {
+                | PreprocessorTokenType::Newline => break,
+                | PreprocessorTokenType::Whitespace => continue,
+                | _ => {},
+            }
+            let Some(word) = words.get_mut(count) else {
+                complete = false;
+                break;
+            };
+            *word = PragmaWord {
+                spelling:   self
+                    .context
+                    .string_cache
+                    .at(contents)
+                    .trim_end_matches('\0'),
+                macro_name: match kind {
+                    | PreprocessorTokenType::Identifier =>
+                        self.state.macro_definitions.contains_key(&contents),
+                    | kind => kind.is_identifier(),
+                },
+            };
+            count += 1;
+        }
+        let configuration = self.context.configuration;
+        let ms_pragmas = configuration.compiler_identity().rules() == RuleSet::Clang
+            && configuration.accepts(crate::configuration::Feature::MsPragma)
+            || configuration.compiler_identity() == CompilerIdentity::Msvc;
+        let pragmas = read_floating_pragma(&words[..count], complete, ms_pragmas);
+        for pragma in pragmas.into_iter().flatten() {
+            self.context.floating_pragmas.push((position, pragma));
+        }
     }
 
     /// Carries out the pragma [`Self::parse_pragma_directive`] reads.
@@ -417,10 +470,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             break 'base;
                         },
                         | "STDC" => {
-                            let fenv_access = match Self::next_ignore_whitespace(
-                                &mut self.tokenizer,
-                                self.context,
-                            ) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
                                     self.context.preprocessor_error(PreprocessorError {
@@ -456,7 +506,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         }
                                         break 'base;
                                     }
-                                    s == "FENV_ACCESS"
                                 },
                                 | None => {
                                     let source_vectors = self.current_location();
@@ -468,7 +517,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     });
                                     break 'base;
                                 },
-                            };
+                            }
 
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
@@ -491,11 +540,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                                 },
                                             );
                                         break 'base;
-                                    }
-                                    if fenv_access {
-                                        let on = s == "ON";
-                                        let position = self.context.preprocessed_tokens;
-                                        self.context.fenv_access_pragmas.push((position, on));
                                     }
                                 },
                                 | None => {

@@ -98,6 +98,23 @@ mod tests {
         matches_the_claimed_compiler("folded_nans_fenv_access.c");
     }
 
+    /// The same NaNs in functions whose floating-point environment a
+    /// pragma or attribute may change: Clang's `clang fp exceptions`,
+    /// `float_control` with its `push` and `pop`, and `STDC FENV_ACCESS`,
+    /// at file scope and in a block, and GCC's `optimize("trapping-math")`
+    /// as an attribute or a pragma, which each compiler alone reads.
+    #[test]
+    fn folded_nans_under_floating_pragmas_match_the_claimed_compiler() {
+        for options in [&[][..], &["-ftrapping-math"], &["-fno-trapping-math"]] {
+            matches_the_claimed_compiler_with(
+                "folded_nans_pragmas.c",
+                "-std=gnu17",
+                options,
+                false,
+            );
+        }
+    }
+
     /// The C99 §7.12.14 comparison builtins glibc's `<math.h>` uses, with
     /// `__builtin_issignaling` and `__builtin_roundeven`.
     #[test]
