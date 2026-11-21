@@ -1024,13 +1024,51 @@ words, and drop bcc's notes:
 | error C2065 | `'y': undeclared identifier` | | |
 | error C2143 | `syntax error: missing ';' before 'return'` (a type keyword is `'type'`, a literal `'constant'` or `'string'`) | | |
 | error C2146 | `syntax error: missing ';' before identifier 'y'` | | |
+| fatal error C1075 | `'{': no matching token found`, at the `{` of the innermost block the end of the file leaves open | | |
+| error C2039 | `'y': is not a member of 'S'`, at the member, and `note: see declaration of 'S'` at the tag | | |
+| error C2063 | `'x': not a function`, at the name called | | |
+| error C2084 | `function 'int f(void)' already has a body`, and `note: see previous definition of 'f'` | | |
+| error C2100 | `you cannot dereference an operand of type 'int'` | | |
+| error C2106 | `'=': left operand must be l-value`, at the left operand's operator, or the start of a constant or a call | | |
+| error C2124 | `divide or mod by zero`, of an integer constant by a constant zero | | |
+| error C2197 | `'int g(int)': too many arguments for call`, at the first extra argument | | |
+| error C2198 | `'int g(int,int)': too few arguments for call` | | |
 | warning C4013 | `'g' undefined; assuming extern returning int` | 3 | `implicit-function-declaration` |
+| warning C4018 | `'<': signed/unsigned mismatch`, of a relational comparison | 3 | `sign-compare` |
 | warning C4033 | `'h' must return a value` | 1 | `return-mismatch` |
 | warning C4047 | `'=': 'int *' differs in levels of indirection from 'int'` (also between pointers: `'int *'` from `'char **'`) | 1 | `int-conversion` |
 | warning C4098 | `'g': 'void' function returning a value` | 1 | `return-mismatch` |
+| warning C4100 | `'p': unreferenced parameter` | 4 | `unused-parameter` |
+| warning C4101 | `'a': unreferenced local variable` | 3 | `unused-variable` |
 | warning C4133 | `'=': incompatible types - from 'float *' to 'int *'` | 1 | `incompatible-pointer-types` |
+| warning C4189 | `'b': local variable is initialized but not referenced` | 4 | `unused-but-set-variable` |
+| warning C4293 | `'<<': shift count negative or too big, undefined behavior` | 1 | `shift-count-overflow`, `shift-count-negative` |
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
+| warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | `sign-compare-equality`, bcc's own |
+| warning C4706 | `assignment used as a condition`, and `cl`'s note | 4 | `parentheses` |
+| warning C4715 | `'g': not all control paths return a value` | 1 | |
+| warning C4716 | `'h': must return a value` | 1 | |
+
+C4018 and C4389 compare operands whose promoted types have one width and
+differ in sign, neither of them a constant, whatever its value (`-1 < u`
+draws neither). C4706 is an `if`, `while`, `do` or `for` condition that is an
+`=` assignment outside parentheses. C4293 is a constant shift count that is
+negative or not below the width of the promoted left operand. C4100, C4101
+and C4189 name a parameter, or a variable with automatic storage, that
+nothing refers to (an assignment refers to it; C4189's initializer does not),
+under the settings at its declaration; `cl` reports them at the end of the
+function, the parameters and the outermost block's variables first and then
+each inner block's in the order the blocks begin, and none once the unit has
+had an error (a warning `/WX` promotes aside), and so does bcc. C4715 and
+C4716 are `cl`'s code generator's: a path reaches the closing brace or a
+`return` without a value, and another returns one (C4715) or none does
+(C4716), `main` aside. They come after every diagnostic of the front end,
+and only if it reported no error, led by the file's full path and the line
+alone (`C:\src\a.c(5) : warning C4715: ...`), with `error C2220` before each
+under `/WX`, and so they do in bcc; no group of bcc's controls them, only
+their numbers. C2124, like `cl`'s, is reported only while the unit has had
+no error, and C1075 is a fatal error, after which nothing more is reported.
 
 The operation that leads C4047 and C4133 is `initializing`, `=`,
 `function` (an argument) or `return`, as in `cl`. A type `cl` spells its
@@ -1053,7 +1091,12 @@ keeps its words (`warning C4047: ...`), where `/we4047` writes `error
 C4047`. One group holds C4033 and C4098, so `/wd` or `/we` of either sets
 both. bcc reports in source order, while `cl` reports an initializer's C4047 after
 the warnings of the statements that follow it in the same function, as the
-Windows comparison with `cl` shows.
+Windows comparison with `cl` shows. The level comes from the rightmost of
+`/W0`-`/W4` and `/Wall`, and `#pragma warning(push, n)` sets it until its
+`pop`; `default` and a level specifier in a pragma show a warning from that
+level again, as `cl` does, undoing a `/wd` or `/we`, and an error a pragma
+makes is `cl`'s `error C4018`, not a warning `/WX` promotes. `cl` announces
+with C2220 only a warning before which the unit had no error.
 
 The MSVC codes bcc writes for the driver's own messages are those
 Microsoft documents: warnings D9002 (an unknown option), D9024 and D9027
@@ -1078,7 +1121,15 @@ C2065", "Compiler Error C2143", "Compiler Error C2146", "Compiler Warning
 (level 1 and level 3) C4133", "Compiler Warning (level 1) C4311",
 "Compiler Warning (level 1) C4312", "Compiler Error C2220", "Command-Line
 Warning D9025", "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall,
-/wd, /we, /wo, /Wv, /WX (Warning level)".)
+/wd, /we, /wo, /Wv, /WX (Warning level)", "warning pragma", "Fatal Error
+C1075", "Compiler Error C2039", "Compiler Error C2063", "Compiler Error
+C2084", "Compiler Error C2100", "Compiler Error C2106", "Compiler Error
+C2124", "Compiler Error C2197", "Compiler Error C2198", "Compiler Warning
+(level 3) C4018", "Compiler Warning (level 4) C4100", "Compiler Warning
+(level 3) C4101", "Compiler Warning (level 4) C4189", "Compiler Warning
+(level 1) C4293", "Compiler Warning (level 4) C4389", "Compiler Warning
+(level 4) C4706", "Compiler Warning (level 1) C4715", "Compiler Warning
+(level 1) C4716".)
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
@@ -1215,10 +1266,23 @@ names `msvcrt.lib` and `oldnames.lib` itself.
 What still differs, as Deviations records: the help text and the banner;
 the predefined macros' values (`_MSC_VER`, `_MSVC_TRADITIONAL`,
 `__STDC_VERSION__`, Clang's target macros) in each macro dump; `cl`'s
-warnings bcc does not report (C4101, C4100, C4189, C4244, C4018, C4706,
-C4477, C4313, C4293, C4142, C4715, C4716) and its words and codes for the
-errors outside the Diagnostics table (C1075, C2039, C2084, C2100, C2106,
-C2124, C2197, C2198, C2063); the snippet of `/diagnostics:caret`; the
+warnings bcc does not report (C4244 and C4305, whose conversion rules
+depend on the operand's form, C4477, C4473, C4474, C4476 and C4313, whose
+words name types by their typedef names, which bcc does not keep, C4142, a
+typedef redefined with another type of the same representation, which bcc
+refuses, and C4456, C4127, C4996 and others at `/W4`) and its words and
+codes for the errors outside the Diagnostics table; and, among the warnings
+in the table, the order of the unreferenced names of one block, which `cl`
+takes from its symbol table and bcc from the declarations, an unsigned
+bit-field compared with an `int`, which `cl` keeps unsigned (C4018) where C
+and bcc promote it to `int`, a call to `abort` or another library function
+bcc knows does not return, which ends a path for bcc and not for `cl`
+unless a declaration says so (C4715), the order and number of C2220 lines
+among the code generator's warnings, which vary from run to run of `cl`,
+C1075 for an unclosed member or initializer list, `cl`'s C4033 after an
+error in a `return`'s expression, and the errors of the rest of a unit
+after a syntax error (C2106 for a binary left operand is one), which bcc's
+semantic analysis does not read; the snippet of `/diagnostics:caret`; the
 system headers' paths under `/showIncludes`, which name the `INCLUDE`
 directories in each host's form, and a header found through a relative `/I`
 directory, which `cl` names relatively; the `/E` layout differences listed
