@@ -1477,7 +1477,7 @@ operands are not macro-replaced.
 | GCC | Read | Unknown pragma | Unknown pragma |
 | Clang | Read, as Clang's own | Read, with `fatal` | With `-fms-extensions`: `push` and `pop` only |
 | clang-cl | Read, as Clang's own | Read, with `fatal` | `push` and `pop` only: its warnings have no numbers |
-| `cl` | Unknown pragma | Unknown pragma | `push`, `push, n` (level `n` until the `pop`), `pop`, and `disable`, `error`, `default`, levels and `once` for the numbers bcc gives a warning; `suppress` does nothing |
+| `cl` | Unknown pragma | Unknown pragma | `push`, `push, n` (level `n` until the `pop`), `pop`, and `disable`, `error`, `default`, levels, `once` and `suppress` (the pragma's line and the next) for the numbers bcc gives a warning |
 | TCC | Unknown pragma | Unknown pragma | Unknown pragma |
 
 A pragma covers the warnings of every phase by where they arise, by output-token
@@ -1598,7 +1598,8 @@ Differences that remain:
   it. clang-cl's words are reproduced.
 - As in `cl`, `default` and a level specifier (`4: 4100`) show a numbered
   warning from that level again, undoing a `/wd` or `/we`, and `disable` and
-  `error` replace a level; `once` shows it from its own level, each time.
+  `error` replace a level; `once` shows it from its own level, the first
+  time only, and `suppress` withholds it on the pragma's line and the next.
   Under `/W0` a pragma brings nothing back, where `cl`'s `push, 4` or `error`
   would: bcc's `/W0` is `-w`.
 

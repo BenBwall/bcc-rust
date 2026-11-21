@@ -1045,7 +1045,7 @@ words, and drop bcc's notes:
 | warning C4293 | `'<<': shift count negative or too big, undefined behavior` | 1 | `shift-count-overflow`, `shift-count-negative` |
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
-| warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | `sign-compare-equality`, bcc's own |
+| warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | bcc's own, unnamed: only its number reaches it |
 | warning C4706 | `assignment used as a condition`, and `cl`'s note | 4 | `parentheses` |
 | warning C4715 | `'g': not all control paths return a value` | 1 | |
 | warning C4716 | `'h': must return a value` | 1 | |
@@ -1053,17 +1053,31 @@ words, and drop bcc's notes:
 C4018 and C4389 compare operands whose promoted types have one width and
 differ in sign, neither of them a constant, whatever its value (`-1 < u`
 draws neither). C4706 is an `if`, `while`, `do` or `for` condition that is an
-`=` assignment outside parentheses. C4293 is a constant shift count that is
-negative or not below the width of the promoted left operand. C4100, C4101
+`=` assignment outside parentheses (`cl` also warns of one that ends a comma
+expression, `if (b, a = b)`, and bcc does not). C4293 is a constant shift
+count of a binary `<<` or `>>`, not of `<<=` or `>>=`, that is negative or not
+below the width of the promoted left operand (`cl` also warns of one under
+`sizeof` and in an arm of `?:` that a constant condition skips, and bcc does
+not). Names that only `__try`, `__except` or `__finally` use count as used,
+and the warnings reach what those blocks hold. C4100, C4101
 and C4189 name a parameter, or a variable with automatic storage, that
 nothing refers to (an assignment refers to it; C4189's initializer does not),
 under the settings at its declaration; `cl` reports them at the end of the
 function, the parameters and the outermost block's variables first and then
 each inner block's in the order the blocks begin, and none once the unit has
-had an error (a warning `/WX` promotes aside), and so does bcc. C4715 and
-C4716 are `cl`'s code generator's: a path reaches the closing brace or a
-`return` without a value, and another returns one (C4715) or none does
-(C4716), `main` aside. They come after every diagnostic of the front end,
+had an error (a warning `/WX` promotes aside), and so does bcc; for an
+old-style definition C4100 is at the parameter's name in the identifier list.
+C4715 and C4716 are `cl`'s code generator's: a path reaches the closing brace
+or a `return` without a value, and the function has a `return` with a value,
+reached or not (C4715: `if (0) return 1;` is one), or has none (C4716), `main`
+aside. A call to a function declared `noreturn` or `__assume(0)` ends a path.
+They are reported only for a function `cl` generates: an external definition
+that is not a discardable inline one (`inline`, `__inline` or
+`__forceinline` without `extern`), and a function that a generated function
+or a static object's initializer names, even in code no path reaches, but not
+under `sizeof`; an unreferenced `static` or `inline` function draws neither.
+The settings at the function's name decide them, not those at the closing
+brace where they are reported. They come after every diagnostic of the front end,
 and only if it reported no error, led by the file's full path and the line
 alone (`C:\src\a.c(5) : warning C4715: ...`), with `error C2220` before each
 under `/WX`, and so they do in bcc; no group of bcc's controls them, only
@@ -1097,6 +1111,14 @@ Windows comparison with `cl` shows. The level comes from the rightmost of
 level again, as `cl` does, undoing a `/wd` or `/we`, and an error a pragma
 makes is `cl`'s `error C4018`, not a warning `/WX` promotes. `cl` announces
 with C2220 only a warning before which the unit had no error.
+`#pragma warning(suppress: N)` withholds the warning on the pragma's line
+and the next, whatever they hold (a blank line counts); a `__pragma` or
+`_Pragma` covers its own line too, the invocation's for one a macro
+produces, and a `suppress` on a line another reaches holds both to its own
+next line. `once` (and `/wo`) shows a warning the first time it is shown so
+in the unit, and not again under `once`, wherever the setting comes from.
+Neither applies to C4715 and C4716 beyond the settings at the function's
+name: `once` shows them every time.
 
 The MSVC codes bcc writes for the driver's own messages are those
 Microsoft documents: warnings D9002 (an unknown option), D9024 and D9027
@@ -1282,7 +1304,18 @@ among the code generator's warnings, which vary from run to run of `cl`,
 C1075 for an unclosed member or initializer list, `cl`'s C4033 after an
 error in a `return`'s expression, and the errors of the rest of a unit
 after a syntax error (C2106 for a binary left operand is one), which bcc's
-semantic analysis does not read; the snippet of `/diagnostics:caret`; the
+semantic analysis does not read; names that only `_Generic`'s controlling
+expression or its unselected associations use, which `cl` reports as
+unreferenced; C4013 for `__assume`, an intrinsic bcc does not declare; C2197
+once per call where `cl` writes it for each extra argument, and bcc's own
+words for C2197, C2198 and C2084 when the function is called through a
+pointer or declared with a typedef name, which `cl` keeps in its words;
+C4702 (unreachable code); C4715 and C4716 for a function in an
+`/external:W0` header, which `cl`'s code generator still reports; a
+`#pragma warning` in the middle of a line, as `cl`'s settings are those of
+lines and bcc's those of the tokens after the pragma (`suppress` aside); and
+a change another pragma makes on a `suppress` pragma's next line, which
+`cl` undoes after that line; the snippet of `/diagnostics:caret`; the
 system headers' paths under `/showIncludes`, which name the `INCLUDE`
 directories in each host's form, and a header found through a relative `/I`
 directory, which `cl` names relatively; the `/E` layout differences listed
