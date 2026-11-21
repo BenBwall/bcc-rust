@@ -39,7 +39,10 @@ handler back into its own guarded block; `sema-seh-reachability-clang` pins
 that Clang reports nothing about code that runs in an `__except` handler,
 nothing from a filter's full-expression checks but its shift, `-Wreturn-type`
 as if no handler ran, and, in a function with `__finally`, every such warning
-and no `-Wreturn-type`. Both match Clang 23.1.5 byte for byte.
+and no `-Wreturn-type`; `sema-seh-filter-limits-clang` pins that a filter
+draws none of the comparison checks Clang makes as it finishes a full
+expression (`-Wtype-limits` and its kin) but keeps
+`-Wtautological-pointer-compare`. All three match Clang 23.1.5 byte for byte.
 `pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
 group of `cl`'s C4389, as before it existed.
 

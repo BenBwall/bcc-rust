@@ -1206,8 +1206,8 @@ before the parser sees the resulting tokens.
   (`-Wjump-seh-finally`; `cl`'s C4532 for all but `return`, and for a `goto`
   only from the `__finally` block itself). Under every identity but `cl`'s,
   Clang's reachability holds: no edge enters an `__except` handler, its filter
-  is outside the graph, and a function with `__finally` has no graph at all.
-  Lowering does not translate SEH.
+  is outside the graph and draws no full-expression check, and a function with
+  `__finally` has no graph at all. Lowering does not translate SEH.
 - `parse_msvc` also owns `__asm`/`_asm` brace blocks and single-line instructions
   as opaque arena token lists with balanced parentheses, brackets and braces. A
   repeated asm keyword separates single-line instructions, and the enclosing C
