@@ -2239,3 +2239,304 @@ lessons is the same before and after at 1440x900 light.
 - **The view keys are a tab list without arrow-key movement**: the arrow
   keys step the machine everywhere on the page, so a screen-reader user
   who expects the tab pattern's arrows moves the machine instead.
+
+## Part 11: the newcomer pass's "left for later" (2026-11)
+
+Part 10 ended with eight things left for later. This part takes all eight,
+in the order of what they cost a first visit: the pipeline's opening stage,
+its output below the fold, the doubled reading line, the landing's jargon,
+the preprocessor stop's missing button, the empty Table 1 and Figure 2, the
+WebAssembly strip's second row below 1181 px, and the view keys' tab
+pattern. The work is on `agent/site-part11`.
+
+### Method
+
+The before build is `main` at `23541a8e8` (Part 10 merged). The after
+builds are this branch at `0a6290ac7` (the probe at every configuration)
+and at `fcf37926e`, which adds the empty figures' lines for a stopped run
+and the new test (the strip, contrast and the lesson walk, and the probe
+again at 1440x900 light and 1366x768 dark); the branch's last commit only
+moves Table 1's empty state into a component of its own. Both were built with `web/build.sh` as in Parts 7
+to 10: Trunk without `--release`, the dev profile at `opt-level=s`.
+Playwright scripts drove Chromium with reduced motion:
+
+- **the probe:** one script for the eight items, at 1440x900, 1366x768,
+  1024x768 and 390x844 in both themes, on both builds. It reads the
+  landing's lede (its lines and links) and focuses its first term, records
+  Table 1 and Figure 2 before the first step, the view keys' roles and what
+  `→` does on one, opens the pipeline with its view key and records the
+  stage it opens at, presses `→` on the selected stage key, then shows all
+  eleven stages and records where each one's output starts, its width and
+  every reading line on screen, with `-O0` and `-O2` side by side and with
+  the pointer on a source line; it loads a program with a function-like
+  macro into the machine and presses the stop's button if there is one; and
+  it measures the WebAssembly strip. It records sideways scroll and console
+  errors throughout;
+- **the strip:** the control strip of the machine and of the WebAssembly
+  view at 821, 900, 1024, 1100, 1180 and 1366 px, with the widest status a
+  lesson reaches put in its place (a four-digit instruction count, a
+  stop's status); the change was first tried by injecting its CSS into the
+  before build;
+- **contrast:** the WCAG contrast of each new or moved text against its
+  composited background, at 1440x900 in both themes, 1366x768 dark,
+  1024x768 light and 390x844 in both themes;
+- **the lesson walk:** Part 9's walk, every note of the twelve machine
+  lessons, before and after at 1440x900 light and after at 390x844 dark,
+  comparing each note's title, lead and value flow.
+
+The screenshots are in [`screenshots/part11/`](screenshots/part11/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours to keep them small.
+
+### Findings
+
+#### 1. The pipeline opened at stage 7
+
+The view key "Compiler pipeline" opened at stage 7, bcc IR, while the
+hero's third key and lesson 13 open at stage 1, so a newcomer who tried the
+views in order met the IR before tokens and the syntax tree.
+
+**Fixed.** Every way in now opens at stage 1, Logical lines, until the
+reader picks another stage, which the pipeline then keeps as before. The
+brief allowed the first stage whose output differs from the source
+instead, which is stage 2 for any program without a line splice, but
+skipping stage 1 would make the opening stage depend on the program and
+leave the stage keys' numbering to explain itself. Stage 1 says what
+translation phases 1 and 2 do, and its "In this program" line says that
+no line ended in a backslash, so the output is the source again; that is
+the point a newcomer should take from it. For readers who came for the IR,
+each front-end stage before the last (whose Next is already bcc IR) has a
+second key beside Next, "Skip to bcc IR", unlit so Next stays the one to
+press; it moves the focus to the IR's stage key. Figure 0's IR station
+still opens the IR directly. The probe found stage 1 open at every
+configuration, where the before build opened stage 7.
+[`pipeline-opens-1440-light`](screenshots/part11/pipeline-opens-1440-light-before.png)
+([after](screenshots/part11/pipeline-opens-1440-light-after.png)).
+
+#### 2. The output started below the fold
+
+At 1440x900 a stage's output started 659 to 732 px down, under the
+heading, the command, the hand-off, Next, "In this program", the in, out
+and why lines, the hover note and the reading line; at 1366x768 the same
+659 to 732 px left at most 109 px of output in the window, and at 1024x768
+it started 968 to 1,042 px down, below the window's foot at every stage.
+
+**Fixed.** Where the pipeline's column is at least 840 px wide (in windows
+from 1181 px, where the listing narrows to its laptop width) the card splits
+under the stage's name: the output on the left, beside the source it links
+to, and the notes on the right in a column of 20rem: the hand-off with
+Next (and Skip), "In this program", the in, out and why lines, the command
+that prints the stage, and the hover note with the output's toggles. Both
+stay readable: the notes keep their type sizes (the hand-off is 20 px
+instead of 22), and the output's editor keeps its height. The output now
+starts 403 px down at every stage at 1440x900 and 1366x768, so 365 px of
+it shows at 1366x768. It is narrower: 646 px wide at 1440 (990 before) and
+593 at 1366 (937): a line longer than about 70 characters, such as the
+IRs' folded target line, scrolls sideways in the editor. `-O0` and `-O2` side by side need the width, so then the
+card keeps the stacked layout. A narrower card (the 1024x768 laptop's,
+whose output is 556 px wide) stacks the stage as a phone does, the output first, but under the
+stage's name, with the reading line above it: the output starts 507 to 551
+px down at 1024x768. The phone is unchanged (498 px).
+[`stage-bcc-ir-1440-dark`](screenshots/part11/stage-bcc-ir-1440-dark-before.png)
+([after](screenshots/part11/stage-bcc-ir-1440-dark-after.png)),
+[`pipeline-opens-1024-light`](screenshots/part11/pipeline-opens-1024-light-before.png)
+([after](screenshots/part11/pipeline-opens-1024-light-after.png)).
+
+The brief also suggested folding the explanation behind a disclosure.
+That would bring the output up only after a first visit, and a newcomer is
+the reader who needs the explanation beside the output, so the two columns
+were chosen.
+
+#### 3. The reading line showed twice
+
+"Point at a line to read what it links to." showed under the listing and
+over the output on every laptop, and both changed together as the pointer
+moved.
+
+**Fixed.** Where the listing stands beside the pipeline (from 821 px) only
+the line over the output shows; it sits right above the output, where a
+reader pointing at a source line looks for what it became. A phone keeps
+both, since its listing and its output are a screen or more apart. The
+probe found one reading line on screen at every stage of every laptop
+configuration (two before) and two on the phone, as before.
+[`stage-pointing-1366-light`](screenshots/part11/stage-pointing-1366-light-before.png)
+([after](screenshots/part11/stage-pointing-1366-light-after.png)).
+
+#### 4. The landing's words for the compiler's forms
+
+The lede named IR, assembly and machine code with nothing to say what they
+are, and took six dense lines on every laptop. Figure 0's station names
+link to the views, not to their definitions.
+
+**Fixed.** The lede now names every form Figure 0 draws, tokens, a syntax
+tree, IR, assembly and machine code, each a link to its entry under
+Compiler terms in the glossary (Table 2). While a mouse is over one, or the
+keyboard focus is on it, its definition shows under the word in the
+glossary's own words, the way the narration's terms show theirs; Escape
+hides it, and the pointer can move onto it. A touch screen has no hover, so
+a tap follows the link to the entry. A screen reader reads the definition
+as the link's description. Below 821 px the definition shows under the
+lede, full width, so it never runs off a phone. The lede is shorter and its
+measure wider (70ch instead of 62ch): five lines at 1440, 1366 and 1024 px
+instead of six, nine on a phone instead of ten. It keeps what it said, but
+for three words: programs are no longer "real", bcc no longer "written" in
+Rust, and the rules no longer say "exactly" when each effect happens (the
+lede still says they are rules for when it happens). Figure 0's station
+names still open their views.
+[`landing-1440-light`](screenshots/part11/landing-1440-light-before.png)
+([after](screenshots/part11/landing-1440-light-after.png)),
+[`landing-term-1440-dark`](screenshots/part11/landing-term-1440-dark.png),
+[`landing-390-light`](screenshots/part11/landing-390-light-before.png)
+([after](screenshots/part11/landing-390-light-after.png)).
+
+#### 5. A preprocessor stop had no button
+
+A program with a directive the machine does not run (a function-like
+macro, `#if`, another header) stops at Note 0, "The machine starts after
+the preprocessor". Its explanation, the README and "Limits of this model"
+all sent the reader to the Preprocessor stage, but the button that the
+steps of `#include <stdio.h>` and `#define` carry was not shown: the page
+shows it for a step of kind `directive` or one that cites a clause of
+§6.10, and the stop was neither.
+
+**Fixed.** The stop now cites C99 §6.10p2 beside §5.1.1.2p1: "A directive
+is a line whose first token is #; it ends at the line's new-line", which is
+what the paragraph says of a preprocessing directive (checked against
+N1256, pp. 146-147, PDF pp. 158-159). That makes the stop a step of the
+preprocessor's, so its note shows the button. The probe loaded `#define
+TWICE(x) ((x) * 2)` at every configuration: the button showed, and pressing
+it opened stage 3, Preprocessor. The README and §3 of "How it works" now
+say the stop has a button; the site's test of the stop checks it.
+[`preprocessor-stop-1440-light`](screenshots/part11/preprocessor-stop-1440-light-before.png)
+([after](screenshots/part11/preprocessor-stop-1440-light-after.png)).
+
+#### 6. Table 1 and Figure 2 before the first step
+
+Before the first step Figure 2 said "This step is not part of an
+expression", and Table 1 was a table head with no rows.
+
+**Fixed.** Each now has a card in the blank tape's manner (its accent rule
+on the left and its capitals), in the figures' own colours: "Nothing wired
+yet: each full expression the machine evaluates is drawn here as a
+circuit: its operands feed its operators, and the wires fill with values
+step by step", and "No objects yet: each object gets a row here when its
+lifetime begins: its type and size, where it lives, the step that created
+it and its value at the playhead". Table 1's card shows whenever no object
+exists yet. Where the run stopped before its first step, as at a
+preprocessor stop, the cards would promise what will not come, so a plain
+line says that nothing was evaluated and no object began its lifetime.
+[`empty-figures-1366-dark`](screenshots/part11/empty-figures-1366-dark-before.png)
+([after](screenshots/part11/empty-figures-1366-dark-after.png)).
+
+#### 7. The WebAssembly strip below 1181 px
+
+Between 821 and 1180 px the WebAssembly view's control strip needed about
+1,105 px (the view keys 298, the transport 499, "Start at main" 142, the
+status 124, and their gaps) and took two rows, 99 px tall, below about
+1,140 px.
+
+**Fixed, down to 1024 px.** Between 821 and 1180 px the view keys drop the
+numbers in their squares, which only echo their order (a phone drops them
+too), and the strip's gaps and the keys' padding tighten. The view keys
+take 214 px and the transport 463, so the strip keeps to one row, 64 px
+tall, at 1180, 1100 and 1024 px, a four-digit instruction count included.
+The machine's strip gains the same room: at 900 px it keeps to one row
+(two before), and from 1100 px a stop's status no longer takes a second
+row. Below 1024 px the WebAssembly strip still takes two rows: it would
+need its keys' words to go, and Over, Out and Next line keep theirs because
+their icons alone do not say which is which.
+[`wasm-strip-1024-light`](screenshots/part11/wasm-strip-1024-light-before.png)
+([after](screenshots/part11/wasm-strip-1024-light-after.png)).
+
+#### 8. The view keys' tab pattern
+
+The view keys were a tab list (`role="tablist"`) whose tabs all took Tab
+and none took the arrow keys, which step the machine wherever the focus
+is. The pipeline's stage keys were a tab list in the same way.
+
+**Fixed, in two ways.** The view keys switch the whole workbench, and the
+focus is put on one on purpose: choosing a lesson focuses its view's key
+so that `→` steps at once (Part 10, finding 1). Making them real tabs would
+have taken `→` away from the machine there, and a screen reader would have
+promised arrows that step the machine instead. So they are no longer a tab
+list: they are a group of keys, "View", each pressed or not
+(`aria-pressed`), as the lesson cards and the memory display's keys are,
+and `→` on one still steps the machine. The WebAssembly view's memory
+region keys were a tab list in the same way and change the same way. The
+stage keys are another matter: the pipeline view steps nothing, so the
+arrows are free there, and they are now a tab list with the pattern's
+keys. Only the selected key takes Tab; `←` and `→` (and `↑` and `↓`)
+select the stage before or after, around the ends, `Home` and `End` the
+first and last, and the focus follows the selection. The stage card is the
+tab panel, labelled by the selected key. The probe pressed `→` on stage
+1's key at every configuration and found stage 2 selected and focused,
+the other ten keys out of the tab order, and the panel labelled by stage
+2's key; `→` on the machine's view key stepped to Note 1, as before.
+
+#### Intended changes to the text
+
+- The landing's lede is rewritten (finding 4) and its five words for the
+  compiler's forms gain their definitions.
+- Each front-end stage before the last gains the key "Skip to bcc IR"
+  (finding 1).
+- The preprocessor stop cites §6.10p2, "Preprocessing directives", and
+  shows the button "See the real preprocessor: open the Preprocessor
+  stage" (finding 5); §3 of "How it works" now says its note "has a button
+  to" the stage rather than "sends the reader to" it.
+- Figure 2 and Table 1 gain their cards, or the plain lines at a stop
+  before the first step (finding 6).
+
+None in the lessons' notes: every title, lead and value flow of the 1,254
+notes of the twelve machine lessons is the same before and after, at
+1440x900 light and, against the same before walk, at 390x844 dark.
+
+#### Checks
+
+- **No sideways scroll** at any step of the probe or the strip runs in
+  any configuration, nor at any note of the lesson walk, and no page logged
+  an error.
+- **Contrast:** nothing new is below AA. The lowest new text is the empty
+  figures' label in the accent ink on the device in the light theme,
+  4.99:1, the same ink and ground as the section numbers Part 10 measured;
+  in the dark theme it is 6.87:1. The figures' card text is 10.59:1 (light)
+  and 9.40:1 (dark); the lede's terms 15.82:1 and 13.34:1, and their
+  definitions 10.59:1 and 9.40:1; "Skip to bcc IR" 15.82:1 and 13.34:1;
+  the notes column's command line 5.89:1 and 6.22:1, as before.
+- **Keyboard and screen readers:** the view keys are a group named "View"
+  of three keys, each read as pressed or not; `→` on one steps the machine.
+  The stage keys are a tab list of which only the selected key takes Tab;
+  the arrow keys, Home and End move the selection and the focus, and the
+  card is the tab panel labelled by the selected key. "Skip to bcc IR"
+  moves the focus to the IR's stage key, since the key itself goes as the
+  stage changes. Each of the lede's terms is a link described by its
+  definition (`aria-describedby`), which shows on focus and hides on
+  Escape or blur. The reading lines stay hidden from screen readers, as
+  before; the hover note says how to use them.
+- **Reduced motion:** nothing new moves.
+- **Tests:** the site's tests (164, one of them new: the skip key at
+  exactly the front-end stages before the last, and each stage card's tab
+  panel and the stage keys' one tab stop) and its four clippy runs (native,
+  and wasm32 for hydrate, worker and compiler) pass. The test of the
+  preprocessor stop checks that its note links to the Preprocessor stage.
+  The engine is unchanged.
+
+### Left for later
+
+- **A narrow card** (the 1024x768 laptop's, and from 821 to 1180 px)
+  stacks the stage with the output first, so its hand-off, Next and Skip
+  come after the output, below the window's foot; the stage keys and the
+  heading name the stage above it.
+- **The output's column** is 646 px wide at 1440 and 593 px at 1366, so a
+  line longer than about 70 characters, such as the IRs' folded target
+  line, scrolls sideways in the editor. Giving the notes less than 20rem
+  would wrap the hand-off into more lines than the output gains.
+- **Below 1024 px** the WebAssembly strip still takes two rows (at 900 and
+  821 px), as the machine's does at a stop's status.
+- **Figure 0's stations** still open their views and carry no definitions;
+  the lede carries them for the same five words.
+- **The cells under the head** still say "No objects yet. Entering a
+  block puts the objects it declares on the tape" at a stop before the
+  first step, where Figure 2 and Table 1 now say that the run stopped.
+- **On a phone** a definition shows under the lede, not under its word, and
+  only for keyboard focus or a mouse; a tap follows the link to the
+  glossary, which takes the reader away from the landing.
