@@ -282,10 +282,9 @@
   .lede { color: var(--ink-2); font-size: 13.5px; line-height: 1.75; max-width: 70ch; }
   .lede em { font: italic 1.18em/1 var(--font-serif); color: var(--ink); }
   /* The compiler's forms in the lede: glossary links whose definitions show
-     on hover or focus. Up to 1180 px the hero is one column and a word can
-     end the lede's line at the window's edge, so the definition spans the
-     lede under it; from 1181 px the lede is the left column, under half
-     the window, and a 340 px definition under the word stays inside it. */
+     on hover, focus or a first tap. The page places the definition under
+     its word, up to 340 px wide and moved left as far as keeps it inside
+     the lede (app.rs); before the page has loaded it spans the lede. */
   .lede { position: relative; }
   .form-term { white-space: nowrap; }
   .form-term a { color: var(--ink); text-decoration: underline dotted 1.5px var(--ink-3); text-underline-offset: 4px; }
@@ -297,11 +296,10 @@
   }
   /* Bridges the gap to the word, so the pointer can move onto the tip. */
   .form-tip::before { content: ""; position: absolute; left: 0; right: 0; top: -10px; height: 10px; }
+  .form-tip[style*="width"] { right: auto; }
+  .form-tip-text { display: grid; gap: 4px; }
   .form-tip-word { color: var(--ink); font-weight: 700; }
-  @media (min-width: 1181px) {
-    .form-term { position: relative; }
-    .form-tip { right: auto; width: 340px; }
-  }
+  .form-tip-link { justify-self: start; color: var(--accent-ink); font-size: 11.5px; font-weight: 700; text-decoration: underline 1px; text-underline-offset: 3px; }
   .hero-steps { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   .hero-steps a {
     display: inline-flex; align-items: center; gap: 10px; padding: 9px 14px 9px 9px;
@@ -1367,6 +1365,17 @@
     .stage-work > .link-reading { margin: 0 0 12px; }
     .stage-notes > .stage-toolbar .stage-note { margin: 0 0 10px; }
     .stage-notes > .stage-command { align-self: flex-start; max-width: 100%; }
+  }
+  /* Beside the listing (from 821 px) a narrow card is a laptop's or a
+     tablet's, whose output runs past the window's foot: the hand-off with
+     Next (and Skip) comes before it, in a compact line, so the way on is in
+     sight without scrolling past the output. A phone keeps the output
+     first; its channel keys lead the way on. */
+  @media (min-width: 821px) {
+    @container insight (max-width: 839px) {
+      .stage-lead, .stage-lead-main { display: contents; }
+      .stage-lead-main > .stage-handoff { order: -4; margin: 0 0 12px; font-size: 18px; max-width: none; }
+    }
   }
   /* A wide card (a laptop's, from 1280 px) splits under the stage's name:
      the output on the left, beside the source it links to, and the notes
