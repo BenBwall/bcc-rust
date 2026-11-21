@@ -356,7 +356,9 @@ first read-only listing, whose folding arrows use it.
   stage before or after, `Home` and `End` the first and last.
 - The landing's lede names the compiler's forms (tokens, syntax tree, IR,
   assembly, machine code); each links to its glossary entry and shows the
-  definition under it on hover or keyboard focus (`Escape` hides it).
+  definition on hover or keyboard focus (`Escape` hides it): under the word
+  from 1181 px, where the lede is the hero's left column, and under the
+  lede, full width, in the one-column hero of a narrower window.
 - **Step** (`→` or `j`) performs one evaluation; **Back** (`←` or `k`) shows
   the previous state; **Over** (`o`) runs to the last step of the expression
   the step belongs to, through any call it makes, or from that last step to

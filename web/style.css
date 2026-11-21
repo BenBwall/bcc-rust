@@ -282,8 +282,10 @@
   .lede { color: var(--ink-2); font-size: 13.5px; line-height: 1.75; max-width: 70ch; }
   .lede em { font: italic 1.18em/1 var(--font-serif); color: var(--ink); }
   /* The compiler's forms in the lede: glossary links whose definitions show
-     on hover or focus, under the lede on a narrow screen and under the word
-     where the lede has room beside it. */
+     on hover or focus. Up to 1180 px the hero is one column and a word can
+     end the lede's line at the window's edge, so the definition spans the
+     lede under it; from 1181 px the lede is the left column, under half
+     the window, and a 340 px definition under the word stays inside it. */
   .lede { position: relative; }
   .form-term { white-space: nowrap; }
   .form-term a { color: var(--ink); text-decoration: underline dotted 1.5px var(--ink-3); text-underline-offset: 4px; }
@@ -296,7 +298,7 @@
   /* Bridges the gap to the word, so the pointer can move onto the tip. */
   .form-tip::before { content: ""; position: absolute; left: 0; right: 0; top: -10px; height: 10px; }
   .form-tip-word { color: var(--ink); font-weight: 700; }
-  @media (min-width: 821px) {
+  @media (min-width: 1181px) {
     .form-term { position: relative; }
     .form-tip { right: auto; width: 340px; }
   }
