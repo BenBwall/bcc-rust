@@ -66,6 +66,9 @@ pub(crate) struct DiagnosticPragmas<'tu> {
     suppressions: ArenaVec<'tu, Suppression>,
     /// The settings each `push` not yet popped saved.
     stack:        ArenaVec<'tu, &'tu PragmaState>,
+    /// The suppressions a `cl` `push` holds until its `pop`, by index, with
+    /// the depth of [`Self::stack`] that push made.
+    held:         ArenaVec<'tu, (usize, usize)>,
     /// Each retained copy of parser-token provenance made while the table
     /// has changes: where the copy starts, and the parser-token index its
     /// first vector came from. Retained ranges only grow, so this is sorted.
@@ -184,6 +187,7 @@ impl<'tu> DiagnosticPragmas<'tu> {
             changes:      ArenaVec::new_in(tu),
             suppressions: ArenaVec::new_in(tu),
             stack:        ArenaVec::new_in(tu),
+            held:         ArenaVec::new_in(tu),
             retained:     ArenaVec::new_in(tu),
         }
     }
@@ -549,6 +553,38 @@ impl<'tu> Context<'tu> {
         if self.diagnostic_pragmas.changes.is_empty() {
             let state = self.current_pragma_state();
             self.record_pragma_state(&state);
+        }
+    }
+
+    /// `#pragma warning(push)` under the `cl` identity on `line`, after its
+    /// push. `suppress` pushes the settings itself and pops them after its
+    /// next line, so when that line is this `push`, the pop takes this
+    /// `push`'s entry instead, and the suppression lasts until the `pop`
+    /// that matches this `push`. Microsoft Learn: "warning pragma".
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pragma_warning_push(&mut self, (file, line): (u32, u32)) {
+        let depth = self.diagnostic_pragmas.stack.len();
+        for (index, suppression) in self.diagnostic_pragmas.suppressions.iter_mut().enumerate() {
+            if suppression.file == file && suppression.last == line {
+                suppression.last = u32::MAX;
+                self.diagnostic_pragmas.held.push((depth, index));
+            }
+        }
+    }
+
+    /// `#pragma warning(pop)` under the `cl` identity on `line`, before its
+    /// pop: the suppressions the matching `push` held end on this line
+    /// ([`Self::pragma_warning_push`]).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pragma_warning_pop(&mut self, line: u32) {
+        let depth = self.diagnostic_pragmas.stack.len();
+        while let Some(&(held, index)) = self.diagnostic_pragmas.held.last()
+            && held >= depth
+        {
+            _ = self.diagnostic_pragmas.held.pop();
+            self.diagnostic_pragmas.suppressions[index].last = line;
         }
     }
 

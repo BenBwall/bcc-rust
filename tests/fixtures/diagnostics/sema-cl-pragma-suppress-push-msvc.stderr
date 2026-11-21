@@ -1,0 +1,2 @@
+sema-cl-pragma-suppress-push-msvc.c(10,9): warning C4101: 'shown': unreferenced local variable
+sema-cl-pragma-suppress-push-msvc.c(19,9): warning C4101: 'shown': unreferenced local variable

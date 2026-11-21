@@ -1599,7 +1599,9 @@ Differences that remain:
 - As in `cl`, `default` and a level specifier (`4: 4100`) show a numbered
   warning from that level again, undoing a `/wd` or `/we`, and `disable` and
   `error` replace a level; `once` shows it from its own level, the first
-  time only, and `suppress` withholds it on the pragma's line and the next.
+  time only, and `suppress` withholds it on the pragma's line and the next;
+  when that next line is a `push`, until the `push`'s `pop`, since `cl`'s
+  `suppress` then pops the `push`'s entry rather than its own.
   Under `/W0` a pragma brings nothing back, where `cl`'s `push, 4` or `error`
   would: bcc's `/W0` is `-w`.
 

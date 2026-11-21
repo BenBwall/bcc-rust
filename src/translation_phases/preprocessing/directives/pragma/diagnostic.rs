@@ -294,6 +294,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         match name {
             | Some("push") => {
                 self.context.pragma_diagnostic_push();
+                if cl {
+                    self.context.pragma_warning_push(line);
+                }
                 token = rest.next();
                 if token.is_some_and(|token| token.kind == PreprocessorTokenType::Comma) {
                     let level = rest.next();
@@ -313,6 +316,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 }
             },
             | Some("pop") => {
+                if cl {
+                    self.context.pragma_warning_pop(line.1);
+                }
                 if !self.context.pragma_diagnostic_pop() {
                     let at = match rest.clone().next() {
                         | Some(token) => token.source_vectors,

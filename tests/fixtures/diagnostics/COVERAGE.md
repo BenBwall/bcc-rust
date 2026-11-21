@@ -21,6 +21,9 @@ line, a `suppress` on a line another reaches extends both) and `once`.
 `__finally` use as used, and C4018, C4706 and C4293 inside them.
 `sema-cl-compound-shift-msvc` pins C4293 for `<<` and `>>` but not `<<=` and
 `>>=`. These three match `cl` 19.44 (`/diagnostics:column`) byte for byte.
+`sema-cl-pragma-suppress-push-msvc` pins a `suppress` whose next line is a
+`push` lasting until that `push`'s `pop`; it matches `cl` 19.44 (`/W4
+/diagnostics:column`) byte for byte.
 `pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
 group of `cl`'s C4389, as before it existed.
 
