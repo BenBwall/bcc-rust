@@ -650,6 +650,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::StatementWork(W::ReturnDone(slot, s.source_vectors)));
                 if let Some(ExpressionSlot::Parsed(e)) = slot {
+                    self.note_returned_value(e);
                     // Assignment compatibility performs the value conversion.
                     self.return_value = Some(std::ptr::from_ref(e).addr());
                     self.work.push(Work::Expression(e));
@@ -685,6 +686,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if !value_statement {
                         self.discard_expression_result(expression);
                         self.discarded_statement_value(s, expression);
+                        self.note_statement_expression(expression);
                     }
                     self.begin_expression_statement(s, expression);
                 }

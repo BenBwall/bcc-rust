@@ -103,6 +103,7 @@ mod constants;
 mod exceptional_constants;
 mod excess;
 mod floating_environment;
+mod function_nans;
 mod integer;
 mod named_constants;
 mod strict_initializers;
@@ -762,6 +763,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.record_constant_initializer(binding, initializer);
                 self.initialize_declaration(binding, initializer);
                 self.settle_strict_initializer(binding, initializer);
+                self.note_automatic_initializer(binding, initializer);
                 if let Some(errors_before) = self.constexpr_objects.remove(&binding) {
                     self.constexpr_initialized(binding, initializer, errors_before);
                 }

@@ -16,8 +16,7 @@
 //!   ([`FloatingPragmas::environment`]), keeps every function's NaNs at run
 //!   time; so does `-ftrapping-math` on the command line, where
 //!   [`Analyzer::settle_strict_initializer`] still folds an automatic aggregate
-//!   Clang's evaluator folds whole. `cl` reads the same pragmas, so they count
-//!   for its identity too.
+//!   Clang's evaluator folds whole.
 //! - **GCC's rules.** An `optimize` attribute or `#pragma GCC optimize` can
 //!   turn trapping math back on for a function (`trapping-math`,
 //!   `no-fast-math`, or an `-O` level after `-Ofast`). `#pragma GCC optimize`
@@ -37,7 +36,6 @@
 //! [`FloatingPragmas::gcc_options`]: crate::translation_phases::pragma_floating::FloatingPragmas::gcc_options
 
 use super::Analyzer;
-use crate::configuration::CompilerIdentity;
 
 impl Analyzer<'_, '_, '_> {
     /// Whether the functions of this translation unit may have a strict
@@ -62,13 +60,8 @@ impl Analyzer<'_, '_, '_> {
     /// Whether the functions of this translation unit compute their invalid
     /// operations at run time under GCC's rules although trapping math is
     /// off on the command line: it holds `#pragma GCC optimize` or
-    /// `push_options`, an `optimize` attribute came before, or, for `cl`, it
-    /// holds one of the pragmas Clang's rules read.
+    /// `push_options`, or an `optimize` attribute came before.
     pub(super) fn gcc_function_runtime(&self) -> bool {
-        let pragmas = self.context.floating_pragmas;
-        pragmas.gcc_options
-            || self.functions.optimize_attribute
-            || (self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
-                && pragmas.environment)
+        self.context.floating_pragmas.gcc_options || self.functions.optimize_attribute
     }
 }

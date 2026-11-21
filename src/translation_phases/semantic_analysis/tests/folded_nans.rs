@@ -450,7 +450,6 @@ fn a_floating_pragma_anywhere_keeps_every_nan_at_run_time() {
             for configuration in [
                 quiet(Rules::Clang),
                 quiet(Rules::Clang).with_compiler_identity(CompilerIdentity::ClangCl),
-                quiet(Rules::GccNoTrappingMath).with_compiler_identity(CompilerIdentity::Msvc),
             ] {
                 assert_eq!(
                     folded_in(&source, configuration, BinaryOperator::Division),
@@ -458,6 +457,15 @@ fn a_floating_pragma_anywhere_keeps_every_nan_at_run_time() {
                     "{configuration:?}: {source}"
                 );
             }
+            // The msvc identity keeps every NaN at run time regardless.
+            let msvc =
+                quiet(Rules::GccNoTrappingMath).with_compiler_identity(CompilerIdentity::Msvc);
+            assert!(
+                folded_in(&source, msvc, BinaryOperator::Division)
+                    .iter()
+                    .all(|&bits| bits == n),
+                "{source}"
+            );
             assert_eq!(
                 folded_in(
                     &source,
@@ -527,9 +535,9 @@ fn gcc_optimize_options_keep_the_nan_at_run_time() {
     }
 }
 
-/// Binary128 folds the same way: positive in a static initializer, and
-/// libgcc's negative default NaN where GCC leaves the operation for run
-/// time.
+/// Binary128 folds positive in a static initializer, and has libgcc's
+/// negative default NaN in a function, where bcc does not fold it again
+/// ([`Analyzer::settle_function_nans`]).
 #[test]
 fn binary128_folds_the_nan_its_compiler_computes() {
     for (source, rules, negative) in [
@@ -538,7 +546,7 @@ fn binary128_folds_the_nan_its_compiler_computes() {
         (
             "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
             Rules::Clang,
-            false,
+            true,
         ),
         (
             "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
@@ -575,6 +583,150 @@ fn binary128_folds_the_nan_its_compiler_computes() {
                 assert!(value.real.is_nan(), "{source}");
                 assert_eq!(value.real.is_negative(), negative, "{rules:?}: {source}");
             },
+        );
+    }
+}
+
+/// The tcc and msvc identities accept GCC's `-fno-trapping-math` and
+/// `-fcx-limited-range` but fold no NaN for them: TCC 0.9.27 computes every
+/// invalid operation at run time and rejects one in a static initializer,
+/// and there is no `cl` to compare with, so every NaN has the hardware's
+/// sign, in a function and in a static initializer alike.
+#[test]
+fn tcc_and_msvc_keep_every_nan_at_run_time() {
+    for identity in [CompilerIdentity::Tcc, CompilerIdentity::Msvc] {
+        for rules in [
+            Rules::Gcc,
+            Rules::GccNoTrappingMath,
+            Rules::GccLimitedComplex,
+        ] {
+            let configuration = rules.configuration().with_compiler_identity(identity);
+            for source in [
+                "double f(void) { return 0.0 / 0.0; }",
+                "void g(double); void f(void) { g(0.0 / 0.0); }",
+                "void f(void) { double d = 0.0 / 0.0; (void)d; }",
+                "void f(void) { static double d = 0.0 / 0.0; (void)d; }",
+                "double d = 0.0 / 0.0;",
+                "void f(void) { _Complex double z = (0.0 + 0.0i) / (0.0 + 0.0i); (void)z; }",
+            ] {
+                assert_eq!(
+                    folded_in(source, configuration, BinaryOperator::Division),
+                    [NEGATIVE],
+                    "{identity:?} {rules:?}: {source}"
+                );
+            }
+        }
+    }
+}
+
+/// In a function a folded NaN takes its compiler's sign only where it is
+/// the value the code produces: returned, passed to a function that is no
+/// builtin, stored, or initializing an object every read of which is such a
+/// value too, or copied into one. Where it meets a NaN computed at run time
+/// in one operation, whose result is its first operand's NaN on x86 and
+/// GCC, Clang and bcc order the operands differently, it keeps the
+/// hardware's NaN: a constant operand of such an operation, an object one
+/// reads, a copy of that object, an object read through a pointer or by a
+/// nested function, a builtin's or library function's argument, and an
+/// argument for a parameter that a function defined before reads in such an
+/// operation, which inlining the call would meet.
+#[test]
+fn a_nan_that_meets_a_run_time_operation_stays_at_run_time() {
+    let (n, p) = (NEGATIVE, POSITIVE);
+    let cases = [
+        ("double f(void) { return 0.0 / 0.0; }", p),
+        ("void g(double); void f(void) { g(-(0.0 / 0.0)); }", p),
+        (
+            "void g(double *); void f(void) { double r = 0.0 / 0.0; g(&r); }",
+            p,
+        ),
+        ("double f(void) { double r = 0.0 / 0.0; return r; }", p),
+        ("double f(void) { double r; r = 0.0 / 0.0; return r; }", p),
+        ("double h; void f(void) { double r = 0.0 / 0.0; h = r; }", p),
+        (
+            "double f(void) { double r = 0.0 / 0.0, y = r; return y; }",
+            p,
+        ),
+        (
+            "void g(double); void f(void) { struct { int i; double d[2]; } s = {1, {0.0 / 0.0, \
+             1}}; g(s.d[0]); }",
+            p,
+        ),
+        ("double f(double x) { return 0.0 / 0.0 + x; }", n),
+        ("double f(double x) { return x - (0.0 / 0.0 + 1.0); }", n),
+        (
+            "double f(double x) { double r = 0.0 / 0.0; return r + x; }",
+            n,
+        ),
+        (
+            "double f(double x) { double r = 0.0 / 0.0; return x * r; }",
+            n,
+        ),
+        (
+            "double f(double x) { double r = 0.0 / 0.0; x += r; return x; }",
+            n,
+        ),
+        (
+            "double f(double x) { double r = 0.0 / 0.0, y = r; return y + x; }",
+            n,
+        ),
+        (
+            "double f(double x) { double r = 0.0 / 0.0, *p = &r; return *p + x; }",
+            n,
+        ),
+        (
+            "double f(double x) { return __builtin_fmax(0.0 / 0.0, x); }",
+            n,
+        ),
+        (
+            "double fmax(double, double); double f(double x) { return fmax(0.0 / 0.0, x); }",
+            n,
+        ),
+        (
+            "static void put(double d) { (void)d; } void f(void) { put(0.0 / 0.0); }",
+            p,
+        ),
+        (
+            "static double add(const double *p, double y) { return *p + y; } double f(double x) { \
+             double r = 0.0 / 0.0; return add(&r, x); }",
+            n,
+        ),
+        (
+            "static double add(double a, double y) { return a + y; } double f(double x) { return \
+             add(0.0 / 0.0, x); }",
+            n,
+        ),
+        ("int f(void) { return __builtin_signbit(0.0 / 0.0); }", n),
+    ];
+    for rules in [Rules::Clang, Rules::GccNoTrappingMath] {
+        for (source, expected) in cases {
+            assert_eq!(
+                folded(source, rules, BinaryOperator::Division),
+                [expected],
+                "{rules:?}: {source}"
+            );
+        }
+    }
+    // A GNU nested function's reads count for the object it reads.
+    assert_eq!(
+        folded(
+            "double f(double x) { double r = 0.0 / 0.0; double n(void) { return r * x; } return \
+             n(); }",
+            Rules::GccNoTrappingMath,
+            BinaryOperator::Division
+        ),
+        [n]
+    );
+    // Clang folds a scalar compound literal's read; its stored value is
+    // final where the literal's value is.
+    for (source, expected) in [
+        ("double f(void) { return (double){0.0 / 0.0}; }", p),
+        ("double f(double x) { return (double){0.0 / 0.0} + x; }", n),
+    ] {
+        assert_eq!(
+            folded(source, Rules::Clang, BinaryOperator::Division),
+            [expected],
+            "{source}"
         );
     }
 }

@@ -2999,6 +2999,65 @@ hardware does, so `constants.rs` decides the sign afterwards, from
   Clang emits the operation as a constrained intrinsic that LLVM does not
   fold. Either way the value is the hardware's NaN.
 
+The tcc and msvc identities take `Runtime` everywhere, static initializers
+included, as before folded NaNs (`Analyzer::compiler_nan_source`). Both map
+to GCC's rules, but TCC 0.9.27 accepts `-fno-trapping-math` and
+`-ffast-math` and ignores them: its `gen_opif` folds only finite results, so
+its code computes every invalid operation at run time, and it rejects one in
+a static initializer ("division by zero in constant"). There is no `cl` to
+compare the msvc identity with, and it cannot be given those options except
+on bcc's own command line.
+
+### Final values (2026-11-21)
+
+In a function the folded NaN is right only where nothing else combines with
+it at run time. On x86 an operation with two NaN operands returns its first
+operand's NaN, and GCC and Clang order operands differently from bcc's
+lowering: GCC keeps a constant second at `-O2` and commutes some expressions
+at `-O0` (`r + 0*x`, `r * x`), Clang commutes `r + 0*(v/v)` at `-O0`, and
+LLVM folds an operation with a NaN constant operand to that constant at
+`-O2`. Before folded NaNs every NaN in a function was the hardware's, so
+every two-NaN combination matched by accident.
+
+So semantic analysis folds an invalid operation in a function with the
+hardware's NaN (`Runtime`, as before), and records the source above that its
+compiler would fold it with (`Analyzer::defer_function_nan`). When the
+outermost function ends, `Analyzer::settle_function_nans`
+(`function_nans.rs`) folds a constant again with that source, through the
+same `refold` that strict initializers use, only where its value is final:
+
+- returned, or passed as an argument to a function that is neither a
+  builtin nor a library function, nor a function defined earlier in the
+  translation unit whose code reads that parameter in an operation computed
+  at run time (an inlined call would meet the argument there);
+- the right operand of an assignment statement that stores into a named
+  object (not through a pointer);
+- an automatic object's initializer, including the values a compound
+  literal in it stores, and a scalar compound literal's folded read.
+
+A store or initializer counts only when every read of its object in the
+function is final as well: a return value or argument as above, the object
+whose address is passed to any function, a discarded expression statement,
+or a copy into another object whose own reads are final. Parentheses,
+casts, unary `+`, `-` and `~`, `__real__`, `__imag__`, `&`, `*`, member
+access, subscripts, comma operators and conditional arms pass a value on.
+Reads in a GNU nested function count for the enclosing function's objects.
+Everything else (an operand of an arithmetic operation or compound
+assignment computed at run time, a builtin's argument, an expression this
+does not follow, a `_Float16`, `__bf16` or binary128 value, an integer
+derived from the NaN such as `__builtin_signbit(0.0 / 0.0)`) keeps the
+hardware's NaN. A context that requires a constant (`case` labels, static
+assertions, enumeration constants, bit-field widths, alignments) folds with
+the function's source directly, since its value never reaches run time as a
+floating value. Under Clang's strict exception behavior an automatic
+aggregate's constant image is folded again only when its object is final in
+the same sense.
+
+Values that leave the function are not followed: a returned NaN that meets
+a run-time NaN in the caller, an argument for a function defined later or
+in another translation unit, and a global read by another function can
+still differ from GCC at `-O2`, where inlining exposes the combination.
+
 Under Clang's strict exception behavior an automatic array or structure is
 the exception. `EmitAutoVarInit` copies its initial value from a constant
 image when Clang's evaluator folds the whole initializer, with the positive
@@ -3049,8 +3108,7 @@ environment (`Context::floating_pragmas`, `pragma_floating.rs`), and
   `exceptions`, anywhere in the translation unit, keeps every function's
   invalid operations at run time (`Runtime`), automatic aggregates included:
   `settle_strict_initializer` folds them only when the strict exception
-  behavior comes from `-ftrapping-math` alone. `cl` reads the same pragmas,
-  so under its identity they count as well.
+  behavior comes from `-ftrapping-math` alone.
 - Under GCC's rules, `#pragma GCC optimize` or `push_options` anywhere keeps
   every function's invalid operations at run time, since an option such as
   `trapping-math`, `no-fast-math`, or an `-O` level after `-Ofast` can turn
@@ -3071,7 +3129,9 @@ meaning. The pragmas' diagnostics and their other effects are unchanged.
 
 A NaN operand passes through with its sign in every case, as GCC's
 `const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
-Binary128 folding follows the same rule. Remaining differences:
+Binary128 folding follows the same rule, except that a function's binary128
+NaN keeps the hardware's sign, which `refold` does not compute. Remaining
+differences:
 
 - GCC rewrites `x * -1.0` to `-x` and `-a + b` to `b - a`, and folds
   `__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even
@@ -3111,7 +3171,7 @@ Follow-ups found by PR #426's review, each the same before and after it:
 - Under GCC's `-ffast-math`, GCC's finite-math complex arithmetic gives
   numbers, not NaNs (`1.0` for some quotients), and bcc gives NaNs.
 - TCC 0.9.27 rejects a static initializer that makes a NaN from an invalid
-  operation, which bcc's TCC identity folds.
+  operation, which bcc's TCC identity accepts, with the hardware's NaN.
 
 ## Half-precision folding (2026-10-27)
 

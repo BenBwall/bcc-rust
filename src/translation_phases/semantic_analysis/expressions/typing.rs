@@ -849,6 +849,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     value.and_then(|value| self.round_floating(value, info.ty))
                 };
+                self.defer_function_nan(e, value);
                 info.set_floating(value);
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }

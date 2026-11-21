@@ -216,8 +216,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 order.push(e);
             }
         }
+        // Settled with the function's other NaNs, once every read of the
+        // object is known ([`Self::settle_function_nans`]).
         for &e in &order {
-            self.refold(e);
+            self.functions.nans.strict.push((binding, e));
         }
     }
 
@@ -505,7 +507,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether [`Self::refold`] folds `e` again.
-    fn refoldable(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn refoldable(&self, e: &'tu Expression<'tu>) -> bool {
         let info = self.expression_info(e);
         let ty = self.types.non_atomic(info.ty);
         if info.floating().is_none()
@@ -535,8 +537,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Folds `e` again from its operands' values, as its analysis folded it
-    /// but with the compiler's NaN for an invalid operation.
-    fn refold(&mut self, e: &'tu Expression<'tu>) {
+    /// but with the NaN of `source` for an invalid operation.
+    pub(super) fn refold(&mut self, e: &'tu Expression<'tu>, source: NanSource) {
         let info = self.expression_info(e);
         let value = match e.kind {
             | ExpressionType::Parenthesized { expression } =>
@@ -585,7 +587,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 self.types.non_atomic(right.ty),
                             ],
                             info.ty,
-                            NanSource::Compiler,
+                            source,
                         )
                     })
                     .and_then(|value| self.round_floating(value, info.ty))

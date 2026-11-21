@@ -77,13 +77,57 @@ pub(super) enum NanSource {
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Who computes an invalid operation analyzed now ([`NanSource`]): the
     /// compiler outside a function and in a static or thread-local object's
-    /// initializer, otherwise the compiler's code for a function, which
-    /// differs between the rule sets.
+    /// initializer ([`Self::compiler_nan_source`]), and the compiler's code
+    /// for the function in a context that requires a constant, whose value
+    /// never reaches run time as a floating value. Any other operation in a
+    /// function folds with the hardware's NaN, as if computed at run time;
+    /// [`Self::settle_function_nans`] folds it again with the NaN of
+    /// [`Self::function_nan_source`] where its value is final.
     pub(super) fn nan_source(&self) -> NanSource {
+        if self.functions.current.is_none() || self.initializing_static() {
+            self.compiler_nan_source()
+        } else if self.constant_contexts != 0 {
+            self.function_nan_source()
+        } else {
+            NanSource::Runtime
+        }
+    }
+
+    /// The NaN source an operation analyzed now with the hardware's NaN
+    /// folds with where its value is final ([`Self::settle_function_nans`]);
+    /// `None` where [`Self::nan_source`] already decides.
+    pub(super) fn deferred_nan_source(&self) -> Option<NanSource> {
+        if self.functions.current.is_none()
+            || self.initializing_static()
+            || self.constant_contexts != 0
+        {
+            return None;
+        }
+        Some(self.function_nan_source()).filter(|&source| source != NanSource::Runtime)
+    }
+
+    /// Who computes an invalid operation at translation time: the compiler,
+    /// except under the tcc and msvc identities, whose NaNs bcc leaves to
+    /// the hardware everywhere. TCC folds no operation whose result is not
+    /// finite (its `gen_opif`), and rejects one in a static initializer;
+    /// there is no `cl` to check against.
+    pub(super) fn compiler_nan_source(&self) -> NanSource {
+        use crate::configuration::CompilerIdentity;
+        match self.context.configuration.compiler_identity() {
+            | CompilerIdentity::Tcc | CompilerIdentity::Msvc => NanSource::Runtime,
+            | _ => NanSource::Compiler,
+        }
+    }
+
+    /// Who computes an invalid operation in the function analyzed now,
+    /// which differs between the rule sets: the hardware under the tcc and
+    /// msvc identities ([`Self::compiler_nan_source`]), which accept GCC's
+    /// `-fno-trapping-math` and `-ffast-math` but fold nothing for them.
+    pub(super) fn function_nan_source(&self) -> NanSource {
         use crate::configuration::RuleSet;
         let configuration = self.context.configuration;
-        if self.functions.current.is_none() || self.initializing_static() {
-            return NanSource::Compiler;
+        if self.compiler_nan_source() == NanSource::Runtime {
+            return NanSource::Runtime;
         }
         let limited_complex = configuration.limited_complex_arithmetic();
         match configuration.compiler_identity().rules() {
