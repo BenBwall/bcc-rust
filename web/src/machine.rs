@@ -572,6 +572,7 @@ fn tree(
                     value:    operand.map(|operand| operand_text(operand, objects, program)),
                     lvalue:   matches!(operand, Some(Operand::Address { .. })),
                     active:   evaluation.last == Some(index),
+                    skipped:  evaluation.skipped.contains(&index),
                     object:   is_name
                         .then(|| node.label.split('[').next().unwrap_or_default().to_owned()),
                     range:    range(node.range, source),
@@ -870,9 +871,9 @@ mod tests {
         );
 
         for source in [
-            "int main(void) { return 1 & 2; }\n",
-            "/*\n#define X 1\n*/\nint main(void) { return 1 & 2; }\n",
-            "// a line \\\n#define X 1\nint main(void) { return 1 & 2; }\n",
+            "int main(void) { switch (0) {} return 0; }\n",
+            "/*\n#define X 1\n*/\nint main(void) { switch (0) {} return 0; }\n",
+            "// a line \\\n#define X 1\nint main(void) { switch (0) {} return 0; }\n",
             "int a = 1 & 2; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
             "int a = 1 & 2 /* a\n*/ #define\n;",
         ] {

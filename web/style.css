@@ -1107,6 +1107,11 @@
   .schematic-gate text { fill: var(--ink); font-size: 12.5px; font-weight: 700; }
   .schematic-gate.is-active rect { fill: var(--accent); stroke: var(--accent); }
   .schematic-gate.is-active text { fill: var(--on-accent); }
+  .wire.is-skipped { stroke: var(--ink-3); stroke-dasharray: 1 4; stroke-linecap: round; }
+  .wire-value.is-skipped { fill: var(--ink-2); font-style: italic; }
+  .schematic-input.is-skipped circle { fill: none; stroke: var(--ink-3); stroke-width: 1.2; }
+  .schematic-gate.is-skipped rect { fill: none; stroke: var(--ink-3); stroke-dasharray: 3 3; }
+  .schematic-input.is-skipped text, .schematic-gate.is-skipped text { fill: var(--ink-2); font-weight: 400; }
   .schematic-empty { color: var(--ink-3); font-size: 12px; line-height: 1.6; }
   /* Before the first step: what Figure 2 and Table 1 will hold, on a card
      in the blank tape's manner (its accent rule and capitals), in the

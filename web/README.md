@@ -43,7 +43,9 @@ compiler; each part is captioned with what its lessons share
   playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
-  wired up as a schematic whose wires fill with values (Figure 2), and a
+  wired up as a schematic whose wires fill with values (Figure 2), where
+  an operand that `&&`, `||` or `?:` skips stays faint on a dotted wire
+  labelled "skipped", since it is never evaluated, and a
   datasheet lists the objects (Table 1). Objects with static storage
   duration (file-scope and `static` ones, and the unnamed char array of
   each string literal, named by its spelling) are created one step each

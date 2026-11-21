@@ -122,6 +122,7 @@ pub(super) fn flow(
         ],
         | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, to.unwrap_or("int")))],
         | EventKind::Branch => chips.branch(first),
+        | EventKind::Logical | EventKind::Conditional | EventKind::Comma => chips.sequenced(event),
         | EventKind::Call => chips.call(event),
         | EventKind::LibraryCall => chips.library_call(event, written),
         | EventKind::Directive => directive(event, program),
@@ -352,6 +353,48 @@ impl Chips<'_, '_> {
             Some(arrow("counts as")),
             Some(part("label", if truth { "true" } else { "false" })),
         ]
+    }
+
+    /// A step of `&&`, `||`, `?:` or a comma operator: the test of the
+    /// first operand, what it counts as and the result when that settles
+    /// it (C99 §6.5.13p4, §6.5.14p4, §6.5.15p4); the end of a comma's left
+    /// operand, its value discarded (§6.5.17p2); or the value the operator
+    /// yields from its last operand.
+    fn sequenced(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        let first = event.operands.first();
+        let result = event.result.as_ref();
+        let operand = |operand: Option<&Operand>| operand.map(|operand| self.operand(operand));
+        match event.kind {
+            | EventKind::Comma if event.sequence_point => vec![
+                operand(first),
+                Some(arrow(if first.is_some() { "discarded" } else { "done" })),
+            ],
+            | _ if event.sequence_point => {
+                let mut parts = self.branch(first);
+                parts.push(Some(arrow("so")));
+                parts.push(Some(part(
+                    "label",
+                    match (event.kind, result) {
+                        | (EventKind::Logical, Some(_)) => "skip the right",
+                        | (EventKind::Logical, None) => "evaluate the right",
+                        | _ if event.title.contains(": true") => "choose the second",
+                        | _ => "choose the third",
+                    },
+                )));
+                if result.is_some() {
+                    parts.extend([Some(arrow("result")), operand(result)]);
+                }
+                parts
+            },
+            | _ => vec![
+                operand(first),
+                Some(arrow("yields")),
+                operand(result).map(|chip| match event.result_type.as_deref() {
+                    | Some(ty) => typed(chip, ty),
+                    | None => chip,
+                }),
+            ],
+        }
     }
 
     /// The objects a block's entry created, indeterminate, or its exit

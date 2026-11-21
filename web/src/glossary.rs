@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 51] = [
+pub static TERMS: [Term; 54] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -173,6 +173,16 @@ pub static TERMS: [Term; 51] = [
                      it for something else (i + i++), is undefined.",
         clause:     "5.1.2.3p2",
         page:       25,
+    },
+    Term {
+        id:         "short-circuit",
+        name:       "Short-circuit evaluation",
+        phrases:    &["short-circuit evaluation"],
+        definition: "What && and || do: they evaluate their left operand first and stop when it \
+                     settles the result, so the right operand of a && whose left is 0, or of a || \
+                     whose left is nonzero, is never evaluated. p != 0 && *p > 0 relies on it.",
+        clause:     "6.5.13p4",
+        page:       101,
     },
     Term {
         id:         "full-expression",
@@ -357,6 +367,26 @@ pub static TERMS: [Term; 51] = [
                      the largest value. This is defined, unlike signed overflow.",
         clause:     "6.2.5p9",
         page:       46,
+    },
+    Term {
+        id:         "bitwise-operator",
+        name:       "Bitwise operator",
+        phrases:    &["bitwise operators", "bitwise operator"],
+        definition: "&, ^, | and ~, which work on an integer's bits one position at a time: a bit \
+                     of a & b is 1 where both operands' bits are 1, of a | b where either is, of \
+                     a ^ b where exactly one is, and ~a flips every bit.",
+        clause:     "6.5.10p4",
+        page:       99,
+    },
+    Term {
+        id:         "twos-complement",
+        name:       "Two's complement",
+        phrases:    &["two's complement"],
+        definition: "How x86-64, like every machine bcc targets, stores a negative integer: -x is \
+                     the bits of x flipped, plus 1, so -1 is all 1 bits and ~x is -x - 1. C99 \
+                     also allows two other representations, which no current machine uses.",
+        clause:     "6.2.6.2p2",
+        page:       50,
     },
     Term {
         id:         "size-t",

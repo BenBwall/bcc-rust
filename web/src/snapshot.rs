@@ -212,6 +212,10 @@ pub struct TreeNode {
     pub lvalue:   bool,
     /// The last completed operation evaluated this node.
     pub active:   bool,
+    /// Whether `&&`, `||` or `?:` decided not to evaluate this node (C99
+    /// §6.5.13p4, §6.5.14p4, §6.5.15p4): it never gets a value.
+    #[serde(default)]
+    pub skipped:  bool,
     /// The object an identifier names, for colour coding.
     pub object:   Option<String>,
     pub range:    Option<Range>,

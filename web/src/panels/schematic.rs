@@ -3,6 +3,8 @@
 //! is a gate placed by its logic level, so the full expression's operator
 //! sits at the right. A wire carries its value once the machine has
 //! evaluated it, dashed until then; the node the last step evaluated is lit.
+//! An operand that `&&`, `||` or `?:` skipped stays faint, its wire dotted
+//! and labelled "skipped", for it is never evaluated.
 
 use leptos::prelude::*;
 
@@ -151,13 +153,22 @@ fn drawing(tree: &Tree) -> impl IntoView {
                 | None => (from + 26.0, y0),
             };
             let bend = to - 14.0;
-            let state = wire_state(node.value.is_some(), node.active);
+            let state = if node.skipped {
+                "is-skipped"
+            } else {
+                wire_state(node.value.is_some(), node.active)
+            };
             // The full expression's own value is written once, at the end
             // of its wire.
             let value = shown_value(index).filter(|_| parent[index].is_some());
+            // An operand `&&`, `||` or `?:` skipped says so once, on the
+            // wire into the operator that skipped it.
+            let skipped = node.skipped
+                && parent[index].is_some_and(|parent| !tree.nodes[parent].skipped);
             view! {
                 <path class=format!("wire {state}") d=format!("M{from:.1} {y0:.1} H{bend:.1} V{y1:.1} H{to:.1}") />
                 {value.map(|value| view! { <text class="wire-value" x=from + 4.0 y=y0 - 5.0>{value}</text> })}
+                {skipped.then(|| view! { <text class="wire-value is-skipped" x=from + 4.0 y=y0 - 5.0>"skipped"</text> })}
                 {parent[index].is_none().then(|| view! {
                     <text class="wire-value" x=to + 4.0 y=y0 + 4.0>{node.value.as_deref().map_or_else(|| "?".to_owned(), shown)}</text>
                 })}
@@ -170,7 +181,11 @@ fn drawing(tree: &Tree) -> impl IntoView {
         .enumerate()
         .map(|(index, node)| {
             let (x0, y0) = (x(index), y(index));
-            let active = if node.active { " is-active" } else { "" };
+            let active = match (node.active, node.skipped) {
+                | (true, _) => " is-active",
+                | (false, true) => " is-skipped",
+                | (false, false) => "",
+            };
             if node.children.is_empty() {
                 view! {
                     <g class=format!("schematic-input{active}")>
@@ -209,8 +224,17 @@ fn columns(tree: &Tree, level: &[usize]) -> Vec<f64> {
         let widest = (0..tree.nodes.len())
             .filter(|&index| level[index] == column)
             .map(|index| {
-                let value = shown_value(tree, index)
-                    .map_or(0.0, |value| px(value.chars().count()) * VALUE_CHAR + 8.0);
+                let characters = shown_value(tree, index).map_or(0, |value| value.chars().count());
+                let characters = if tree.nodes[index].skipped {
+                    characters.max("skipped".len())
+                } else {
+                    characters
+                };
+                let value = if characters == 0 {
+                    0.0
+                } else {
+                    px(characters) * VALUE_CHAR + 8.0
+                };
                 width_of(tree, index) + value.max(GAP)
             })
             .fold(0.0, f64::max);
@@ -268,10 +292,13 @@ fn wire_state(evaluated: bool, active: bool) -> &'static str {
 /// The tree as nested lists, for screen readers.
 fn outline(tree: &Tree, index: usize) -> AnyView {
     let node = &tree.nodes[index];
-    let value = node
-        .value
-        .clone()
-        .unwrap_or_else(|| "not evaluated yet".to_owned());
+    let value = node.value.clone().unwrap_or_else(|| {
+        if node.skipped {
+            "skipped, never evaluated".to_owned()
+        } else {
+            "not evaluated yet".to_owned()
+        }
+    });
     let children = node.children.clone();
     view! {
         <li>
