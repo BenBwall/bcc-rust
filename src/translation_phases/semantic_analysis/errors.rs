@@ -172,7 +172,8 @@ pub(crate) enum InitializedObject {
 /// The errors bcc reports with `cl`'s code and words
 /// ([`SemanticErrorKind::ClError`]). Microsoft Learn: "Compiler Error C2039",
 /// "Compiler Error C2063", "Compiler Error C2084", "Compiler Error C2100",
-/// "Compiler Error C2106", "Compiler Error C2197", "Compiler Error C2198".
+/// "Compiler Error C2106", "Compiler Error C2197", "Compiler Error C2198",
+/// "Compiler Error C2703", "Compiler Error C2705".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClErrorCode {
     /// C2039: `'y': is not a member of 'S'`, with a note at the tag.
@@ -190,6 +191,10 @@ pub(crate) enum ClErrorCode {
     TooManyArguments,
     /// C2198: `'int g(int,int)': too few arguments for call`.
     TooFewArguments,
+    /// C2703: `illegal __leave statement`.
+    IllegalLeave,
+    /// C2705: `'label': illegal jump into '__try' scope`.
+    IllegalJumpIntoScope,
 }
 
 impl ClErrorCode {
@@ -202,6 +207,8 @@ impl ClErrorCode {
             | Self::LeftOperand => "C2106",
             | Self::TooManyArguments => "C2197",
             | Self::TooFewArguments => "C2198",
+            | Self::IllegalLeave => "C2703",
+            | Self::IllegalJumpIntoScope => "C2705",
         }
     }
 }
@@ -455,6 +462,25 @@ pub(crate) enum SemanticErrorKind {
     /// it cannot appear outside a function body.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
     LabelAddressOutsideFunction,
+    /// A goto into a `__try`, `__except` or `__finally` block, in Clang's
+    /// words. MSVC extension: Microsoft Learn, "Compiler Error C2705".
+    JumpIntoSehBlock,
+    /// Switch dispatch into one of those blocks.
+    /// MSVC extension: Microsoft Learn, "Compiler Error C2705".
+    SwitchIntoSehBlock,
+    /// A computed goto into or out of one of those blocks, which Clang
+    /// rejects. GNU extension: GCC manual, "Labels as Values".
+    IndirectJumpSehBlock,
+    /// A `goto`, `break`, `continue` or `return` that leaves a `__finally`
+    /// block, which a termination handler running for an exception must
+    /// not do; the name is what `cl` names: the label or the keyword.
+    /// MSVC extension: Microsoft Learn, "try-finally statement"; "Compiler
+    /// Warning (level 1) C4532".
+    JumpOutOfFinally,
+    /// `__leave` outside every `__try` block, in Clang's words.
+    /// MSVC extension: Microsoft Learn, "try-except statement"; "Compiler
+    /// Error C2703".
+    LeaveOutsideTry,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -1452,6 +1478,11 @@ impl SemanticErrorKind {
             | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
             | Self::InvalidComputedGoto => "not convertible to `const void *`",
             | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::JumpIntoSehBlock | Self::SwitchIntoSehBlock =>
+                "jumps into a structured exception handling block",
+            | Self::IndirectJumpSehBlock => "may cross a structured exception handling block",
+            | Self::LeaveOutsideTry => "not in a __try block",
+            | Self::JumpOutOfFinally => "leaves a __finally block",
             | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
@@ -1672,6 +1703,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ReturnType
                     | crate::configuration::DiagnosticGroup::InvalidNoreturn
                     | crate::configuration::DiagnosticGroup::GccNoreturn
+                    | crate::configuration::DiagnosticGroup::JumpSehFinally
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Format
                     | crate::configuration::DiagnosticGroup::Format2
@@ -2395,6 +2427,32 @@ impl SemanticErrorKind {
                 "switch dispatch enters the scope of a variably modified identifier",
                 "C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified \
                  identifier whose scope contains a case or default label",
+            ),
+            | Self::JumpIntoSehBlock => (
+                "cannot jump from this goto statement to its label",
+                "Microsoft Learn \"Compiler Error C2705\": a jump cannot enter a __try, __except \
+                 or __finally block, only leave it",
+            ),
+            | Self::SwitchIntoSehBlock => (
+                "cannot jump from switch statement to this case label",
+                "Microsoft Learn \"Compiler Error C2705\": switch dispatch cannot enter a __try, \
+                 __except or __finally block",
+            ),
+            | Self::IndirectJumpSehBlock => (
+                "cannot jump from this indirect goto statement to one of its possible targets",
+                "Clang: a computed goto can neither enter nor leave a __try, __except or \
+                 __finally block; GCC Labels as Values: it may reach every label whose address is \
+                 taken",
+            ),
+            | Self::JumpOutOfFinally => (
+                "jump out of __finally block has undefined behavior",
+                "Microsoft Learn \"try-finally statement\": a termination handler that an \
+                 exception runs must not leave its block by a jump",
+            ),
+            | Self::LeaveOutsideTry => (
+                "'__leave' statement not in __try block",
+                "Microsoft Learn \"try-except statement\": __leave ends the innermost __try \
+                 block, so it appears only inside one",
             ),
             | Self::CaseOutsideSwitch => (
                 "case or default label is outside a switch",
@@ -3135,7 +3193,15 @@ impl SemanticErrorKind {
                 crate::configuration::DiagnosticGroup::DanglingElse
                     | crate::configuration::DiagnosticGroup::ChainedComparison
             ),
-            | Self::SwitchCases(_) | Self::DeprecatedNonPrototype => true,
+            // `JumpScopeChecker`, `ActOnSEHLeaveStmt` and
+            // `CheckJumpOutOfSEHFinally` name the statement's place alone.
+            | Self::SwitchCases(_)
+            | Self::DeprecatedNonPrototype
+            | Self::JumpIntoSehBlock
+            | Self::SwitchIntoSehBlock
+            | Self::IndirectJumpSehBlock
+            | Self::LeaveOutsideTry
+            | Self::JumpOutOfFinally => true,
             | _ => false,
         }
     }
@@ -3175,6 +3241,7 @@ impl SemanticErrorKind {
             | Self::ReturnMismatch => Some(G::ReturnMismatch),
             | Self::VoidReturnMismatch => Some(G::VoidReturnMismatch),
             | Self::DeclarationMissingParameterType => Some(G::DeclarationMissingParameterType),
+            | Self::JumpOutOfFinally => Some(G::JumpSehFinally),
             | _ => self.attribute_group(),
         }
     }
@@ -3193,6 +3260,7 @@ impl SemanticErrorKind {
             | Self::SignCompareEquality => 4389,
             | Self::Parentheses(G::Parentheses) => 4706,
             | Self::ExceptionalConstant(G::ShiftCountOverflow | G::ShiftCountNegative, _) => 4293,
+            | Self::JumpOutOfFinally => 4532,
             | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
             | Self::VoidReturnMismatch => 4098,
             | Self::ReturnMismatch => 4033,
@@ -3409,7 +3477,8 @@ impl SemanticError {
     /// Warning (level 4) C4100", "Compiler Warning (level 3) C4101",
     /// "Compiler Warning (level 4) C4189", "Compiler Warning (level 3)
     /// C4018", "Compiler Warning (level 4) C4389", "Compiler Warning (level
-    /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Error C2124".
+    /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Warning
+    /// (level 1) C4532", "Compiler Error C2124".
     fn msvc_message<'d>(
         &self,
         context: &Context<'_>,
@@ -3441,6 +3510,14 @@ impl SemanticError {
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
             | SemanticErrorKind::ClError(code) => (code.code(), arena.alloc_str(name)),
+            | SemanticErrorKind::JumpOutOfFinally => (
+                "C4532",
+                format_in!(
+                    arena,
+                    "'{name}': jump out of __finally block has undefined behavior during \
+                     termination handling"
+                ),
+            ),
             | SemanticErrorKind::Unused(UnusedRule::ClParameter) => (
                 "C4100",
                 format_in!(arena, "'{name}': unreferenced parameter"),
@@ -3921,6 +3998,15 @@ impl ToDiagnostic for SemanticError {
                 // Clang's notes name places.
                 diagnostic.related_points = true;
             }
+        }
+        // Clang's notes about a jump into or out of a SEH block name places.
+        if matches!(
+            self.kind,
+            SemanticErrorKind::JumpIntoSehBlock
+                | SemanticErrorKind::SwitchIntoSehBlock
+                | SemanticErrorKind::IndirectJumpSehBlock
+        ) {
+            diagnostic.related_points = true;
         }
         for (index, &(site, words)) in self
             .related

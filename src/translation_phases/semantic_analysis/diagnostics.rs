@@ -286,16 +286,17 @@ impl Analyzer<'_, '_, '_> {
             ));
         }
         self.with_related_notes(related, |analyzer| {
-            analyzer.report_cl_error(SemanticErrorKind::ClError(code), site, name);
+            analyzer.error_with_notes(SemanticErrorKind::ClError(code), site, Some(name));
         });
     }
 
-    /// [`Self::error`] keeping the related notes, which `cl`'s errors carry.
-    fn report_cl_error(
+    /// [`Self::error`] keeping the related notes, which `cl`'s errors carry,
+    /// as do Clang's about a jump into a SEH block.
+    pub(super) fn error_with_notes(
         &mut self,
         kind: SemanticErrorKind,
         site: SourceVectors,
-        name: StringCacheId,
+        name: Option<StringCacheId>,
     ) {
         if self.tainted {
             return;
@@ -308,7 +309,7 @@ impl Analyzer<'_, '_, '_> {
             gcc_werror: false,
             kind,
             source_vectors: self.context.file_location(site),
-            name: Some(name),
+            name,
             previous: None,
             highlights: self.format_highlights(),
             origin: site,

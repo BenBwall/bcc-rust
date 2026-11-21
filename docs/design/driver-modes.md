@@ -1033,6 +1033,8 @@ words, and drop bcc's notes:
 | error C2124 | `divide or mod by zero`, of an integer constant by a constant zero | | |
 | error C2197 | `'int g(int)': too many arguments for call`, at the first extra argument | | |
 | error C2198 | `'int g(int,int)': too few arguments for call` | | |
+| error C2703 | `illegal __leave statement`, outside every `__try` block | | |
+| error C2705 | `'in': illegal jump into '__try' scope` (or `'__except'`, `'__finally'`), at the label, once; a `case` label is `'null'` | | |
 | warning C4013 | `'g' undefined; assuming extern returning int` | 3 | `implicit-function-declaration` |
 | warning C4018 | `'<': signed/unsigned mismatch`, of a relational comparison | 3 | `sign-compare` |
 | warning C4033 | `'h' must return a value` | 1 | `return-mismatch` |
@@ -1046,6 +1048,7 @@ words, and drop bcc's notes:
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
 | warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | bcc's own, unnamed: only its number reaches it |
+| warning C4532 | `'out': jump out of __finally block has undefined behavior during termination handling`, at a `goto`'s label (once) or at `break` or `continue` | 1 | `jump-seh-finally` |
 | warning C4706 | `assignment used as a condition`, and `cl`'s note | 4 | `parentheses` |
 | warning C4715 | `'g': not all control paths return a value` | 1 | |
 | warning C4716 | `'h': must return a value` | 1 | |
@@ -1059,7 +1062,10 @@ count of a binary `<<` or `>>`, not of `<<=` or `>>=`, that is negative or not
 below the width of the promoted left operand (`cl` also warns of one under
 `sizeof` and in an arm of `?:` that a constant condition skips, and bcc does
 not). Names that only `__try`, `__except` or `__finally` use count as used,
-and the warnings reach what those blocks hold. C4100, C4101
+and the warnings reach what those blocks hold. A `goto` or `case` label may
+not enter one of those blocks (C2705, naming the innermost), `__leave`
+belongs in a `__try` block (C2703), and a `goto`, `break` or `continue` that
+leaves a `__finally` block draws C4532, a `return` nothing. C4100, C4101
 and C4189 name a parameter, or a variable with automatic storage, that
 nothing refers to (an assignment refers to it; C4189's initializer does not),
 under the settings at its declaration; `cl` reports them at the end of the
@@ -1146,12 +1152,12 @@ Warning D9025", "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall,
 /wd, /we, /wo, /Wv, /WX (Warning level)", "warning pragma", "Fatal Error
 C1075", "Compiler Error C2039", "Compiler Error C2063", "Compiler Error
 C2084", "Compiler Error C2100", "Compiler Error C2106", "Compiler Error
-C2124", "Compiler Error C2197", "Compiler Error C2198", "Compiler Warning
-(level 3) C4018", "Compiler Warning (level 4) C4100", "Compiler Warning
+C2124", "Compiler Error C2197", "Compiler Error C2198", "Compiler Error
+C2703", "Compiler Error C2705", "Compiler Warning (level 3) C4018", "Compiler Warning (level 4) C4100", "Compiler Warning
 (level 3) C4101", "Compiler Warning (level 4) C4189", "Compiler Warning
 (level 1) C4293", "Compiler Warning (level 4) C4389", "Compiler Warning
-(level 4) C4706", "Compiler Warning (level 1) C4715", "Compiler Warning
-(level 1) C4716".)
+(level 4) C4706", "Compiler Warning (level 1) C4532", "Compiler Warning
+(level 1) C4715", "Compiler Warning (level 1) C4716".)
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools

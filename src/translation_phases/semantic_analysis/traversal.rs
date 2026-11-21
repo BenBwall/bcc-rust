@@ -633,6 +633,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Return(slot) => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Return);
                 self.check_noreturn_return(s.source_vectors);
                 if let Some(function) = self.functions.current {
                     let control = self.function_records[function.id].control;
@@ -671,12 +672,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             ),
             | S::Break => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Break);
                 self.generated_break();
                 self.switch_break(s);
                 self.control_jump(s, false);
                 self.functions.dead = true;
             },
             | S::Continue => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Continue);
                 self.control_jump(s, true);
                 self.functions.dead = true;
             },
@@ -705,42 +708,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(function) = self.functions.current {
                     self.function_records[function.id].assembly = true;
                 },
-            | S::Seh(seh) => self.structured_exception_handler(seh.body, seh.filter, seh.handler),
+            | S::Seh(_) => self.structured_exception_handler(s),
+            | S::SehLeave => self.check_leave(s),
             | _ => {},
         }
-    }
-
-    /// Microsoft's `__try` with its `__except` filter and handler, or its
-    /// `__finally` block, each analyzed as any other code of the function,
-    /// so that what they name counts as named. An exception may leave the
-    /// guarded block anywhere, so the filter and the handler run where it
-    /// begins, and the code after the statement as well. Lowering does not
-    /// translate the statement. Microsoft Learn: "try-except statement",
-    /// "try-finally statement". C99: §4p6, p. 7; PDF p. 19.
-    fn structured_exception_handler(
-        &mut self,
-        body: &'tu Statement<'tu>,
-        filter: Option<&'tu Expression<'tu>>,
-        handler: &'tu Statement<'tu>,
-    ) {
-        use super::statements::StatementWork as W;
-        let dead = self.functions.dead;
-        self.work
-            .push(Work::FunctionWork(FunctionWork::RestoreDead(dead)));
-        self.work
-            .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
-                self.functions.unvisited,
-            )));
-        self.work
-            .push(Work::StatementWork(W::Substatement(handler)));
-        self.work
-            .push(Work::FunctionWork(FunctionWork::RestoreDead(dead)));
-        if let Some(filter) = filter {
-            self.expression_slot(ExpressionSlot::Parsed(filter));
-            self.work
-                .push(Work::FunctionWork(FunctionWork::RestoreDead(dead)));
-        }
-        self.work.push(Work::StatementWork(W::Substatement(body)));
     }
 
     /// A label in the skipped arm prevents Clang from eliding that whole

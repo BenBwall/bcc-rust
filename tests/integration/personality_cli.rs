@@ -8970,6 +8970,78 @@ mod tests {
         }
     }
 
+    /// A jump out of a `__finally` block is `cl`'s level 1 C4532, which its
+    /// number controls, and Clang's `-Wjump-seh-finally`, which its option
+    /// controls; a jump into a SEH block is `cl`'s error C2705, as `cl`
+    /// 19.44 and Clang 23 write them.
+    #[test]
+    fn jumps_out_of_finally_take_each_compilers_warning() {
+        let directory = Directory::new();
+        directory.write(
+            "finally.c",
+            "int work(int);\nint f(int p)\n{\n    while (p--) {\n        __try { work(p); \
+             }\n        __finally { if (p) break; }\n    }\n    __try { work(p); }\n    \
+             __finally { if (p) goto out; }\nout:\n    return 0;\n}\n",
+        );
+        directory.write(
+            "into.c",
+            "int work(int);\nint g(int p)\n{\n    if (p) goto in;\n    __try {\n    in:\n        \
+             work(p);\n    } __finally { }\n    return 0;\n}\n",
+        );
+        let cl = |args: &[&str]| {
+            let output = directory.bcc("--msvc-mode", &[&["/nologo", "/c", "/Zs"], args].concat());
+            stdout(&output)
+                .lines()
+                .filter(|line| line.contains(": warning C") || line.contains(": error C"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let c4532 = [
+            "finally.c(6): warning C4532: 'break': jump out of __finally block has undefined \
+             behavior during termination handling",
+            "finally.c(10): warning C4532: 'out': jump out of __finally block has undefined \
+             behavior during termination handling",
+        ];
+        assert_eq!(cl(&["finally.c"]), c4532);
+        assert_eq!(cl(&["/wd4532", "finally.c"]), Vec::<String>::new());
+        assert_eq!(cl(&["/W0", "finally.c"]), Vec::<String>::new());
+        assert_eq!(
+            cl(&["into.c"]),
+            ["into.c(6): error C2705: 'in': illegal jump into '__try' scope"]
+        );
+        let clang = |args: &[&str]| {
+            stderr(
+                &directory.bcc(
+                    "--clang-mode",
+                    &[
+                        &[
+                            "--target=x86_64-pc-windows-msvc",
+                            "-fms-extensions",
+                            "-fsyntax-only",
+                        ][..],
+                        args,
+                    ]
+                    .concat(),
+                ),
+            )
+        };
+        let text = clang(&["finally.c"]);
+        assert_eq!(
+            text.matches("jump out of __finally block has undefined behavior [-Wjump-seh-finally]")
+                .count(),
+            2,
+            "{text}"
+        );
+        let text = clang(&["-Wno-jump-seh-finally", "finally.c"]);
+        assert!(!text.contains("__finally"), "{text}");
+        let text = clang(&["into.c"]);
+        assert!(
+            text.contains("into.c:4:12: error: cannot jump from this goto statement to its label")
+                && text.contains("into.c:5:5: note: jump bypasses initialization of __try block"),
+            "{text}"
+        );
+    }
+
     /// bcc's group for `cl`'s C4389 has no name: GCC's and Clang's pragmas,
     /// and bcc's own `-W` option, find no such warning, as before it.
     #[test]

@@ -160,6 +160,9 @@ pub(crate) struct Region {
     /// but not enter.
     pub(crate) nearest_cleanup_declaration: Option<RegionId>,
     pub(crate) nearest_statement_expression: Option<RegionId>,
+    /// The innermost `__try`, `__except` or `__finally` block, which jumps
+    /// may leave but not enter.
+    pub(crate) nearest_seh: Option<RegionId>,
     pub(crate) cleanup: CleanupKind,
     pub(crate) source: SourceVectors,
 }
@@ -174,6 +177,32 @@ pub(crate) enum RegionKind {
     /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
     CleanupDeclaration(BindingId),
+    /// The guarded block of a `__try` statement, or its `__except` or
+    /// `__finally` block. MSVC extension: Microsoft Learn, "try-except
+    /// statement", "try-finally statement".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
+    Seh(SehBlock),
+}
+
+/// The blocks of a structured exception handling statement, which a jump
+/// may not enter. Microsoft Learn: "try-except statement", "try-finally
+/// statement"; "Compiler Error C2705".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SehBlock {
+    Try,
+    Except,
+    Finally,
+}
+
+impl SehBlock {
+    /// The keyword that opens the block.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Try => "__try",
+            | Self::Except => "__except",
+            | Self::Finally => "__finally",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

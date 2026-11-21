@@ -21,9 +21,17 @@ line, a `suppress` on a line another reaches extends both) and `once`.
 `__finally` use as used, and C4018, C4706 and C4293 inside them.
 `sema-cl-compound-shift-msvc` pins C4293 for `<<` and `>>` but not `<<=` and
 `>>=`. These three match `cl` 19.44 (`/diagnostics:column`) byte for byte.
-`sema-cl-pragma-suppress-push-msvc` pins a `suppress` whose next line is a
-`push` lasting until that `push`'s `pop`; it matches `cl` 19.44 (`/W4
-/diagnostics:column`) byte for byte.
+`sema-seh-jumps-msvc` pins C2705 for a `goto` or `case` label into a `__try`,
+`__except` or `__finally` block (once per label, the innermost block, `'null'`
+for a `case`), C2703 for a `__leave` outside every `__try` block, and C4532
+at a label a `goto` leaves a `__finally` block for, at `break` and `continue`,
+and not at `return`; `sema-cl-pragma-suppress-push-msvc` pins a `suppress`
+whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
+19.44 (`/W4 /diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
+Clang's error at each `goto`, last first at the end of its function, with a
+note at each block entered, innermost first, the `case` and computed-goto
+forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
+`goto`, `break`, `continue` and `return`. It matches Clang 23.1.5 byte for byte.
 `pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
 group of `cl`'s C4389, as before it existed.
 

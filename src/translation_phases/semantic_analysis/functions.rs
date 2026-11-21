@@ -520,6 +520,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(current) = self.functions.current {
                     self.identifier_list_definition(current.syntax);
                 }
+                self.finish_seh_function();
                 self.report_reachable_warnings();
                 let order = self.function_end_order();
                 self.with_report_order(order, |analyzer| {

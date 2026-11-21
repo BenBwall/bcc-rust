@@ -1481,6 +1481,9 @@ diagnostic_groups! {
     InvalidNoreturn => Some("invalid-noreturn"), Warning, false;
     /// GCC's, which no option controls.
     GccNoreturn => None, Warning, false;
+    /// A `goto`, `break`, `continue` or `return` that leaves a `__finally`
+    /// block: Clang's warning by default, and `cl`'s C4532.
+    JumpSehFinally => Some("jump-seh-finally"), ClangWarning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds

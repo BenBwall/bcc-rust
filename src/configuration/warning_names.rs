@@ -68,9 +68,9 @@ const fn enabled(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
 /// several codes, whose `/wd` and `/we` then set them all. A group without
 /// a name (C4389's) is bcc's alone, which only these codes reach. Microsoft
 /// Learn: "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd,
-/// /we, /wo, /Wv, /WX (Warning level)" and each warning's page, as for C4090
-/// and C4113.
-pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 18] = [
+/// /we, /wo, /Wv, /WX (Warning level)" and each warning's page, as for C4090,
+/// C4113 and C4532.
+pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 19] = [
     coded(4013, 3, &[G::ImplicitFunctionDeclaration]),
     // One group holds both, so `/wd` and `/we` of either set both.
     coded(4033, 1, &[G::ReturnMismatch]),
@@ -91,6 +91,7 @@ pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 18] = [
     enabled(4389, 4, &[G::SignCompareEquality]),
     enabled(4706, 4, &[G::Parentheses]),
     enabled(4293, 1, &[G::ShiftCountOverflow, G::ShiftCountNegative]),
+    enabled(4532, 1, &[G::JumpSehFinally]),
     // The code generator's, about the end of a function, which its own
     // states govern (`ClWarnings::shown`) rather than a group.
     coded(4715, 1, &[]),

@@ -113,6 +113,11 @@ impl<'tu, 's> Builder<'tu, 's> {
             } else {
                 previous.nearest_statement_expression
             },
+            nearest_seh: if matches!(kind, RegionKind::Seh(_)) {
+                Some(id)
+            } else {
+                previous.nearest_seh
+            },
         });
         if let CleanupKind::AutomaticVla(binding) = cleanup {
             _ = self.vla_regions.insert(binding, id);
@@ -142,6 +147,7 @@ impl<'tu, 's> Builder<'tu, 's> {
             nearest_cleanup: None,
             nearest_cleanup_declaration: None,
             nearest_statement_expression: None,
+            nearest_seh: None,
         });
         self.current = Some(root);
         FunctionControl { id, root }
@@ -345,6 +351,30 @@ impl<'tu, 's> Builder<'tu, 's> {
             .nearest_statement_expression
             .filter(|&expression| !ancestor(&self.regions, expression, from))
             .map(|expression| self.regions[expression.0].source)
+    }
+
+    /// The `__try`, `__except` and `__finally` blocks a jump from `from` to
+    /// `to` enters, innermost first, as Clang's `JumpScopeChecker` notes
+    /// them; at most `N`. A jump may leave such a block but not enter it.
+    /// Microsoft Learn: "Compiler Error C2705".
+    pub(in crate::translation_phases::semantic_analysis) fn entered_seh_blocks<const N: usize>(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> [Option<RegionId>; N] {
+        let mut entered = [None; N];
+        let mut block = self.regions[to.0].nearest_seh;
+        for slot in &mut entered {
+            let Some(region) = block.filter(|&region| !ancestor(&self.regions, region, from))
+            else {
+                break;
+            };
+            *slot = Some(region);
+            block = self.regions[region.0]
+                .parent
+                .and_then(|parent| self.regions[parent.0].nearest_seh);
+        }
+        entered
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn finalize(
