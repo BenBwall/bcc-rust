@@ -29,8 +29,10 @@ use crate::{
         CL_CODED_WARNINGS,
         CompilerConfiguration,
         DiagnosticGroup,
+        ExtensionGroup,
         ExtensionPolicy,
         PragmaClass,
+        PragmaExtensionReach,
     },
     translation_phases::{
         ErrorSeverity,
@@ -92,6 +94,42 @@ struct PragmaState {
     /// What Clang's `-Weverything` last set, which reaches diagnostics
     /// that belong to no other group.
     everything:    Option<PragmaSetting>,
+    /// Which extension diagnostics the pragmas in force reach
+    /// ([`CompilerConfiguration::pragma_extension_reach`]). The command
+    /// line alone classifies the others, after any other pragma or a
+    /// balanced `push` and `pop`.
+    extensions:    ExtensionPragmas,
+}
+
+/// The extension diagnostics some pragma in force reaches: all of them, or
+/// those filed under the GCC options of the groups set in `groups`, one bit
+/// each.
+#[derive(Clone, Copy)]
+struct ExtensionPragmas {
+    all:    bool,
+    groups: u16,
+}
+
+impl ExtensionPragmas {
+    const NONE: Self = Self {
+        all:    false,
+        groups: 0,
+    };
+
+    const fn with(self, reach: PragmaExtensionReach) -> Self {
+        match reach {
+            | PragmaExtensionReach::Nothing => self,
+            | PragmaExtensionReach::Group(group) => Self {
+                groups: self.groups | 1 << group as u16,
+                ..self
+            },
+            | PragmaExtensionReach::All => Self { all: true, ..self },
+        }
+    }
+
+    const fn reach(self, group: ExtensionGroup) -> bool {
+        self.all || self.groups & 1 << group as u16 != 0
+    }
 }
 
 /// A pragma's class for an option, with Clang's `fatal`.
@@ -404,6 +442,9 @@ impl<'tu> Context<'tu> {
             state.fatal.difference(mask)
         };
         state.mapped = state.mapped.union(mask);
+        state.extensions = state
+            .extensions
+            .with(self.configuration.pragma_extension_reach(name));
         // Clang's `-Weverything` holds `-Wpedantic`.
         let everything = name == "everything"
             && self.configuration.compiler_identity().rules()
@@ -446,6 +487,9 @@ impl<'tu> Context<'tu> {
         };
         let mut state = self.current_pragma_state();
         state.configuration = state.configuration.with_pragma_group(group, class);
+        if group.holds_extensions() {
+            state.extensions = state.extensions.with(PragmaExtensionReach::All);
+        }
         self.record_pragma_state(&state);
     }
 
@@ -544,14 +588,21 @@ impl<'tu> Context<'tu> {
             mapped: crate::configuration::GroupMask::EMPTY,
             pedantic: None,
             everything: None,
+            extensions: ExtensionPragmas::NONE,
         }
     }
 
-    /// Whether a diagnostic pragma's settings hold at `source`, rather than
-    /// the command line's.
+    /// Whether a pragma in force at `source` reaches an extension diagnostic
+    /// whose tag names `group` (see [`PragmaState::extensions`]), rather
+    /// than the command line's classification of it.
     #[inline]
-    pub(crate) fn governed_by_pragma(&self, source: SourceVectors) -> bool {
-        self.pragma_state_at(source).is_some()
+    pub(crate) fn extension_pragma_governs(
+        &self,
+        group: ExtensionGroup,
+        source: SourceVectors,
+    ) -> bool {
+        self.pragma_state_at(source)
+            .is_some_and(|state| state.extensions.reach(group))
     }
 
     /// The settings at `source`, or `None` where only the command line's

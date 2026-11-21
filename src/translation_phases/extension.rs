@@ -253,15 +253,17 @@ impl<'tu> Context<'tu> {
     }
 
     /// Whether the command line alone classifies an extension diagnostic the
-    /// options reach as `reach` says at `source`: where no diagnostic pragma
-    /// governs it, under Clang's rules or GCC's. What GCC's preprocessor
-    /// reports ([`GccFiling::Preprocessor`]) stays the extension policy's.
+    /// options reach as `reach` says at `source`: where no pragma naming an
+    /// option that reaches it governs it, under Clang's rules or GCC's, as
+    /// their pragmas leave the command line's classification of every other
+    /// option standing. What GCC's preprocessor reports
+    /// ([`GccFiling::Preprocessor`]) stays the extension policy's.
     fn command_line_classifies(&self, reach: ExtensionReach, source: SourceVectors) -> bool {
         reach.option != ExtensionOption::None
             && (self.configuration.compiler_identity().rules() == RuleSet::Clang
                 || (self.configuration.compiler_identity() == CompilerIdentity::Gcc
                     && reach.gcc != GccFiling::Preprocessor))
-            && !self.governed_by_pragma(source)
+            && !self.extension_pragma_governs(reach.group, source)
     }
 
     /// Queues an extension diagnostic the options reach as `reach` says: one
@@ -352,7 +354,7 @@ impl<'tu> Context<'tu> {
         let source_vectors = self.file_location(source_vectors);
         let suppressed = self.tu_arena().alloc(Cell::new(false));
         let gcc_promotion = match reach.gcc {
-            | _ if !self.gcc_promoted(severity, reach, at) => GccPromotion::None,
+            | _ if !self.gcc_names_werror_pedantic(severity, reach) => GccPromotion::None,
             | GccFiling::Unclassified if reach.group == ExtensionGroup::Pedantic =>
                 GccPromotion::Werror,
             | _ => GccPromotion::WerrorGroup,

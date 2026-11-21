@@ -1,0 +1,13 @@
+pragma-werror-pedantic-gcc.c:6:11: error: ISO C forbids conversion of function pointer to object pointer type [-Werror=pedantic]
+    6 | void *p = (void *)g;
+      |           ^
+pragma-werror-pedantic-gcc.c:9:11: error: ISO C forbids conversion of function pointer to object pointer type [-Werror=pedantic]
+    9 | void *q = (void *)g;
+      |           ^
+pragma-werror-pedantic-gcc.c:14:11: error: ISO C forbids conversion of function pointer to object pointer type [-Werror=pedantic]
+   14 | void *r = (void *)g;
+      |           ^
+pragma-werror-pedantic-gcc.c:17:11: warning: ISO C forbids conversion of function pointer to object pointer type [-Wpedantic]
+   17 | void *s = (void *)g;
+      |           ^
+cc1: some warnings being treated as errors

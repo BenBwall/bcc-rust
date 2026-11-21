@@ -1497,7 +1497,20 @@ one of them changes nothing, nor does its `ignored "-Wunused-variable"` reach
 `-Wunused-const-variable=`, and that its `-Wextra` turns a parameter's warning on
 only with `-Wunused`;
 `-Wpedantic` covers extension diagnostics of every phase, and Clang's
-`-Weverything` every group. It stops at what the option holds: a macro
+`-Weverything` every group. A pragma naming any other option leaves the
+command line's classification of the extension diagnostics standing, as
+does a `push` and `pop` around any pragma: `-Werror`, `-Werror=pedantic`,
+Clang's `-Werror=c11-extensions` and the `-Wno-error=` forms still decide
+them, and GCC's format still names `-Werror=pedantic`. One of GCC's own
+options, such as `-Wlong-long` or `-Wvla`, reaches only what GCC files under
+it, while Clang's options of those names reach all of them, since bcc files
+Clang's `-Wvla-extension` and the like under `-Wpedantic`. Two of GCC's
+behaviours remain unmodeled: what its preprocessor reports keeps the
+extension policy's severity under a pragma naming `-Wpedantic`, and after a
+`pop` GCC keeps reporting some diagnostics a pragma inside the `push` turned
+on, its preprocessor's pedantic ones and `-Wsign-compare` under
+`-Werror=extra -Wno-extra`, where bcc restores the settings the `push`
+saved. A pragma naming `-Wpedantic` stops at what the option holds: a macro
 redefinition or a member that declares nothing stays what `-pedantic-errors` made
 it. GCC's plain `_Complex` is under it and Clang's has no group; so is Clang's
 `#line 0`, where GCC's pragma can only turn the check on, and the warning stays
@@ -3066,7 +3079,9 @@ static-assertion reports, these name the option as GCC's
 `-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error "-Wpedantic"`
 made, followed by `cc1:`'s line, and `[-Wpedantic]` on one that
 `-pedantic-errors` made and on a warning `-Wno-error=pedantic` or a pragma
-kept, in any order of the options. The extension machinery decides it
+kept, in any order of the options and after any pragma naming another option
+or `push` and `pop` (see "Diagnostic pragmas"). The parser's extension
+reports name it the same way. The extension machinery decides it
 (`Context::report_gcc_tagged_extension`) as it decides the severity.
 Clang reports no cast, words the rest as its own, and warns of the
 conditional by default (`-Wpointer-type-mismatch`); its identity is
@@ -4162,7 +4177,14 @@ constant count. GCC's ("left shift of negative value") is off by default,
 and `-Wextra` enables it from C99 on, before or after the standard option
 (`c_common_post_options` in GCC's `c-opts.cc`). `-Werror=extra` enables
 `-Wextra` and so the warning, which stays a warning, and the last of
-`-Wextra`, `-Wno-extra` and `-Werror=extra` decides. Its own option, `-Werror=` or
+`-Wextra`, `-Wno-extra` and `-Werror=extra` decides. The other options
+`-Wextra` holds (`-Wsign-compare`, `-Wempty-body`,
+`-Wmissing-field-initializers`, `-Wtype-limits` and, with `-Wunused`, the
+parameter warnings) become errors under `-Werror=extra` unless a form of
+their own came first, and a later `-Wno-error=` of one takes that back;
+`-Wno-error=extra` reaches none of them. Clang's `-Werror=extra` and
+`-Wno-error=extra` set each option of its group as the option's own forms
+do, and its `-Wextra` holds no `-Wempty-body`. Its own option, `-Werror=` or
 a pragma naming it enables it in C90 too, while a pragma naming `-Wextra`
 does not reach it. GCC warns at the operator whatever the count
 (`-1 << x`), when the left operand is a negative integer constant of a type

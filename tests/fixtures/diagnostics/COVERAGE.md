@@ -163,6 +163,18 @@ except the reported line of a warning in a macro's body, which GCC puts in the
 body. `tests/integration/diagnostic_pragmas.rs` holds the option combinations,
 lowering's warning, `cl` and the `-E` round trip.
 
+Pragmas over `-Werror` (2026-11-21): `pragma-werror-gcc` (`-std=gnu17 -pedantic
+-Werror`) and `pragma-werror-pedantic-gcc` (`-Werror=pedantic`) pin the
+`[-Werror=pedantic]` GCC 14 keeps naming, with its `cc1:` line, after a pragma
+naming another option, a `push` and `pop`, and a `push` and `pop` around one
+naming `-Wpedantic`, and the warning a later pragma naming `-Wpedantic` makes.
+`werror-extra-gcc` (`-Werror=extra -Wno-error=type-limits`) pins the errors
+GCC's `-Werror=extra` makes of the options `-Wextra` holds, and
+`werror-extra-clang` (`-Werror=extra -Wno-error=unused-parameter`) Clang 23's.
+All four match their compiler byte for byte. `diagnostic_pragmas.rs` and
+`personality_cli.rs` hold the orders of the options, both identities, and the
+parser's reports, whose words remain bcc's.
+
 Issues #49/#54 (2026-10-16): extension headlines now retain `[-Wpedantic]`,
 and the predefined-name fixture retains
 `[-Wpredefined-identifier-outside-function]`. Unknown STDC pragmas use the

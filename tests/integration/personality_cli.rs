@@ -2649,6 +2649,303 @@ mod tests {
         assert!(stderr(&output).contains(CLANG), "{}", stderr(&output));
     }
 
+    /// Each report's group and severity, from a GCC (`[-Werror=group]`) or
+    /// Clang (`[-Werror,-Wgroup]`) tag, sorted.
+    fn group_severities(text: &str) -> Vec<String> {
+        let mut found = text
+            .lines()
+            .filter_map(|line| {
+                let (head, tag) = line.strip_suffix(']')?.rsplit_once(" [")?;
+                let severity = if head.contains(": error: ") {
+                    "error"
+                } else if head.contains(": warning: ") {
+                    "warning"
+                } else {
+                    return None;
+                };
+                let group = tag.rsplit(['=', ',']).next()?.trim_start_matches("-W");
+                Some(format!("{group} {severity}"))
+            })
+            .collect::<Vec<_>>();
+        found.sort();
+        found
+    }
+
+    /// `-Werror=extra` classifies the options `-Wextra` holds. Clang 23's
+    /// sets each as its own `-Werror=` does, `-Wno-error=extra` takes that
+    /// back, and its `-Wextra` holds no `-Wempty-body`; GCC 14's also
+    /// enables `-Wextra`, leaves an option set by a form of its own before
+    /// it, and its `-Wno-error=extra` reaches none of them. A pragma naming
+    /// `-Wextra` classifies them as well, but in GCC not an option the
+    /// command line set. Each row was checked against both compilers: the
+    /// pragma, the options, the exit status, and each report's group and
+    /// severity.
+    #[test]
+    fn werror_extra_classifies_the_options_wextra_holds() {
+        const CODE: &str = "struct P { int x, y; };\nstruct P p = { 1 };\nint f(int a, int u, \
+                            unsigned v) { if (u < v) return 1; if (u) ; return 0; }\n";
+        const GCC_ERRORS: &[&str] = &[
+            "empty-body error",
+            "missing-field-initializers error",
+            "sign-compare error",
+        ];
+        const CLANG_ERRORS: &[&str] = &[
+            "empty-body warning",
+            "missing-field-initializers error",
+            "sign-compare error",
+            "unused-parameter error",
+        ];
+        const CLANG_WARNINGS: &[&str] = &[
+            "empty-body warning",
+            "missing-field-initializers warning",
+            "sign-compare warning",
+            "unused-parameter warning",
+        ];
+        let table: [(&str, &str, &[&str], &[&str]); 27] = [
+            ("gcc", "", &["-Werror=extra"], GCC_ERRORS),
+            (
+                "gcc",
+                "",
+                &["-Werror=extra", "-Wno-error=sign-compare"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers error",
+                    "sign-compare warning",
+                ],
+            ),
+            (
+                "gcc",
+                "",
+                &["-Wno-error=sign-compare", "-Werror=extra"],
+                GCC_ERRORS,
+            ),
+            (
+                "gcc",
+                "",
+                &["-Wsign-compare", "-Werror=extra"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers error",
+                    "sign-compare warning",
+                ],
+            ),
+            ("gcc", "", &["-Werror=extra", "-Wno-extra"], &[]),
+            ("gcc", "", &["-Wno-extra", "-Werror=extra"], GCC_ERRORS),
+            (
+                "gcc",
+                "",
+                &["-Wall", "-Werror=extra"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers error",
+                    "sign-compare error",
+                    "unused-parameter error",
+                ],
+            ),
+            (
+                "gcc",
+                "",
+                &["-Werror=extra", "-Wunused"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers error",
+                    "sign-compare error",
+                    "unused-parameter error",
+                ],
+            ),
+            (
+                "gcc",
+                "",
+                &["-Werror=extra", "-Wno-error=extra"],
+                GCC_ERRORS,
+            ),
+            (
+                "gcc",
+                "",
+                &["-Werror", "-Wextra", "-Wno-error=extra"],
+                GCC_ERRORS,
+            ),
+            ("gcc", "", &["-Werror=extra", "-w"], &[]),
+            (
+                "gcc",
+                "#pragma GCC diagnostic warning \"-Wextra\"\n",
+                &["-Wextra", "-Werror=sign-compare"],
+                &[
+                    "empty-body warning",
+                    "missing-field-initializers warning",
+                    "sign-compare error",
+                ],
+            ),
+            (
+                "gcc",
+                "#pragma GCC diagnostic error \"-Wextra\"\n",
+                &["-Wsign-compare"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers error",
+                    "sign-compare warning",
+                ],
+            ),
+            (
+                "gcc",
+                "#pragma GCC diagnostic error \"-Wextra\"\n",
+                &[],
+                GCC_ERRORS,
+            ),
+            (
+                "gcc",
+                "#pragma GCC diagnostic ignored \"-Wformat\"\n",
+                &["-Werror=extra"],
+                GCC_ERRORS,
+            ),
+            ("clang", "", &[], &["empty-body warning"]),
+            ("clang", "", &["-Werror=extra"], CLANG_ERRORS),
+            (
+                "clang",
+                "",
+                &["-Werror=extra", "-Wno-error=extra"],
+                CLANG_WARNINGS,
+            ),
+            (
+                "clang",
+                "",
+                &["-Werror", "-Wextra", "-Wno-error=extra"],
+                &[
+                    "empty-body error",
+                    "missing-field-initializers warning",
+                    "sign-compare warning",
+                    "unused-parameter warning",
+                ],
+            ),
+            (
+                "clang",
+                "",
+                &["-Werror=extra", "-Wno-extra", "-Wextra"],
+                CLANG_WARNINGS,
+            ),
+            ("clang", "", &["-Werror=extra", "-Wextra"], CLANG_ERRORS),
+            (
+                "clang",
+                "",
+                &["-Wextra", "-Wno-extra"],
+                &["empty-body warning"],
+            ),
+            (
+                "clang",
+                "",
+                &["-Wno-sign-compare", "-Werror=extra"],
+                CLANG_ERRORS,
+            ),
+            (
+                "clang",
+                "",
+                &["-Werror=extra", "-Wno-error=sign-compare"],
+                &[
+                    "empty-body warning",
+                    "missing-field-initializers error",
+                    "sign-compare warning",
+                    "unused-parameter error",
+                ],
+            ),
+            ("clang", "", &["-Werror=extra", "-w"], &[]),
+            (
+                "clang",
+                "#pragma clang diagnostic error \"-Wextra\"\n",
+                &[],
+                CLANG_ERRORS,
+            ),
+            (
+                "clang",
+                "#pragma clang diagnostic ignored \"-Wformat\"\n",
+                &["-Werror=extra"],
+                CLANG_ERRORS,
+            ),
+        ];
+        let directory = Directory::new();
+        for (identity, pragma, options, expected) in table {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc(&format!("--{identity}-mode"), &arguments);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                !expected.iter().any(|report| report.ends_with(" error")),
+                "{identity} {pragma}{options:?}: {text}"
+            );
+            assert_eq!(
+                group_severities(&text),
+                expected,
+                "{identity} {pragma}{options:?}: {text}"
+            );
+        }
+    }
+
+    /// GCC 14 names `-Werror=pedantic` after a parser report that `-Werror`,
+    /// `-Werror=pedantic` or `#pragma GCC diagnostic error "-Wpedantic"`
+    /// made an error, whatever pragma naming another option came before,
+    /// and `-Wpedantic` after one `-pedantic-errors` made. Each row was
+    /// checked against GCC: the pragma, the options, the severity, the
+    /// option named, and the `cc1:` line.
+    #[test]
+    fn gcc_names_the_werror_that_made_a_parser_report_an_error() {
+        const CODE: &str = "struct S {};\nint z[0];\n;\n";
+        const ERROR: &str = "#pragma GCC diagnostic error \"-Wpedantic\"\n";
+        const UNRELATED: &str = "#pragma GCC diagnostic ignored \"-Wformat\"\n";
+        const PUSH_POP: &str = "#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n";
+        const ALL: &str = "cc1: all warnings being treated as errors\n";
+        const SOME: &str = "cc1: some warnings being treated as errors\n";
+        let table: [(&str, &[&str], &str, &str); 9] = [
+            (ERROR, &[], "-Werror=pedantic", SOME),
+            (ERROR, &["-Werror"], "-Werror=pedantic", ALL),
+            (ERROR, &["-Werror=pedantic"], "-Werror=pedantic", SOME),
+            (ERROR, &["-pedantic-errors"], "-Wpedantic", ""),
+            (
+                UNRELATED,
+                &["-pedantic", "-Werror"],
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (UNRELATED, &["-Werror=pedantic"], "-Werror=pedantic", SOME),
+            (UNRELATED, &["-pedantic-errors"], "-Wpedantic", ""),
+            (PUSH_POP, &["-pedantic", "-Werror"], "-Werror=pedantic", ALL),
+            (PUSH_POP, &["-Werror=pedantic"], "-Werror=pedantic", SOME),
+        ];
+        let directory = Directory::new();
+        for (pragma, options, option, cc1) in table {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{pragma}{options:?}: {text}");
+            let reports = text
+                .lines()
+                .filter(|line| line.starts_with("c.c:") && line.contains(": error: "))
+                .collect::<Vec<_>>();
+            assert_eq!(reports.len(), 3, "{pragma}{options:?}: {text}");
+            for report in reports {
+                assert!(
+                    report.ends_with(&format!(" [{option}]")),
+                    "{pragma}{options:?}: {report}"
+                );
+            }
+            if cc1.is_empty() {
+                assert!(!text.contains("cc1:"), "{pragma}{options:?}: {text}");
+            } else {
+                assert!(text.ends_with(cc1), "{pragma}{options:?}: {text}");
+            }
+        }
+        for options in [&["-Werror"][..], &[]] {
+            directory.write("c.c", &format!("{UNRELATED}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{options:?}");
+        }
+    }
+
     /// GCC 14 accepts conversions between function and object pointers,
     /// reporting each under `-pedantic` in its own words; a conditional
     /// between `void *` and a function pointer is no error there. Clang 23
@@ -2739,9 +3036,10 @@ mod tests {
     /// `-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error
     /// "-Wpedantic"` made an error, and `cc1:` says warnings were treated as
     /// errors; it names `-Wpedantic` after one `-pedantic-errors` made, and
-    /// after a warning `-Wno-error=pedantic` or a pragma kept. Each row was
-    /// checked against GCC: the pragma, the options, the severity, the
-    /// option named, and the `cc1:` line.
+    /// after a warning `-Wno-error=pedantic` or a pragma kept. A pragma
+    /// naming another option, or a `push` and `pop` around one, changes
+    /// none of it. Each row was checked against GCC: the pragma, the
+    /// options, the severity, the option named, and the `cc1:` line.
     #[test]
     fn gcc_names_the_werror_that_made_a_pedantic_report_an_error() {
         const CODE: &str = "enum E { A = (int)(1.0 + 1) };\nint f(int x) { switch (x) { case \
@@ -2750,9 +3048,14 @@ mod tests {
                             g(void); void *p = (void *)g;\n";
         const ERROR: &str = "#pragma GCC diagnostic error \"-Wpedantic\"\n";
         const WARNING: &str = "#pragma GCC diagnostic warning \"-Wpedantic\"\n";
+        const UNRELATED: &str = "#pragma GCC diagnostic ignored \"-Wformat\"\n";
+        const PUSH_POP: &str = "#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n";
+        const POPPED: &str = "#pragma GCC diagnostic push\n#pragma GCC diagnostic error \
+                              \"-Wpedantic\"\n#pragma GCC diagnostic pop\n";
+        const LONG_LONG: &str = "#pragma GCC diagnostic warning \"-Wlong-long\"\n";
         const ALL: &str = "cc1: all warnings being treated as errors\n";
         const SOME: &str = "cc1: some warnings being treated as errors\n";
-        let table: [(&str, &[&str], &str, &str, &str); 13] = [
+        let table: [(&str, &[&str], &str, &str, &str); 22] = [
             (
                 "",
                 &["-Wpedantic", "-Werror"],
@@ -2814,6 +3117,69 @@ mod tests {
                 "",
             ),
             (WARNING, &["-pedantic-errors"], "warning", "-Wpedantic", ""),
+            (
+                UNRELATED,
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                UNRELATED,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
+            (
+                PUSH_POP,
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                PUSH_POP,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
+            (
+                PUSH_POP,
+                &["-Wpedantic", "-Wno-error=pedantic", "-Werror"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                POPPED,
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                POPPED,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
+            (
+                LONG_LONG,
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                LONG_LONG,
+                &["-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
         ];
         let directory = Directory::new();
         for (pragma, options, severity, option, cc1) in table {
