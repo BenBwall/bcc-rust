@@ -47,8 +47,8 @@ addEventListener('pointerdown', () => { usingKeyboard = false; }, true);
 // Whether the reader asked for reduced motion: the editors then jump to a
 // line rather than glide there.
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-// Where a listing's wrapped line may break: after these characters, as
-// Monaco's default list for Latin text has it, but not after a full stop.
+// Where a wrapped line may break: after these characters, as Monaco's
+// default list for Latin text has it, but not after a full stop.
 const WRAP_BREAK_AFTER = ' \t})]?|/&,;';
 const editors = new Set();
 reducedMotion.addEventListener?.('change', () => {
@@ -288,10 +288,10 @@ class Editor {
       // as one line; the line links and their marks cover all its rows.
       wordWrap: 'on',
       wrappingIndent: options.readOnly ? 'deepIndent' : 'indent',
-      // A listing's rows break at spaces and punctuation, but not at a
-      // full stop, so a number (`3.000000e-01`) or a name (`@.str.5`)
-      // stays whole; a piece too long for a row still breaks.
-      ...(options.readOnly ? { wordWrapBreakAfterCharacters: WRAP_BREAK_AFTER } : {}),
+      // Rows break at spaces and punctuation, but not at a full stop, so
+      // a number (`0.2`, `3.000000e-01`) or a name (`@.str.5`) stays
+      // whole; a piece too long for a row still breaks.
+      wordWrapBreakAfterCharacters: WRAP_BREAK_AFTER,
       stickyScroll: { enabled: false },
       accessibilitySupport: 'auto',
       quickSuggestions: false,
