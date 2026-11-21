@@ -1770,8 +1770,10 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
     let pressed = StoredValue::new((false, false));
     // Whether a press inside the word, its definition included, is under
     // way: a tap on the definition's text moves the focus to the page,
-    // which must not hide it. A click or a key ends the press.
+    // which must not hide it. A click or a key ends the press. The
+    // definition it keeps open hides when the focus lands elsewhere.
     let held = StoredValue::new(false);
+    let kept = StoredValue::new(false);
     let show = move || {
         place.set(form_tip_place(word));
         open.set(true);
@@ -1781,6 +1783,13 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
         let _handle = window_event_listener(ev::pointerdown, move |event| {
             if open.get_untracked() && !within(word, event.target()) {
                 held.set_value(false);
+                kept.set_value(false);
+                open.set(false);
+            }
+        });
+        let _handle = window_event_listener(ev::focusin, move |event| {
+            if kept.get_value() && !within(word, event.target()) {
+                kept.set_value(false);
                 open.set(false);
             }
         });
@@ -1809,12 +1818,19 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
             }
             on:pointerdown=move |_| held.set_value(true)
             on:click=move |_| held.set_value(false)
-            on:focusin=move |_| show()
+            on:focusin=move |_| {
+                kept.set_value(false);
+                show();
+            }
             // Focus that moves onto the definition's own link, or leaves
             // for the page under a press on the definition, keeps it open.
             on:focusout=move |event| {
-                if !held.get_value() && !within(word, event.related_target()) {
-                    open.set(false);
+                if !within(word, event.related_target()) {
+                    if held.get_value() {
+                        kept.set_value(true);
+                    } else {
+                        open.set(false);
+                    }
                 }
             }
             on:keydown=move |event| {
