@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 49] = [
+pub static TERMS: [Term; 51] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -470,6 +470,15 @@ pub static TERMS: [Term; 49] = [
         page:       95,
     },
     Term {
+        id:         "indirection",
+        name:       "Indirection",
+        phrases:    &["indirection"],
+        definition: "The unary * operator: *p is the object p points to, not a copy of it, so \
+                     reading *p reads that object and storing into *p changes it.",
+        clause:     "6.5.3.2p4",
+        page:       91,
+    },
+    Term {
         id:         "null-pointer",
         name:       "Null pointer",
         phrases:    &["null pointer"],
@@ -477,6 +486,16 @@ pub static TERMS: [Term; 49] = [
                      pointer type gives one.",
         clause:     "6.3.2.3p3",
         page:       59,
+    },
+    Term {
+        id:         "dangling-pointer",
+        name:       "Dangling pointer",
+        phrases:    &["dangling pointer", "dangling"],
+        definition: "A pointer to an object whose lifetime has ended, such as an automatic \
+                     (non-static) local of a function that has returned. Its value is \
+                     indeterminate, and using it is undefined.",
+        clause:     "6.2.4p2",
+        page:       44,
     },
     Term {
         id:         "cast",

@@ -1747,10 +1747,12 @@ fn Hero(state: State) -> impl IntoView {
 }
 
 /// A word of the landing for one of the forms the compiler gives a program:
-/// a link to its glossary entry, with the entry's definition beside it while
-/// a mouse is over it or the keyboard focus is on it (Escape hides it). A
-/// touch screen has no hover, so a tap follows the link to the entry; a
-/// screen reader reads the definition as the link's description.
+/// a link to its glossary entry, with the entry's definition under the word
+/// while a mouse is over it or the keyboard focus is on it (Escape hides
+/// it). A touch screen has no hover, so a first tap shows the definition,
+/// with a link to the entry in it, and a second tap on the word follows the
+/// link; a tap elsewhere hides it. A screen reader reads the definition as
+/// the link's description.
 #[component]
 fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
     // The page is rendered at build time, so a word without an entry fails
@@ -1760,13 +1762,53 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
         .find(|term| term.id == id)
         .expect("each form the landing names is a compiler term");
     let open = RwSignal::new(false);
+    let place = RwSignal::new(None::<FormTipPlace>);
+    let word = NodeRef::<leptos::html::Span>::new();
+    // Whether the pointer that pressed the word is a touch, and whether the
+    // definition showed before it did: a tap that finds it hidden shows it
+    // instead of following the link.
+    let pressed = StoredValue::new((false, false));
+    // Whether a press inside the word, its definition included, is under
+    // way: a tap on the definition's text moves the focus to the page,
+    // which must not hide it. A click or a key ends the press. The
+    // definition it keeps open hides when the focus lands elsewhere.
+    let held = StoredValue::new(false);
+    let kept = StoredValue::new(false);
+    let show = move || {
+        place.set(form_tip_place(word));
+        open.set(true);
+    };
+    Effect::new(move || {
+        // The page lives as long as the listeners.
+        let _handle = window_event_listener(ev::pointerdown, move |event| {
+            if open.get_untracked() && !within(word, event.target()) {
+                held.set_value(false);
+                kept.set_value(false);
+                open.set(false);
+            }
+        });
+        let _handle = window_event_listener(ev::focusin, move |event| {
+            if kept.get_value() && !within(word, event.target()) {
+                kept.set_value(false);
+                open.set(false);
+            }
+        });
+        // A resize or a rotation moves the word, so an open definition
+        // follows it.
+        let _handle = window_event_listener(ev::resize, move |_| {
+            if open.get_untracked() {
+                place.set(form_tip_place(word));
+            }
+        });
+    });
     let tip = format!("form-tip-{id}");
     view! {
         <span
             class="form-term"
+            node_ref=word
             on:pointerenter=move |event| {
                 if event.pointer_type() == "mouse" {
-                    open.set(true);
+                    show();
                 }
             }
             on:pointerleave=move |event| {
@@ -1774,22 +1816,100 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
                     open.set(false);
                 }
             }
-            on:focusin=move |_| open.set(true)
-            on:focusout=move |_| open.set(false)
+            on:pointerdown=move |_| held.set_value(true)
+            on:click=move |_| held.set_value(false)
+            on:focusin=move |_| {
+                kept.set_value(false);
+                show();
+            }
+            // Focus that moves onto the definition's own link, or leaves
+            // for the page under a press on the definition, keeps it open.
+            on:focusout=move |event| {
+                if !within(word, event.related_target()) {
+                    if held.get_value() {
+                        kept.set_value(true);
+                    } else {
+                        open.set(false);
+                    }
+                }
+            }
             on:keydown=move |event| {
+                held.set_value(false);
                 if event.key() == "Escape" && open.get_untracked() {
                     event.stop_propagation();
                     open.set(false);
                 }
             }
         >
-            <a href=format!("#term-{id}") aria-describedby=tip.clone()>{written}</a>
-            <span class="form-tip" role="tooltip" id=tip hidden=move || !open.get()>
-                <b class="form-tip-word">{term.name}</b>
-                {term.definition}
+            <a
+                href=format!("#term-{id}")
+                aria-describedby=tip.clone()
+                on:pointerdown=move |event| pressed.set_value((event.pointer_type() != "mouse", open.get_untracked()))
+                on:click=move |event| {
+                    let (touch, was_open) = pressed.get_value();
+                    pressed.set_value((false, false));
+                    if touch && !was_open {
+                        event.prevent_default();
+                        show();
+                    }
+                }
+            >
+                {written}
+            </a>
+            <span
+                class="form-tip"
+                hidden=move || !open.get()
+                style:left=move || place.get().map(|place| format!("{}px", place.left))
+                style:width=move || place.get().map(|place| format!("{}px", place.width))
+                style:top=move || place.get().map(|place| format!("{}px", place.top))
+            >
+                <span class="form-tip-text" role="tooltip" id=tip>
+                    <b class="form-tip-word">{term.name}</b>
+                    {term.definition}
+                </span>
+                // For the pointer: the keyboard and screen readers have the
+                // word's own link to the same entry.
+                <a class="form-tip-link" href=format!("#term-{id}") tabindex="-1" aria-hidden="true">
+                    "Read it in the glossary →"
+                </a>
             </span>
         </span>
     }
+}
+
+/// Where a landing word's definition goes in the lede: under the word, as
+/// wide as the lede allows up to 340 px, and moved left as far as keeps it
+/// inside the lede.
+#[derive(Clone, Copy, PartialEq)]
+struct FormTipPlace {
+    left:  f64,
+    width: f64,
+    top:   f64,
+}
+
+#[cfg(feature = "hydrate")]
+fn form_tip_place(word: NodeRef<leptos::html::Span>) -> Option<FormTipPlace> {
+    let word = word.get_untracked()?;
+    let lede = word.closest(".lede").ok()??.get_bounding_client_rect();
+    let link = word.first_element_child()?.get_bounding_client_rect();
+    let width = lede.width().min(340.0);
+    Some(FormTipPlace {
+        left: (link.left() - lede.left()).clamp(0.0, (lede.width() - width).max(0.0)),
+        width,
+        top: link.bottom() - lede.top() + 6.0,
+    })
+}
+
+#[cfg(not(feature = "hydrate"))]
+fn form_tip_place(_word: NodeRef<leptos::html::Span>) -> Option<FormTipPlace> {
+    None
+}
+
+/// Whether `target` is inside the element `node` holds.
+fn within(node: NodeRef<leptos::html::Span>, target: Option<web_sys::EventTarget>) -> bool {
+    let target = target.and_then(|target| target.dyn_into::<web_sys::Node>().ok());
+    node.get_untracked()
+        .is_some_and(|node| node.contains(target.as_ref()))
 }
 
 /// How to read the page, drawn as a train graph (Marey's time-distance
@@ -1800,15 +1920,30 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
 /// the view that shows it.
 #[component]
 fn ReadingMap(state: State) -> impl IntoView {
-    // Each station: its row, name, what the statement looks like there, and
-    // the stage that shows it.
-    const STATIONS: [(&str, &str, Stage); 6] = [
-        ("Tokens", "total = total + next ;", Stage::Tokens),
-        ("Syntax tree", "=(total, +(total, next))", Stage::SyntaxTree),
-        ("Types", "int = int + int", Stage::SemanticTypes),
-        ("IR", "load · add · store", Stage::Ir),
-        ("Assembly", "addl %ecx, %eax", Stage::Asm),
-        ("Machine code", "01 c8", Stage::MachineCode),
+    // Each station: its row, name, what the statement looks like there, the
+    // stage that shows it and its glossary entry, if it has one.
+    const STATIONS: [(&str, &str, Stage, Option<&str>); 6] = [
+        (
+            "Tokens",
+            "total = total + next ;",
+            Stage::Tokens,
+            Some("token"),
+        ),
+        (
+            "Syntax tree",
+            "=(total, +(total, next))",
+            Stage::SyntaxTree,
+            Some("syntax-tree"),
+        ),
+        ("Types", "int = int + int", Stage::SemanticTypes, None),
+        ("IR", "load · add · store", Stage::Ir, Some("ir")),
+        ("Assembly", "addl %ecx, %eax", Stage::Asm, Some("assembly")),
+        (
+            "Machine code",
+            "01 c8",
+            Stage::MachineCode,
+            Some("machine-code"),
+        ),
     ];
     let row = |index: usize| 74.0 + crate::panels::px(index) * 34.0;
     let stop = |index: usize| 150.0 + crate::panels::px(index) * 52.0;
@@ -1840,7 +1975,7 @@ fn ReadingMap(state: State) -> impl IntoView {
                         <text class="map-event" x=x + 4.0 y="33">{what}</text>
                     }).collect_view()}
                     <path class="map-train" d=track />
-                    {STATIONS.iter().enumerate().map(|(index, (_, form, _))| view! {
+                    {STATIONS.iter().enumerate().map(|(index, (_, form, ..))| view! {
                         <circle class="map-stop" cx=stop(index) cy=row(index) r="3" />
                         <text class="map-form" x=stop(index) + 24.0 y=row(index) + 4.0>{*form}</text>
                     }).collect_view()}
@@ -1851,11 +1986,19 @@ fn ReadingMap(state: State) -> impl IntoView {
                     <li class="is-machine">
                         <a href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>"Abstract machine"</a>
                     </li>
-                    {STATIONS.iter().enumerate().map(|(index, (name, _, stage))| {
+                    // A mouse over a station shows what the form is, in the
+                    // glossary's words (the lede's definitions), or for the
+                    // types, which have no entry, in the stage's; a screen
+                    // reader reads it as the link's description.
+                    {STATIONS.iter().enumerate().map(|(index, (name, _, stage, term))| {
                         let stage = *stage;
+                        let meaning = COMPILER_TERMS
+                            .iter()
+                            .find(|entry| Some(entry.id) == *term)
+                            .map_or_else(|| stage.handoff(), |entry| entry.definition);
                         view! {
                             <li style:--row=index.to_string()>
-                                <a href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, Some(stage))>{*name}</a>
+                                <a href="#workbench" title=meaning on:click=move |_| state.open_view(Mode::Pipeline, Some(stage))>{*name}</a>
                             </li>
                         }
                     }).collect_view()}

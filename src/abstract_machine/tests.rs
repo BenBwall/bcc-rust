@@ -827,6 +827,66 @@ fn expression_trees_fill_in_as_evaluation_proceeds() {
 }
 
 #[test]
+fn a_return_ends_only_the_automatic_objects_of_its_frame() {
+    // C99 §6.2.4p3: a static local lives for the whole run, so the return
+    // names only the parameters and automatic locals that end (§6.2.4p5).
+    let source = "int count(int step) { static int total; int next = total + step; total = next; \
+                  return next; } int main(void) { count(1); return count(2); }";
+    let returns: Vec<_> = states(source)
+        .into_iter()
+        .filter(|state| state.event.kind == EventKind::Return)
+        .map(|state| state.event)
+        .collect();
+    let first = &returns[0];
+    assert_eq!(
+        first.summary,
+        "The return hands 1 back as the value of `count(1)`, and the frame of count ends: `step` \
+         and `next` cease to exist."
+    );
+    assert!(!first.summary.contains("total"), "{}", first.summary);
+    assert!(
+        !first.explanation.contains("`total`"),
+        "{}",
+        first.explanation
+    );
+    assert!(
+        first
+            .note
+            .contains("automatic locals (those not declared static)")
+            && first.note.contains("a static local lasts the whole run"),
+        "{}",
+        first.note
+    );
+    // One ended object takes a singular verb; more than three are summed up.
+    let one = states("int id(int x) { return x; } int main(void) { return id(4); }")
+        .into_iter()
+        .find(|state| state.event.kind == EventKind::Return)
+        .expect("id returns")
+        .event;
+    assert!(
+        one.summary
+            .ends_with("the frame of id ends: `x` ceases to exist."),
+        "{}",
+        one.summary
+    );
+    let many = states(
+        "int sum(int a, int b, int c, int d) { return a + b + c + d; } int main(void) { return \
+         sum(1, 2, 3, 4); }",
+    )
+    .into_iter()
+    .find(|state| state.event.kind == EventKind::Return)
+    .expect("sum returns")
+    .event;
+    assert!(
+        many.summary.ends_with(
+            "the frame of sum ends: its parameters and automatic locals cease to exist."
+        ),
+        "{}",
+        many.summary
+    );
+}
+
+#[test]
 fn calls_returns_and_block_exits_explain_frames_and_lifetimes() {
     let source = "int twice(int n) { int r = n + n; return r; } int main(void) { int v = \
                   twice(3); { int t = v; } return v; }";
@@ -860,6 +920,13 @@ fn calls_returns_and_block_exits_explain_frames_and_lifetimes() {
         .expect("twice returns");
     let event = &states[returned].event;
     assert_eq!(event.title, "Return 6 from twice");
+    assert_eq!(
+        event.summary,
+        "The return hands 6 back as the value of `twice(3)`, and the frame of twice ends: `n` and \
+         `r` cease to exist."
+    );
+    // C99 §6.2.4p2: a pointer to an ended object becomes indeterminate.
+    assert!(event.note.contains("dangling pointer"), "{}", event.note);
     assert!(
         event.explanation.contains("`twice(3)` now has the value 6"),
         "{}",
@@ -922,6 +989,22 @@ fn pointer_events_describe_decay_one_past_and_indirection() {
     assert!(!arithmetic[1].explanation.contains("one-past-the-end"));
     let indirection = find(EventKind::Dereference);
     assert_eq!(indirection[0].title, "`*p` designates a[1]");
+    // C99 §6.5.3.2p4: `*p` is an lvalue designating the object, not its
+    // value; footnote 87 names a null or dangling pointer as invalid.
+    assert_eq!(
+        indirection[0].summary,
+        "`*p` follows the pointer `p` to the object it points to: `*p` now stands for a[1] itself."
+    );
+    assert!(
+        indirection[0].explanation.contains("not a copy of it"),
+        "{}",
+        indirection[0].explanation
+    );
+    assert!(
+        indirection[0].note.contains("null or dangling pointer"),
+        "{}",
+        indirection[0].note
+    );
     let fault = run("int main(void) { int a[2] = {1, 2}; return a[2]; }");
     let event = &fault.state().event;
     assert_eq!(event.kind, EventKind::Fault);
@@ -991,6 +1074,37 @@ fn names_are_narrated_by_what_their_operator_does() {
     // A declarator is not an expression: no primary-expression citation.
     assert_eq!(initializer.clauses[0].id, "6.7.8p11");
     assert_eq!(initializer.note, "");
+    // The object began with its block (C99 §6.2.4p5); the declaration
+    // creates nothing, it names the object its initializer fills.
+    assert!(
+        initializer
+            .summary
+            .ends_with("the object this declaration names.")
+            && initializer
+                .explanation
+                .contains("its object already exists"),
+        "{}",
+        initializer.explanation
+    );
+    // C99 §6.7.8p14 and §6.7.8p13: a char array takes a string literal's
+    // characters, a structure the value of one of its type.
+    let cited = |source: &str| {
+        self::states(source)
+            .into_iter()
+            .find(|state| state.event.title.ends_with("receives its initial value"))
+            .map(|state| state.event.clauses[0].id)
+            .expect("a declaration with an initializer")
+    };
+    assert_eq!(
+        cited("int main(void) { char s[] = \"ab\"; return s[0]; }"),
+        "6.7.8p14"
+    );
+    assert_eq!(
+        cited(
+            "struct p { int x; }; int main(void) { struct p a = {1}; struct p b = a; return b.x; }"
+        ),
+        "6.7.8p13"
+    );
     let assigned = states
         .iter()
         .find(|state| state.event.title == "`x` is where the result goes")
@@ -1070,9 +1184,12 @@ fn undefined_behavior_is_titled_by_its_cause() {
         event.title,
         "Undefined behavior: subscript of a null pointer"
     );
-    // The lead quotes the program's own subscript.
+    // The lead quotes the program's own subscript, its index parenthesized
+    // as C99 §6.5.2.1p2's (E2) is.
     assert!(
-        event.summary.starts_with("`q[i + 1]` means `*(q + i + 1)`"),
+        event
+            .summary
+            .starts_with("`q[i + 1]` means `*(q + (i + 1))`"),
         "{}",
         event.summary
     );
@@ -1114,7 +1231,7 @@ fn a_decrement_is_narrated_as_a_subtraction() {
         decrement.explanation
     );
     let cited = |source: &str| {
-        states(source)
+        self::states(source)
             .into_iter()
             .find(|state| state.event.kind == EventKind::Increment)
             .map(|state| state.event.clauses[0].id)
@@ -1210,6 +1327,51 @@ fn binary_operators_say_their_operand_order_is_the_machines_choice() {
 }
 
 #[test]
+fn a_subscript_is_quoted_with_the_parentheses_its_meaning_needs() {
+    // C99 §6.5.2.1p2: E1[E2] is (*((E1)+(E2))). An index that is not a
+    // primary expression keeps its parentheses, and the base, a postfix
+    // expression, keeps the ones it was written with.
+    let leads = |source: &str| {
+        states(source)
+            .into_iter()
+            .filter(|state| state.event.kind == EventKind::Subscript)
+            .map(|state| (state.event.summary, state.event.explanation))
+            .collect::<Vec<_>>()
+    };
+    let program = "struct s { int a[3]; }; int main(void) { int v[4] = {1, 2, 3, 4}; int i = 1; \
+                   int n = 2; int *p = v; struct s t = {{5, 6, 7}}; return v[i << 1] + v[n == 1] \
+                   + v[n - 1] + (p + 1)[2] + t.a[i] + v[(i)] + v[3] + v['\\0']; }";
+    let quoted: Vec<_> = leads(program)
+        .into_iter()
+        .map(|(summary, explanation)| {
+            let meaning = summary
+                .split('`')
+                .nth(3)
+                .map(String::from)
+                .expect("the lead quotes the meaning");
+            assert!(
+                explanation.contains(&format!("as `{meaning}`")),
+                "{explanation}"
+            );
+            meaning
+        })
+        .collect();
+    assert_eq!(
+        quoted,
+        [
+            "*(v + (i << 1))",
+            "*(v + (n == 1))",
+            "*(v + (n - 1))",
+            "*((p + 1) + 2)",
+            "*(t.a + i)",
+            "*(v + (i))",
+            "*(v + 3)",
+            "*(v + '\\0')",
+        ]
+    );
+}
+
+#[test]
 fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
     let source = "int f(void) { return 1; }\nint main(void) { int a[3] = {1, 2, 3}; int *p = \
                   &a[2]; { int t = a[1]; } int one = f(); return one + *p; }";
@@ -1247,6 +1409,23 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
     );
     let subscript = event(EventKind::Subscript)[0];
     assert_eq!(text(subscript), "a[1]");
+    // C99 §6.5.2.1p2: E1[E2] is (*((E1)+(E2))), quoted from the program.
+    assert_eq!(
+        subscript.summary,
+        "`a[1]` means `*(a + 1)`: it moves 1 element forward and designates a[1]."
+    );
+    assert!(
+        subscript
+            .explanation
+            .contains("Here `a` gives a pointer to a[0] and the index is 1"),
+        "{}",
+        subscript.explanation
+    );
+    assert!(
+        subscript.note.contains("Nothing checks the index"),
+        "{}",
+        subscript.note
+    );
     assert!(
         subscript.explanation.contains("moves 1 element forward"),
         "{}",

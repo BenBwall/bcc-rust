@@ -47,6 +47,9 @@ addEventListener('pointerdown', () => { usingKeyboard = false; }, true);
 // Whether the reader asked for reduced motion: the editors then jump to a
 // line rather than glide there.
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+// Where a wrapped line may break: after these characters, as Monaco's
+// default list for Latin text has it, but not after a full stop.
+const WRAP_BREAK_AFTER = ' \t})]?|/&,;';
 const editors = new Set();
 reducedMotion.addEventListener?.('change', () => {
   for (const editor of editors) editor.applyMotion();
@@ -268,7 +271,16 @@ class Editor {
       hideCursorInOverviewRuler: true,
       guides: { indentation: true },
       bracketPairColorization: { enabled: false },
+      // Monaco guesses a model's tab size from its text by default, and
+      // a wrapped row hangs by tab stops, so the listings (LLVM IR indents
+      // by 2) hung 4 columns in some and 8 in others. A fixed size keeps
+      // every listing's hang the same: a wrapped row goes on two tab stops
+      // past its line's indent, at column 8 for an unindented line and for
+      // LLVM IR's 2-space instructions alike (6 columns past those).
+      // (Monaco keeps model options in one configuration for all editors,
+      // so the source takes the same fixed size; its lessons indent by 4.)
       tabSize: 4,
+      detectIndentation: false,
       // Every view wraps rather than hiding the ends of long lines: the
       // source's comments in the narrow columns of small screens, and the
       // listings' calls, string constants and LLVM's `; preds` comments
@@ -278,6 +290,10 @@ class Editor {
       // as one line; the line links and their marks cover all its rows.
       wordWrap: 'on',
       wrappingIndent: options.readOnly ? 'deepIndent' : 'indent',
+      // Rows break at spaces and punctuation, but not at a full stop, so
+      // a number (`0.2`, `3.000000e-01`) or a name (`@.str.5`) stays
+      // whole; a piece too long for a row still breaks.
+      wordWrapBreakAfterCharacters: WRAP_BREAK_AFTER,
       stickyScroll: { enabled: false },
       accessibilitySupport: 'auto',
       quickSuggestions: false,
@@ -435,11 +451,14 @@ class Editor {
     if (performance.now() - this.wheeled > USER_SCROLL_GRACE_MS) {
       const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
       const span = editor.getBottomForLineNumber(last) - editor.getTopForLineNumber(first);
-      if (span <= editor.getLayoutInfo().height - 2 * lineHeight) {
-        editor.revealLinesInCenterIfOutsideViewport(first, last, smooth);
-      } else {
-        editor.revealLineInCenterIfOutsideViewport(first, smooth);
-      }
+      // Every row of the run, the last line's wrapped rows included: a
+      // range of whole lines, since revealing lines stops at the last
+      // line's first row. A run too tall for the editor shows its first
+      // line whole.
+      const model = editor.getModel();
+      const fits = span <= editor.getLayoutInfo().height - 2 * lineHeight;
+      const end = fits ? last : first;
+      editor.revealRangeInCenterIfOutsideViewport(new monaco.Range(first, 1, end, model.getLineMaxColumn(end)), smooth);
     }
     this.linkTimer = setTimeout(() => {
       this.linkTimer = 0;
@@ -648,18 +667,20 @@ class Editor {
       return;
     }
     const editor = this.editor;
-    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
     const height = editor.getLayoutInfo().height;
     const scrollTop = editor.getScrollTop();
     const top = editor.getTopForLineNumber(line);
-    const inside = top >= scrollTop && top + lineHeight <= scrollTop + height;
-    editor.revealLineInCenterIfOutsideViewport(line, monaco.editor.ScrollType.Smooth);
+    // A wrapped line's rows, all of which the reveal brings into view.
+    const span = lineSpan(editor, line);
+    const inside = top >= scrollTop && top + span <= scrollTop + height;
+    const range = new monaco.Range(line, 1, line, editor.getModel().getLineMaxColumn(line));
+    editor.revealRangeInCenterIfOutsideViewport(range, monaco.editor.ScrollType.Smooth);
     if (!onPage) {
       return;
     }
     // Where the line ends up in the editor: where it is, or where the
     // (smooth) reveal is taking it, centred as far as the text allows.
-    const centred = Math.min(Math.max(0, top - (height - lineHeight) / 2), Math.max(0, editor.getContentHeight() - height));
+    const centred = Math.min(Math.max(0, top - (height - span) / 2), Math.max(0, editor.getContentHeight() - height));
     this.followed = line;
     this.revealed = top - (inside ? scrollTop : centred);
     followOnPage(this);
