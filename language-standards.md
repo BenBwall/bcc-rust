@@ -4160,14 +4160,17 @@ prints `-Wshift-overflow=`), `-Wshift-negative-value`, GCC's
 `-Wshift-negative-value` differs most. Clang's is on by default and needs a
 constant count. GCC's ("left shift of negative value") is off by default,
 and `-Wextra` enables it from C99 on, before or after the standard option
-(`c_common_post_options` in GCC's `c-opts.cc`). Its own option, `-Werror=` or
+(`c_common_post_options` in GCC's `c-opts.cc`). `-Werror=extra` enables
+`-Wextra` and so the warning, which stays a warning, and the last of
+`-Wextra`, `-Wno-extra` and `-Werror=extra` decides. Its own option, `-Werror=` or
 a pragma naming it enables it in C90 too, while a pragma naming `-Wextra`
 does not reach it. GCC warns at the operator whatever the count
 (`-1 << x`), when the left operand is a negative integer constant of a type
 that does not wrap. A comma operand, `-fwrapv`, unevaluated operands and an
 operator a system header spells are silent, and `__extension__` does not
 silence it. GCC also warns of a statement expression such as
-`({ -1; }) << 1`, which bcc does not fold.
+`({ -1; }) << 1`, which bcc does not fold. Only GCC's identity reports it
+this way; TCC's and MSVC's report no negative left shift.
 
 Known differences that remain: `1LL<<(1ULL<<63)`, a 64-bit left operand with
 that count, is no constant under GCC and 1 here; Clang's code shifts

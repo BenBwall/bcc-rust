@@ -1264,8 +1264,8 @@ constant count or a variable one, inside `__extension__`, and before the
 a comma operand, an operand a constant `?:` skips or `sizeof` holds, an
 unsigned or nonnegative operand, a right shift. Checked 21 November 2026
 against GCC 14 (`LC_ALL=C`), which it matches byte for byte. The options that
-enable it (`-Wextra` from C99 on, its own option and pragma in C90, never a
-pragma naming `-Wextra`) are pinned by
+enable it (`-Wextra` or `-Werror=extra` from C99 on, its own option and
+pragma in C90, never a pragma naming `-Wextra`) are pinned by
 `gcc_warns_of_negative_left_shifts_under_wextra_from_c99` in
 `tests/integration/personality_cli.rs`.
 

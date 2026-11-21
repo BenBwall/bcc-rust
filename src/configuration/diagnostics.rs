@@ -542,9 +542,14 @@ impl CompilerConfiguration {
 
     /// Whether GCC's `-Wextra` enables `-Wshift-negative-value`: given, and
     /// from C99 on (`c_common_post_options` in GCC's `c-opts.cc`), whatever
-    /// the order of the options.
+    /// the order of the options. `-Werror=extra` enables `-Wextra` too, and
+    /// the last of it, `-Wextra` and `-Wno-extra` decides; the warning stays
+    /// a warning, since GCC sets it outside the option machinery.
     fn gcc_extra_shifts(self) -> bool {
-        self.warning_options[DiagnosticGroup::Extra as usize].all() == Some(true)
+        // The last option decides, as for a Clang group under `-Wall`.
+        self.warning_options[DiagnosticGroup::Extra as usize]
+            .enabled_with_all(DiagnosticGroup::Extra, true)
+            == Some(true)
             && self.standard() >= super::CStandard::C99
     }
 

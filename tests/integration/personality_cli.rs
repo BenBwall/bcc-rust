@@ -2561,7 +2561,8 @@ mod tests {
     }
 
     /// GCC 14's `-Wshift-negative-value` is off by default, and `-Wextra`
-    /// enables it from C99 on in either order; its own option, `-Werror=`
+    /// (or `-Werror=extra`) enables it from C99 on in either order, as a
+    /// warning; its own option, `-Werror=`
     /// and a pragma naming it enable it in any revision, and a pragma naming
     /// `-Wextra` does not reach it. Clang 23's is on by default. Each row
     /// was checked against both compilers: the standard, the options, any
@@ -2574,9 +2575,13 @@ mod tests {
             "c.c:3:14: warning: left shift of negative value [-Wshift-negative-value]";
         const CLANG: &str = "c.c:3:14: warning: shifting a negative signed value is undefined \
                              [-Wshift-negative-value]";
-        let table: [(&str, &[&str], &str, usize); 13] = [
+        let table: [(&str, &[&str], &str, usize); 16] = [
             ("gnu11", &[], "", 0),
             ("gnu11", &["-Wextra"], "", 2),
+            // `-Werror=extra` enables `-Wextra`, but the warning stays one.
+            ("gnu11", &["-Werror=extra"], "", 2),
+            ("gnu11", &["-Werror=extra", "-Wno-extra"], "", 0),
+            ("gnu11", &["-Wno-extra", "-Werror=extra"], "", 2),
             ("c99", &["-W"], "", 2),
             ("gnu89", &["-Wextra"], "", 0),
             ("c89", &["-Wshift-negative-value"], "", 2),
