@@ -370,13 +370,9 @@ impl<'tu, 's> Builder<'tu, 's> {
         let mut entered = [None; N];
         let mut block = self.regions[to.0].nearest_seh;
         for slot in &mut entered {
-            let Some(region) = block.filter(|&region| {
-                !ancestor(&self.regions, region, from)
-                    && !(cl_scopes
-                        && self
-                            .seh_handler(region)
-                            .is_some_and(|handler| ancestor(&self.regions, handler, from)))
-            }) else {
+            let Some(region) =
+                block.filter(|&region| !self.seh_block_holds(region, from, cl_scopes))
+            else {
                 break;
             };
             *slot = Some(region);
@@ -385,6 +381,18 @@ impl<'tu, 's> Builder<'tu, 's> {
                 .and_then(|parent| self.regions[parent.0].nearest_seh);
         }
         entered
+    }
+
+    /// Whether the SEH block `region` holds `from`, so that a jump from
+    /// there into the block enters nothing: as its ancestor, or, with
+    /// `cl_scopes` and `region` a guarded block, as the ancestor of its
+    /// statement's `__except` or `__finally` block.
+    fn seh_block_holds(&self, region: RegionId, from: RegionId, cl_scopes: bool) -> bool {
+        ancestor(&self.regions, region, from)
+            || (cl_scopes
+                && self
+                    .seh_handler(region)
+                    .is_some_and(|handler| ancestor(&self.regions, handler, from)))
     }
 
     /// The `__except` or `__finally` block of the `__try` statement whose
