@@ -201,7 +201,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .context
                     .string_cache
                     .intern("shifting a negative signed value is undefined");
-                self.exceptional_warning(
+                self.runtime_exceptional_warning(
+                    e,
                     DiagnosticGroup::ShiftNegativeValue,
                     text,
                     operator_source(e),
@@ -560,7 +561,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Clang underlines the count or divisor beside the operator's caret.
         let count = [right.expression.source_vectors, SourceVectors::default()];
         self.with_highlights(count, |analyzer| {
-            analyzer.exceptional_warning(group, text, operator_source(e));
+            analyzer.runtime_exceptional_warning(e, group, text, operator_source(e));
         });
     }
 
@@ -664,6 +665,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `text` under `group`, which selects its option and severity.
+    /// [`Self::exceptional_warning`] for Clang's warning about the operator
+    /// `e` where code runs (`DiagRuntimeBehavior`), which waits for the
+    /// reachability walk in an `__except` filter or handler.
+    fn runtime_exceptional_warning(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        group: DiagnosticGroup,
+        text: StringCacheId,
+        source: SourceVectors,
+    ) {
+        if self.exceptional_rules() == RuleSet::Clang && self.in_seh_handler() {
+            self.warn_if_reachable(
+                e,
+                group,
+                SemanticErrorKind::ExceptionalConstant(group, text),
+                source,
+                None,
+            );
+        } else {
+            self.exceptional_warning(group, text, source);
+        }
+    }
+
     fn exceptional_warning(
         &mut self,
         group: DiagnosticGroup,
@@ -1000,6 +1024,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang: `Sema::CheckForIntOverflow` in `SemaChecking.cpp`.
     pub(super) fn finish_full_expression(&mut self, root: &'tu Expression<'tu>, start: usize) {
         if self.pending_overflows.len() <= start {
+            return;
+        }
+        if self.exceptional_rules() == RuleSet::Clang && self.in_seh_filter() {
+            self.pending_overflows.truncate(start);
             return;
         }
         let pending = self

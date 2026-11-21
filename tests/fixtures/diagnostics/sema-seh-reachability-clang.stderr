@@ -1,0 +1,19 @@
+sema-seh-reachability-clang.c:25:14: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   25 |     return p < u;
+      |            ~ ^ ~
+sema-seh-reachability-clang.c:37:19: warning: shift count >= width of type [-Wshift-count-overflow]
+   37 |     } __except (1 << 40) {
+      |                   ^  ~~
+sema-seh-reachability-clang.c:51:1: warning: non-void function does not return a value [-Wreturn-type]
+   51 | }
+      | ^
+sema-seh-reachability-clang.c:61:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]
+   61 | }
+      | ^
+sema-seh-reachability-clang.c:78:16: warning: shift count >= width of type [-Wshift-count-overflow]
+   78 |         work(1 << 40);
+      |                ^  ~~
+sema-seh-reachability-clang.c:81:11: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   81 |     if (p < u)
+      |         ~ ^ ~
+6 warnings generated.

@@ -58,6 +58,9 @@ impl Analyzer<'_, '_, '_> {
         let Some(binding) = function.binding else {
             return;
         };
+        if self.without_clang_cfg(function.id) {
+            return;
+        }
         let noreturn = self.functions.emission.noreturn.contains_key(&binding);
         let result = self.types.non_atomic(function.result).unqualified();
         let void = matches!(

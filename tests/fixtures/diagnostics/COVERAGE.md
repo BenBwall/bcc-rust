@@ -31,7 +31,11 @@ whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto
 forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
-`goto`, `break`, `continue` and `return`. It matches Clang 23.1.5 byte for byte.
+`goto`, `break`, `continue` and `return`; `sema-seh-reachability-clang` pins
+that Clang reports nothing about code that runs in an `__except` handler,
+nothing from a filter's full-expression checks but its shift, `-Wreturn-type`
+as if no handler ran, and, in a function with `__finally`, every such warning
+and no `-Wreturn-type`. Both match Clang 23.1.5 byte for byte.
 `pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
 group of `cl`'s C4389, as before it existed.
 

@@ -1202,7 +1202,9 @@ before the parser sees the resulting tokens.
   error and notes, or `cl`'s C2705), rejects a `__leave` outside every `__try`
   block (C2703 under `cl`), and warns of a `goto`, `break`, `continue` or
   `return` that leaves a `__finally` block (`-Wjump-seh-finally`; `cl`'s C4532
-  for all but `return`). Lowering does
+  for all but `return`). Under every identity but `cl`'s, Clang's reachability
+  holds: no edge enters an `__except` handler, its filter is outside the
+  graph, and a function with `__finally` has no graph at all. Lowering does
   not translate SEH.
 - `parse_msvc` also owns `__asm`/`_asm` brace blocks and single-line instructions
   as opaque arena token lists with balanced parentheses, brackets and braces. A

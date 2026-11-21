@@ -81,7 +81,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let dead = self.functions.dead;
         let handler = match seh.filter {
             | Some(_) => SehBlock::Except,
-            | None => SehBlock::Finally,
+            | None => {
+                self.note_seh_finally();
+                SehBlock::Finally
+            },
         };
         let handler_site = seh
             .handler_keyword
@@ -101,7 +104,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The filter belongs to the `__except` block, whose keyword comes
         // first.
         if let Some(filter) = seh.filter {
+            self.work.push(Work::StatementWork(W::SehFilter(
+                self.statements.seh_filter,
+            )));
             self.expression_slot(ExpressionSlot::Parsed(filter));
+            self.work.push(Work::StatementWork(W::SehFilter(true)));
         }
         self.work.push(Work::StatementWork(W::OpenSehBlock(
             handler,
@@ -117,6 +124,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             SehBlock::Try,
             Context::first_token_vector(statement.source_vectors),
         )));
+    }
+
+    /// Whether the code being analyzed is in an `__except` filter or
+    /// handler. Clang's control-flow graph does not reach the handler
+    /// (`CFGBuilder::VisitSEHTryStmt` adds no exception edges) and does not
+    /// hold the filter, so Clang's warnings about code that runs
+    /// (`DiagRuntimeBehavior`) wait there for the reachability walk, which
+    /// also knows whether the function has a graph at all.
+    pub(in crate::translation_phases::semantic_analysis) fn in_seh_handler(&self) -> bool {
+        let Some(point) = self.control.point() else {
+            return false;
+        };
+        let regions = &self.control.regions;
+        let mut block = regions[point.region.0].nearest_seh;
+        while let Some(region) = block {
+            if regions[region.0].kind == RegionKind::Seh(SehBlock::Except) {
+                return true;
+            }
+            block = regions[region.0]
+                .parent
+                .and_then(|parent| regions[parent.0].nearest_seh);
+        }
+        false
+    }
+
+    /// Whether the code being analyzed is an `__except` filter, which Clang
+    /// does not finish as a full expression (`Parser::ParseSEHExceptBlock`
+    /// makes no `ActOnFinishFullExpr`), so checks neither its conversions
+    /// nor its overflow (`Sema::CheckCompletedExpr`).
+    pub(in crate::translation_phases::semantic_analysis) const fn in_seh_filter(&self) -> bool {
+        self.statements.seh_filter
     }
 
     /// Checks the gotos of the current function as its analysis ends, if

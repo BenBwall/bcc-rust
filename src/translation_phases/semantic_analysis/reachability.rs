@@ -21,8 +21,12 @@
 //! keeps each repetition to what the new facts can change.
 //!
 //! A warning is reported only if the walk reached its expression, so what the
-//! walk does not read stays silent: named `break` and `continue`, the body of a
-//! SEH statement, an `asm` operand, a type name's bounds in a cast.
+//! walk does not read stays silent: named `break` and `continue`, an `asm`
+//! operand, a type name's bounds in a cast. Clang's graph has no edge into an
+//! `__except` handler, and does not hold the filter, which it then takes as
+//! reachable; it builds no graph at all for a function with a `__finally`
+//! block, so it reports each of that function's warnings and says nothing of
+//! its end.
 //! C99: §5.1.1.3p1, p. 11; PDF p. 23; §6.8, pp. 131-139; PDF pp. 143-151.
 
 mod known_conditions;
@@ -97,6 +101,18 @@ struct DeferredWarning {
     name:       Option<StringCacheId>,
     /// The ranges Clang underlines beside the caret.
     highlights: [SourceVectors; 2],
+    /// It is about an `__except` filter.
+    filter:     bool,
+}
+
+/// Whether Clang gives the warning `kind` as it finishes a full expression
+/// (`Sema::CheckCompletedExpr`), which it does not do for an `__except`
+/// filter, rather than as it builds an operator or a call.
+const fn completed_expression_check(kind: SemanticErrorKind) -> bool {
+    !matches!(
+        kind,
+        SemanticErrorKind::ExceptionalConstant(..) | SemanticErrorKind::Nonnull(..)
+    )
 }
 
 /// What the walk needs that analysis alone knows.
@@ -109,6 +125,8 @@ pub(super) struct ReachabilityState<'s> {
     pub(super) enumerator_tags:  ArenaMap<'s, usize, usize>,
     /// The association each generic selection selects, by identity.
     pub(super) selected_generic: ArenaMap<'s, usize, usize>,
+    /// The functions with a `__finally` block, by identity.
+    seh_finally:                 ArenaVec<'s, usize>,
 }
 
 impl<'s> ReachabilityState<'s> {
@@ -118,6 +136,7 @@ impl<'s> ReachabilityState<'s> {
             enumerators:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             enumerator_tags:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             selected_generic: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            seh_finally:      ArenaVec::new_in(scratch),
         }
     }
 }
@@ -264,6 +283,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             site,
             name,
             highlights: self.highlights,
+            filter: self.in_seh_filter(),
         });
     }
 
@@ -298,6 +318,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// Records that the current function has a `__finally` block.
+    pub(super) fn note_seh_finally(&mut self) {
+        if let Some(function) = self.functions.current
+            && !self.reachability.seh_finally.contains(&function.id)
+        {
+            self.reachability.seh_finally.push(function.id);
+        }
+    }
+
+    /// Clang builds no control-flow graph for the function `function`: its
+    /// `CFGBuilder` does not support `__finally` (`VisitSEHTryStmt` in
+    /// `CFG.cpp`), so `AnalysisBasedWarnings::IssueWarnings` reports every
+    /// waiting warning and checks nothing that needs the graph.
+    pub(super) fn without_clang_cfg(&self, function: usize) -> bool {
+        self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+            && self.reachability.seh_finally.contains(&function)
+    }
+
     /// Reports the current function's waiting warnings that are reachable,
     /// when its analysis is done.
     pub(super) fn report_reachable_warnings(&mut self) {
@@ -312,14 +350,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         }
         let mut flow = Flow::new(scratch);
+        let unwalked = self.without_clang_cfg(function.id);
         for warning in deferred.iter().filter(|w| w.function == function.id) {
-            _ = flow.anchors.insert(warning.anchor, false);
+            _ = flow.anchors.insert(warning.anchor, unwalked);
         }
-        loop {
-            flow.changed = false;
-            _ = self.flow_statement(&mut flow, function.syntax.body, true);
-            if !flow.changed {
-                break;
+        if !unwalked {
+            loop {
+                flow.changed = false;
+                _ = self.flow_statement(&mut flow, function.syntax.body, true);
+                if !flow.changed {
+                    break;
+                }
             }
         }
         // Each warning was taken only where nothing recovered around it.
@@ -337,7 +378,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             for warning in &deferred {
                 if warning.function != function.id {
                     analyzer.reachability.deferred.push(*warning);
-                } else if flow.anchors.get(&warning.anchor).copied().unwrap_or(false) {
+                } else if if warning.filter {
+                    // Clang's graph holds no filter, and it takes what it
+                    // cannot find as reachable.
+                    !completed_expression_check(warning.kind)
+                } else {
+                    flow.anchors.get(&warning.anchor).copied().unwrap_or(false)
+                } {
                     analyzer.with_highlights(warning.highlights, |analyzer| {
                         analyzer.group_diagnostic(
                             warning.group,
@@ -541,11 +588,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 false
             },
             | S::NamedBreak(_) | S::NamedContinue(_) => false,
-            // An exception may leave the guarded block anywhere, so its
-            // filter and handler are reached where it begins; `__finally`
-            // runs however the block ends, and the code after it only if
-            // both ends are reached. `__leave` ends the guarded block.
-            // Microsoft Learn: "try-except statement", "try-finally
+            // An exception may leave the guarded block anywhere, so for `cl`
+            // its filter and handler are reached where it begins. Clang's
+            // graph adds no exception edges, so nothing reaches them there
+            // (`CFGBuilder::VisitSEHTryStmt`, without `AddEHEdges`).
+            // `__finally` runs however the block ends, and the code after it
+            // only if both ends are reached. `__leave` ends the guarded
+            // block. Microsoft Learn: "try-except statement", "try-finally
             // statement".
             | S::Seh(seh) => {
                 let outer = std::mem::replace(&mut flow.leaves, false);
@@ -553,7 +602,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let end = std::mem::replace(&mut flow.leaves, outer) || end;
                 match seh.filter {
                     | Some(filter) => {
-                        let handler = self.flow_expression(flow, filter, live);
+                        let thrown = live
+                            && self.context.configuration.compiler_identity()
+                                == crate::configuration::CompilerIdentity::Msvc;
+                        let handler = self.flow_expression(flow, filter, thrown);
                         self.flow_statement(flow, seh.handler, handler) || end
                     },
                     | None => self.flow_statement(flow, seh.handler, live) && end,

@@ -91,6 +91,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | StatementWork::OpenSehBlock(block, keyword) => self.open_seh_block(block, keyword),
             | StatementWork::CloseSehBlock(previous) => self.control.close_to(previous),
+            | StatementWork::SehFilter(filter) => self.statements.seh_filter = filter,
             | StatementWork::RestoreStatementExpression { region, previous } => {
                 if let Some(region) = region {
                     self.control.regions[region.0].kind =
@@ -1358,6 +1359,8 @@ pub(super) enum StatementWork<'tu> {
     /// keyword, and ends back in the region around the statement.
     OpenSehBlock(super::SehBlock, SourceVectors),
     CloseSehBlock(Option<RegionId>),
+    /// Whether an `__except` filter is being analyzed, from here on.
+    SehFilter(bool),
     /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
     /// PDF p. 147. Associated substatements are blocks, including expressions.
     Substatement(&'tu Statement<'tu>),
@@ -1481,6 +1484,8 @@ pub(super) struct State<'tu, 's> {
     seh_functions: ArenaVec<'s, usize>,
     /// The gotos reported for entering a SEH block, by index.
     seh_jumps: ArenaMap<'s, usize, ()>,
+    /// An `__except` filter is being analyzed.
+    seh_filter: bool,
 }
 
 impl<'s> State<'_, 's> {
@@ -1500,6 +1505,7 @@ impl<'s> State<'_, 's> {
             case_count: 0,
             seh_functions: ArenaVec::new_in(scratch),
             seh_jumps: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            seh_filter: false,
         }
     }
 }
