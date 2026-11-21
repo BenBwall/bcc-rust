@@ -934,7 +934,13 @@ The following vocabulary entries retain the established diagnostic contracts:
   operation that traps under `-ftrapping-math` and arithmetic between a real
   and a complex operand there are "initializer element is not constant", and
   an undefined or overflowed value has no `-pedantic` report; Clang's rules
-  accept all of them. GCC also matches no bit-field narrower than its
+  accept all of them. GCC also takes the cast as constant only when the
+  operand it parsed was (`TREE_CONSTANT` in `build_c_cast`). So it refuses a
+  `?:` whose operands are not all integer constant expressions, which GCC
+  folds as it builds them, a comparison of floating or complex operands, and a
+  `&&` or `||` with an operand that is no integer constant, unless a
+  conversion to another type folds the `?:` (`(int)(1 ? 1.0 : 2.0)`). GCC
+  also matches no bit-field narrower than its
   declared type; Clang matches it and stores the operand whole. A cast
   selected by a constant `?:` and a C23 `constexpr` object a cast
   initializes are still refused, though both compilers accept them.

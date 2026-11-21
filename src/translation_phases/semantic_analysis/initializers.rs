@@ -939,27 +939,75 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// overflows to an infinity or gives a NaN from operands that are
     /// neither, which raise IEC 60559 exceptions where a constant
     /// expression is evaluated as during execution.
+    ///
+    /// GCC also reads the cast as constant only when the operand it parsed
+    /// was (`TREE_CONSTANT`), before folding: so not when it holds a `?:`
+    /// whose operands are not all integer constant expressions, which GCC
+    /// folds as it builds them, nor a comparison of floating or complex
+    /// operands, nor a `&&` or `||` whose operand is no integer constant. A
+    /// conversion to another type folds a `?:` it converts, picking the
+    /// operand its constant condition selects (`fold_unary`), though not
+    /// the condition itself.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57; §F.7.4
-    /// paragraph 1, p. 449; PDF p. 461.
+    /// paragraph 1, p. 449; PDF p. 461; §6.6 paragraph 6, p. 95; PDF p. 107.
     fn gcc_leaves_unfolded(&self, e: &'tu Expression<'tu>) -> bool {
         use ExpressionType as E;
         let traps = !self.context.configuration.no_trapping_math();
+        let integer_operand = |e: &'tu Expression<'tu>| self.expression_info(e).integer.is_some();
+        // An arithmetic operand's type after lvalue conversion.
+        let value_type = |e: &'tu Expression<'tu>| {
+            self.types
+                .non_atomic(self.expression_info(e).ty)
+                .unqualified()
+        };
+        let floating = |e: &'tu Expression<'tu>| {
+            let ty = value_type(e);
+            self.arithmetic(ty) && self.integer_type(ty).is_none()
+        };
+        // Each expression, and whether a conversion to another type holds it.
         let mut work = ArenaVec::new_in(self.scratch);
-        work.push(e);
-        while let Some(e) = work.pop() {
+        work.push((e, false));
+        while let Some((e, converted)) = work.pop() {
             match e.kind {
-                | E::Parenthesized { expression } => work.push(expression),
+                | E::Parenthesized { expression }
+                | E::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression: expression,
+                } => work.push((expression, converted)),
                 | E::Unary {
                     operand_expression, ..
-                }
+                } => work.push((operand_expression, false)),
                 | E::Cast {
                     operand_expression, ..
-                } => work.push(operand_expression),
+                } => {
+                    let to = self.expression_info(e).ty.unqualified();
+                    work.push((operand_expression, to != value_type(operand_expression)));
+                },
+                | E::Binary {
+                    operator: BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr,
+                    left_expression,
+                    right_expression,
+                } =>
+                    if !integer_operand(left_expression) || !integer_operand(right_expression) {
+                        return true;
+                    },
                 | E::Binary {
                     operator,
                     left_expression,
                     right_expression,
                 } => {
+                    let comparison = matches!(
+                        operator,
+                        BinaryOperator::Equal
+                            | BinaryOperator::NotEqual
+                            | BinaryOperator::LessThan
+                            | BinaryOperator::LessThanOrEqual
+                            | BinaryOperator::GreaterThan
+                            | BinaryOperator::GreaterThanOrEqual
+                    );
+                    if comparison && (floating(left_expression) || floating(right_expression)) {
+                        return true;
+                    }
                     let arithmetic = matches!(
                         operator,
                         BinaryOperator::Addition
@@ -987,28 +1035,43 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             },
                         )
                     };
+                    let result = self.expression_info(e);
                     if arithmetic
                         && traps
-                        && let Some(result) = self.expression_info(e).floating()
+                        && let Some(value) = result.floating()
                     {
                         let ((_, left_infinite, left_nan), (right_zero, right_infinite, right_nan)) =
                             (class(left), class(right));
                         if (operator == BinaryOperator::Division && right_zero)
-                            || (result.real.is_nan() && !left_nan && !right_nan)
-                            || (result.real.is_infinite() && !left_infinite && !right_infinite)
+                            || (value.real.is_nan() && !left_nan && !right_nan)
+                            || (value.real.is_infinite() && !left_infinite && !right_infinite)
                         {
                             return true;
                         }
                     }
-                    work.push(right_expression);
-                    work.push(left_expression);
+                    // The usual arithmetic conversions convert an operand
+                    // of another type.
+                    let operand_type = result.ty.unqualified();
+                    let converts =
+                        |e: &'tu Expression<'tu>| arithmetic && value_type(e) != operand_type;
+                    work.push((right_expression, converts(right_expression)));
+                    work.push((left_expression, converts(left_expression)));
                 },
-                | E::Conditional(c) => {
-                    match Self::constant_truth(self.expression_info(c.condition_expression)) {
-                        | Some(true) => work.push(c.then_expression),
-                        | Some(false) => work.push(c.else_expression),
-                        | None => {},
+                | E::Conditional(c) | E::OmittedConditional(c) => {
+                    let condition = self.expression_info(c.condition_expression);
+                    let folded = condition.ice
+                        && self.expression_info(c.then_expression).ice
+                        && self.expression_info(c.else_expression).ice;
+                    if folded {
+                        continue;
                     }
+                    // The condition stays as GCC parsed it.
+                    match Self::constant_truth(condition) {
+                        | Some(true) if converted => work.push((c.then_expression, true)),
+                        | Some(false) if converted => work.push((c.else_expression, true)),
+                        | _ => return true,
+                    }
+                    work.push((c.condition_expression, false));
                 },
                 | _ => {},
             }

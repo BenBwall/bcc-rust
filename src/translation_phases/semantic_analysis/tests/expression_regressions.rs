@@ -843,6 +843,93 @@ fn static_union_casts_follow_each_compilers_constant_rules() {
     }
 }
 
+/// GCC 14 takes a cast to a union type as constant only when the operand it
+/// parsed is (`TREE_CONSTANT` in `build_c_cast`): not a `?:` whose operands
+/// are not all integer constant expressions, nor a comparison of floating or
+/// complex operands, nor a `&&` or `||` of an operand that is no integer
+/// constant, unless a conversion to another type folds the `?:`. Clang 23
+/// accepts each. Each row was checked against both compilers.
+#[test]
+fn gcc_static_union_casts_need_an_operand_gcc_parsed_as_constant() {
+    use crate::configuration::CompilerIdentity;
+    let declarations =
+        "union U { int i; double d; float f; _Complex double z; long l; void *p; };\n";
+    // Each source, and whether GCC refuses it.
+    for (source, gcc) in [
+        ("union U a = (union U)(1 ? 1.0 : 2.0);", true),
+        ("union U a = (union U)(1 ? 1 : 2.0);", true),
+        ("union U a = (union U)(1.0 ? 1 : 2);", true),
+        ("union U a = (union U)(1 ? (void *)0 : (void *)0);", true),
+        ("union U a = (union U)(1 ? 1.0 : (_Complex double)2);", true),
+        ("union U a = (union U)(1.0 == 1.0);", true),
+        ("union U a = (union U)(1.0 < 2);", true),
+        ("union U a = (union U)(1.0 == (_Complex double)1);", true),
+        ("union U a = (union U)((long)(1.0 == 1.0));", true),
+        ("union U a = (union U)(1.0 && 1);", true),
+        ("union U a = (union U)(\"a\" || 0);", true),
+        ("union U a = (union U)(-(1 ? 1.0 : 2.0));", true),
+        ("union U a = (union U)((1 ? 1.0 : 2.0) + 1);", true),
+        ("union U a = (union U)((double)(1 ? 1.0 : 2.0));", true),
+        (
+            "union U a = (union U)((long)(1.0 == 1.0 ? 1.0 : 2.0));",
+            true,
+        ),
+        ("union U a = (union U)((long)(1 ? 1.0 / 0.0 : 2.0));", true),
+        ("union U a = (union U)(1 ? (int)(1 ? 1.0 : 2.0) : 3);", true),
+        ("union U a = (union U)(1 ? 1 : 2);", false),
+        ("union U a = (union U)(1 ? (int)1.0 : 3);", false),
+        ("union U a = (union U)(1 == 1);", false),
+        ("union U a = (union U)((void *)0 == (void *)0);", false),
+        ("union U a = (union U)((void *)0 && 1);", false),
+        ("union U a = (union U)(!1.0);", false),
+        ("union U a = (union U)(1.0 + 1.0);", false),
+        ("union U a = (union U)((int)(1 ? 1.0 : 2.0));", false),
+        ("union U a = (union U)((float)(1 ? 1.0 : 2.0));", false),
+        ("union U a = (union U)((long)(1.0 ? 1.0 : 2.0));", false),
+        ("union U a = (union U)((1 ? 1.0f : 2.0f) + 1.0);", false),
+        (
+            "union U a = (union U)((long)(1 ? (1 ? 1.0 : 2.0) : 3.0));",
+            false,
+        ),
+        (
+            "void f(void) { union U a = (union U)(1 ? 1.0 : 2.0); (void)a; }",
+            false,
+        ),
+    ] {
+        for (identity, refused) in [
+            (CompilerIdentity::Gcc, gcc),
+            (CompilerIdentity::Clang, false),
+        ] {
+            let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_extensions(true)
+                .with_compiler_identity(identity);
+            with_configuration(
+                &format!("{declarations}{source}"),
+                configuration,
+                |context, _| {
+                    let errors = context.take_pending_errors();
+                    let refusals = errors
+                        .iter()
+                        .filter(|error| {
+                            matches!(
+                                error,
+                                TranslationError::Semantic(error)
+                                    if error.kind == SemanticErrorKind::NonConstantInitializer
+                            )
+                        })
+                        .count();
+                    assert_eq!(
+                        refusals,
+                        usize::from(refused),
+                        "{identity:?} {source}: {errors:?}"
+                    );
+                },
+            );
+        }
+    }
+}
+
 /// GCC gives a bit-field narrower than its declared type a type of its own,
 /// which no operand of a cast to a union type has; Clang matches the declared
 /// type.

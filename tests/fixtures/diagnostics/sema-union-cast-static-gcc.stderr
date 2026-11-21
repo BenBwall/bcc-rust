@@ -1,0 +1,31 @@
+sema-union-cast-static-gcc.c:4:23: error: static-storage initializer requires a constant expression
+    4 | union U conditional = (union U)(1 ? 1.0 : 2.0);
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:5:17: error: static-storage initializer requires a constant expression
+    5 | union U mixed = (union U)(1 ? 1 : 2.0);
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:6:30: error: static-storage initializer requires a constant expression
+    6 | union U floating_condition = (union U)(1.0 ? 1 : 2);
+      |                              ^~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:7:22: error: static-storage initializer requires a constant expression
+    7 | union U comparison = (union U)(1.0 == 1.0);
+      |                      ^~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:8:30: error: static-storage initializer requires a constant expression
+    8 | union U complex_comparison = (union U)(1.0 != (_Complex double)1);
+      |                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:9:19: error: static-storage initializer requires a constant expression
+    9 | union U logical = (union U)(1.0 && 1);
+      |                   ^~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:10:32: error: static-storage initializer requires a constant expression
+   10 | union U converted_comparison = (union U)((long)(1.0 == 1.0));
+      |                                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:11:19: error: static-storage initializer requires a constant expression
+   11 | union U negated = (union U)(-(1 ? 1.0 : 2.0));
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c:12:22: error: static-storage initializer requires a constant expression
+   12 | union U braced[] = { (union U)(1 ? 1.0 : 2.0) };
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~
+sema-union-cast-static-gcc.c: In function 'local':
+sema-union-cast-static-gcc.c:13:39: error: static-storage initializer requires a constant expression
+   13 | void local(void) { static union U s = (union U)(1.0 < 2.0); (void)s; }
+      |                                       ^~~~~~~~~~~~~~~~~~~~

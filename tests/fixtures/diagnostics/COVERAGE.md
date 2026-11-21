@@ -1189,6 +1189,20 @@ before a function definition and on a same-type cast, all three are silent;
 the declaration after a marked one and the file-scope `sizeof` operand after
 the marked one warn again on the same lines and columns.
 
+`sema-union-cast-static-gcc.c` (`-std=gnu11`) pins which casts to a union
+type GCC 14 refuses in a static initializer ("initializer element is not
+constant"), which takes the cast as constant only when the operand it parsed
+was (`TREE_CONSTANT` in `build_c_cast`). It refuses a `?:` whose operands are
+not all integer constant expressions, a comparison of floating or complex
+operands (converted to `long` too), and a `&&` of a floating operand,
+through a negation and in braces and a block-scope static object. It accepts
+integer operands, `!1.0`, `1.0 + 1.0`, a conversion to another type that folds
+the `?:`, and the same casts in an automatic object. Checked 21 November 2026
+against GCC 14: the refusals stand on GCC's lines and columns, and main
+refused none of them. The words and the underline remain bcc's: "static-storage
+initializer requires a constant expression" across the cast, where GCC writes
+its words at the cast's `(`.
+
 `sema-extension-pedantic-gcc.c` checks GCC's `-pedantic` reports of
 `__FUNCTION__` and `__PRETTY_FUNCTION__` under `__extension__`. Checked
 20 November 2026 against GCC 14: an `__extension__` operand, a marked
