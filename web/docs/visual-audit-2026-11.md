@@ -2888,8 +2888,9 @@ no "Why it matters" note: nothing said why following a pointer matters,
 which is the point of `bump(cursor)`.
 
 **Changed.** The lead says what `*value` now is: "`*value` follows the
-pointer in `value` to the object it points to: `*value` now stands for
-values[0] (in main) itself." The explanation says it in other words:
+pointer `value` to the object it points to: `*value` now stands for
+values[0] (in main) itself." (Round 1 of the review dropped an "in" after
+"the pointer": an expression does not hold a pointer, it is one.) The explanation says it in other words:
 "`value` holds a pointer to values[0] (in main). The unary `*` operator
 (indirection) turns a pointer back into the object it points to, so
 `*value` is an lvalue: another name for values[0] (in main), the same place
@@ -2929,15 +2930,18 @@ designates name[0] (in main). Nothing is read yet: the operator around it
 decides whether that element is read or stored into." A new note:
 "Subscripting is pointer arithmetic: `a[i]` is `*(a + i)` whether `a` is an
 array, which decays to a pointer first, or a pointer, so a function given
-only a pointer can index its caller's array. Nothing checks the index: one
-outside the array is undefined behavior, and this machine stops on it,
-where a compiled program may read or overwrite whatever lies there." C99
+only a pointer can index its caller's array. Nothing checks the index:
+reading or storing outside the array is undefined behavior, and this
+machine stops on it, where a compiled program may read or overwrite
+whatever lies there." C99
 §6.5.2.1p2 defines `E1[E2]` as `(*((E1)+(E2)))` (p. 70, PDF p. 82), and
 §6.5.6p8 leaves a result outside the array, or a `*` one past its end,
 undefined (p. 83, PDF p. 95), as the step already cited. The quoted text is
 the program's, from the expression's two operands (as the stop at a null
 pointer's subscript already quotes it); without it the step keeps the
-general `a[i]`.
+general `a[i]`. An index that is not a primary expression keeps its
+parentheses, so `v[i << 1]` reads "`*(v + (i << 1))`" (corrected in
+[Review, round 1](#review-round-1-1)).
 [`note-subscript-390-dark`](screenshots/part12/note-subscript-390-dark-before.png)
 ([after](screenshots/part12/note-subscript-390-dark-after.png)).
 
@@ -2950,17 +2954,20 @@ that end, but neither said why it is safe for `bump` to return a value
 that lives in its own frame, which is the question a newcomer asks of a
 frame that is about to vanish.
 
-**Changed.** The lead names the call and the objects: "The return hands 3
-back as the value of `bump(cursor)`, and the frame of bump ends: its
-parameters and locals cease to exist." A new note: "A function's
-parameters and locals last only while its call runs. return copies the
-value out before the frame ends, so the caller gets it safely; returning
-the address of a local instead would hand back a dangling pointer, since
-the object it points to no longer exists." The step now also cites C99
-§6.2.4p2, "The value of a pointer becomes indeterminate when the object it
-points to reaches the end of its lifetime" (p. 32, PDF p. 44), beside
-§6.8.6.4p3 and §6.2.4p5. A return from main is unchanged; its note is the
-exit status.
+**Changed.** The lead names the call and the objects that end: "The return
+hands 3 back as the value of `bump(cursor)`, and the frame of bump ends:
+`value` and `before` cease to exist." A new note: "A function's parameters
+and automatic locals (those not declared static) last only while its call
+runs; a static local lasts the whole run. return copies the value out
+before the frame ends, so the caller gets it safely; returning the address
+of an automatic local instead would hand back a dangling pointer, since
+the object it points to no longer exists." (Both as corrected in [Review,
+round 1](#review-round-1-1): the first version said "its parameters and
+locals cease to exist", which is false of a static local.) The step now
+also cites C99 §6.2.4p2, "The value of a pointer becomes indeterminate
+when the object it points to reaches the end of its lifetime" (p. 32, PDF
+p. 44), beside §6.8.6.4p3 and §6.2.4p5. A return from main is unchanged;
+its note is the exit status.
 [`note-return-1440-light`](screenshots/part12/note-return-1440-light-before.png)
 ([after](screenshots/part12/note-return-1440-light-after.png)).
 
@@ -2995,8 +3002,9 @@ each word links to, as for every term: **Indirection**, "The unary *
 operator: *p is the object p points to, not a copy of it, so reading *p
 reads that object and storing into *p changes it" (§6.5.3.2p4), and
 **Dangling pointer**, "A pointer to an object whose lifetime has ended,
-such as a local of a function that has returned. Its value is
-indeterminate, and using it is undefined" (§6.2.4p2). The second also
+such as an automatic (non-static) local of a function that has returned.
+Its value is indeterminate, and using it is undefined" (§6.2.4p2; "an
+automatic (non-static)" added in round 1 of the review). The second also
 marks the word "dangling" in the note on lifetimes, which a step that ends
 a block shows.
 
@@ -3079,3 +3087,132 @@ build are the same note for note.
   the printf lesson to its source. Entering a block still explains, in its
   first sentence, that this machine leaves out variable-length arrays,
   which a newcomer does not need there.
+
+### Review, round 1
+
+The review of the branch at `9f70fa181` found two blockers, both in the
+new notes' words about C, and three small things on the page. The before
+build is the review's build of that head; the after build is the round's
+fixes at `24b06cadf` plus the focus fix below, built as above (Trunk
+without `--release`, the dev profile at `opt-level=s`).
+
+#### 1. A subscript with a compound index was quoted as another expression
+
+The subscript's lead spliced the program's base and index into
+`*(base + index)` without parentheses, so `v[i << 1]` read "means
+`*(v + i << 1)`", a shift of a pointer, and `row[n - 1]` read
+`*(row + n - 1)`, which forms `row + n` first. The lessons only index with
+a name, so neither the walk nor the tests met it, but the workbench runs
+whatever the reader types. The stop at a null pointer's subscript, older
+than this part, did the same.
+
+**Fixed.** C99 §6.5.2.1p2 defines `E1[E2]` as `(*((E1)+(E2)))` (p. 70,
+PDF p. 82). The index now keeps its parentheses unless it is a primary
+expression (§6.5.1: a name, a constant, a string literal or an expression
+already in parentheses), so `v[i << 1]` reads "`*(v + (i << 1))`" and
+`v[3]` still "`*(v + 3)`". The base needs none: it is a postfix
+expression, which binds tighter than `+`, and its text keeps the
+parentheses it was written with, so `(p + 1)[2]` reads "`*((p + 1) + 2)`"
+and `t.a[i]` "`*(t.a + i)`". The lead, the explanation and the null
+pointer's stop share one spelling. A new engine test pins eight
+subscripts (`v[i << 1]`, `v[n == 1]`, `v[n - 1]`, `(p + 1)[2]`, `t.a[i]`,
+`v[(i)]`, `v[3]` and `v['\0']`) in both the lead and the explanation, and
+the null pointer's test now expects `*(q + (i + 1))`.
+
+#### 2. A return said every local ends, in the lesson about static locals
+
+The return's new lead said "the frame of moved ends: its parameters and
+locals cease to exist", and its note "A function's parameters and locals
+last only while its call runs". In Structs and static storage, `moved`
+declares `static int total;`, which lives for the whole run (C99
+§6.2.4p3), as that lesson's own notes say.
+
+**Fixed.** The lead names the objects that end, as the explanation already
+did: "…and the frame of moved ends: `p` and `dx` cease to exist" (one
+object takes "ceases"; past three, "its parameters and automatic locals
+cease to exist"). The note: "A function's parameters and automatic locals
+(those not declared static) last only while its call runs; a static local
+lasts the whole run. return copies the value out before the frame ends,
+so the caller gets it safely; returning the address of an automatic local
+instead would hand back a dangling pointer, since the object it points to
+no longer exists." A new engine test returns twice from a function with a
+static local and checks that neither the lead nor the explanation names
+it, and pins the singular and the summed-up forms.
+
+The same search over the other new or changed words found one more claim
+of each kind. The glossary's **Dangling pointer** said "such as a local
+of a function that has returned"; it now says "an automatic (non-static)
+local". No other new text quotes an expression it builds: the compound
+assignment's `x = x op (e)` already parenthesizes its right operand, and
+`*p`'s quoted operand is the program's own text, parentheses and all.
+
+#### 3. Small things
+
+- **The stop banner below Next.** From 821 to 1180 px the narrow stage
+  card gave the hand-off (with Next) and the "Compilation stopped" banner
+  the same order, so the hand-off came first. The hand-off now comes after
+  the banner and before the output: at 1024x768 with a program bcc
+  rejects, the banner sits at 490 px, the hand-off at 694, Next at 748 and
+  the output at 855 (before: the hand-off at 490, the banner at 589). A
+  sweep of 13 widths from 390 to 1440 px, in both themes, found the banner
+  first at every width and no sideways scroll.
+  [`err-1024-light`](screenshots/part12/err-1024-light-before.png)
+  ([after](screenshots/part12/err-1024-light-after.png)).
+- **A tap on a definition's text hid it.** The tap moved the focus from
+  the word to the page, and the word's `focusout` hid the definition. A
+  press inside the word, its definition included, now keeps the definition
+  open until the press's click; if the focus then lands anywhere else, by
+  Tab for instance, the definition hides as before. The touch probe at
+  390x844 (both themes), 834x1112 and 1024x768: a tap on IR's text leaves
+  it open and the page where it was, the next tap on the word follows the
+  link, and Tab from there shows only Assembly's definition.
+- **A definition kept its place after a resize.** An open definition now
+  takes its place again when the window resizes or the phone rotates. The
+  probe opened IR at 390 px and narrowed the window to 320 px, then rotated
+  390x844 to 844x390 and back: each time the box sat under the word, inside
+  the window and uncovered.
+- **Wording.** `*(q + 0)`'s lead now reads "follows the pointer `(q + 0)`"
+  rather than "the pointer in `(q + 0)`", and the subscript's note says
+  "reading or storing outside the array is undefined behavior" where it
+  said any index outside was, since `&a[n]` is defined (§6.5.3.2p3). The
+  editor's comment on the listings' hang now says where a wrapped row goes
+  on: two tab stops past its line's indent, which is column 8 both for an
+  unindented line and for LLVM IR's 2-space instructions.
+
+#### Checks
+
+- **The notes:** the engine's dump differs from the round's before in 34
+  notes, 33 of the twelve machine lessons' 1,254 and the pipeline lesson's
+  return: the lead of 15 dereferences, the lead and note of 12 returns, and
+  the note of 7 subscripts. The lesson walk at 1440x900 light and 390x844
+  dark finds the same 28 of its 1,254 notes changed in both (the walk
+  records a note only where a lesson first shows it), no title or value
+  flow changed, no sideways scroll and no page error.
+- **The probe** of this part at 1440x900, 1366x768, 1024x768, 900x800,
+  834x1112 and 390x844 in both themes reads as before at every
+  configuration but one figure: the glossary's longer Dangling pointer entry
+  moves IR's entry 20 px down the page. No sideways scroll, no console
+  error or warning.
+- **The definitions' sweep**, every third width from 320 to 1440 px in both
+  themes (1,870 checks a theme): no failures, the closest edge still 18 px
+  from the window's.
+- **Tests:** as `pages.yml` runs them, the engine's tests (117) and its
+  clippy pass, as do the site's tests (164, and the prerender's 2), the
+  WebAssembly stepper's (79) and the site's four clippy runs; the worker
+  run prints the engine's existing unfulfilled lint expectation in
+  `src/abstract_machine/parser.rs`, as before.
+
+#### Left for later
+
+- **A screen reader on a touch screen** (the review's finding 5, not
+  verified on a device): TalkBack's double tap arrives as touch pointer
+  events, so its first activation may show the definition, which the
+  reader already heard as the description, instead of following the link.
+- **The source's indent guides** now sit at 4-column stops for a pasted
+  program indented by 2 or by tabs, since the tab size is fixed; the
+  lessons indent by 4.
+- **Seen on `main` too:** at 1024 px the listing's header with an edited
+  program overflows into the pipeline column; at 1180 px the stage keys
+  "Preprocessing tokens" and "Preprocessor" truncate; and from 760 to
+  820 px (an iPad in portrait) the card still puts the output first, with
+  Next 1,261 px down.
