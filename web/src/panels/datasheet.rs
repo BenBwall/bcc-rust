@@ -47,31 +47,13 @@ pub fn Datasheet(
                 .is_none_or(|snapshot| snapshot.objects.is_empty())
         })
     };
-    // A run that can go on has objects to come; one that stopped or ended
-    // without any says so instead.
-    let ended = move || {
-        snapshot.with(|snapshot| {
-            snapshot
-                .as_ref()
-                .is_some_and(|snapshot| !snapshot.can_step())
-        })
-    };
     view! {
         <figure class="datasheet" aria-labelledby="datasheet-caption">
             <figcaption class="module-caption" id="datasheet-caption">
                 <b>"Table 1"</b>
                 {move || snapshot.with(|snapshot| snapshot.as_ref().map_or_else(|| " — Objects".to_owned(), |snapshot| format!(" — Objects at step {}", snapshot.step)))}
             </figcaption>
-            // Before any object's lifetime has begun the table has no rows:
-            // a card says what will fill it, as the blank tape's does.
-            <p class="schematic-empty" hidden=move || !empty() || !ended()>"No object began its lifetime in this run."</p>
-            <div class="figure-empty" hidden=move || !empty() || ended()>
-                <p class="figure-empty-label">"No objects yet"</p>
-                <p class="figure-empty-text">
-                    "Each object gets a row here when its lifetime begins: its type and size, where it lives, the \
-                     step that created it and its value at the playhead."
-                </p>
-            </div>
+            <NoObjects snapshot hidden=Signal::derive(move || !empty()) />
             <div class="sheet-scroll" hidden=empty>
             <table>
                 <thead>
@@ -148,6 +130,30 @@ pub fn Datasheet(
             </table>
             </div>
         </figure>
+    }
+}
+
+/// The table without rows, before any object's lifetime has begun: a card
+/// says what will fill it, as the blank tape's does, while the run can go
+/// on; a run that stopped or ended without any object says so instead.
+#[component]
+fn NoObjects(snapshot: Memo<Option<Snapshot>>, hidden: Signal<bool>) -> impl IntoView {
+    let ended = move || {
+        snapshot.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.can_step())
+        })
+    };
+    view! {
+        <p class="schematic-empty" hidden=move || hidden.get() || !ended()>"No object began its lifetime in this run."</p>
+        <div class="figure-empty" hidden=move || hidden.get() || ended()>
+            <p class="figure-empty-label">"No objects yet"</p>
+            <p class="figure-empty-text">
+                "Each object gets a row here when its lifetime begins: its type and size, where it lives, the step \
+                 that created it and its value at the playhead."
+            </p>
+        </div>
     }
 }
 
