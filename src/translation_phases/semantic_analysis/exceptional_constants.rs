@@ -480,7 +480,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         use BinaryOperator as B;
         if self.unused.cl {
-            if self.inhibited_evaluations == 0 && !self.tainted {
+            // `cl` says nothing of a compound assignment's operands.
+            let compound =
+                !matches!(e.kind, ExpressionType::Binary { operator, .. } if operator == op);
+            if self.inhibited_evaluations == 0 && !self.tainted && !compound {
                 self.report_exceptional_operands_as_cl(e, op, left, right, ty);
             }
             return;
@@ -561,11 +564,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
-    /// `cl`'s C4293, at level 1, for a constant shift count that is negative
-    /// or not below the width of the promoted left operand, whatever that
-    /// operand is, and its error C2124 for an integer constant divided by a
-    /// constant zero (a variable divided by zero draws nothing) while the
-    /// unit has had no error.
+    /// `cl`'s C4293, at level 1, for a constant shift count of `<<` or `>>`
+    /// (not `<<=` or `>>=`) that is negative or not below the width of the
+    /// promoted left operand, whatever that operand is, and its error C2124 for
+    /// an integer constant divided by a constant zero (a variable divided by
+    /// zero draws nothing) while the unit has had no error.
     /// Microsoft Learn: "Compiler Warning (level 1) C4293", "Compiler Error
     /// C2124".
     /// C99: §6.5.7 paragraph 3, p. 84; PDF p. 96; §6.5.5 paragraph 5, p. 82;
