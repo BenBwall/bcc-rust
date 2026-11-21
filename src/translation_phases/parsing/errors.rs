@@ -409,6 +409,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
 /// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact of how the diagnostic is written."
+)]
 pub(crate) struct ParserError<'tu> {
     #[cfg_attr(
         not(test),

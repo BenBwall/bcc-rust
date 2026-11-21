@@ -469,10 +469,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if left.category != ValueCategory::ModifiableLvalue
                 && !self.tcc_writes_read_only(e, &left)
             {
-                if left.category == ValueCategory::Rvalue
-                    && !e.recovered
-                    && self.cl_not_lvalue(op, left)
-                {
+                if !e.recovered && self.cl_not_lvalue(op, left) {
                     return Self::expression_result(e, self.types.unknown());
                 }
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
@@ -3426,7 +3423,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C2106".
     /// C99: §6.5.16p2, p. 91; PDF p. 103.
     fn cl_not_lvalue(&mut self, op: BinaryOperator, left: ExpressionInfo<'tu>) -> bool {
-        if !self.context.configuration.msvc_wording() || self.void_type(left.ty) {
+        if left.category != ValueCategory::Rvalue
+            || !self.context.configuration.msvc_wording()
+            || self.void_type(left.ty)
+        {
             return false;
         }
         let mut operand = left.expression;

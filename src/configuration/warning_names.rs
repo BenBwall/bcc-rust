@@ -108,35 +108,86 @@ pub(crate) enum ClWarningState {
 /// [`CL_CODED_WARNINGS`], which `#pragma warning` changes: `push, n` sets
 /// the level until its `pop`, and `default` or a level specifier undoes a
 /// `/wd` or `/we` as `disable` and `error` replace a level.
+///
+/// It packs three bits for the level and three for each warning's state, so
+/// that every copy of the configuration stays small.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct ClWarnings {
-    level:  u8,
-    states: [ClWarningState; CL_CODED_WARNINGS.len()],
+pub(crate) struct ClWarnings(u64);
+
+const _: () = assert!(
+    3 * (CL_CODED_WARNINGS.len() + 1) <= 64,
+    "the level and each warning's state take three bits of a u64"
+);
+
+/// The low three bits of `value`.
+const fn three_bits(value: u64) -> u8 {
+    match value & 0b111 {
+        | 0 => 0,
+        | 1 => 1,
+        | 2 => 2,
+        | 3 => 3,
+        | 4 => 4,
+        | 5 => 5,
+        | 6 => 6,
+        | _ => 7,
+    }
+}
+
+impl ClWarningState {
+    /// The three bits [`ClWarnings`] keeps for the state.
+    const fn bits(self) -> u64 {
+        match self {
+            | Self::Level(level) => level as u64 & 0b111,
+            | Self::Disabled => 5,
+            | Self::Error => 6,
+        }
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            | 5 => Self::Disabled,
+            | 6 => Self::Error,
+            | level => Self::Level(level),
+        }
+    }
 }
 
 impl ClWarnings {
     /// `cl`'s command line without options: level 1, each warning at its
     /// own.
     pub(crate) const DEFAULT: Self = {
-        let mut states = [ClWarningState::Level(0); CL_CODED_WARNINGS.len()];
+        let mut warnings = Self(1);
         let mut index = 0;
-        while index < states.len() {
-            states[index] = ClWarningState::Level(CL_CODED_WARNINGS[index].level);
+        while index < CL_CODED_WARNINGS.len() {
+            warnings =
+                warnings.with_index(index, ClWarningState::Level(CL_CODED_WARNINGS[index].level));
             index += 1;
         }
-        Self { level: 1, states }
+        warnings
     };
 
-    pub(crate) const fn with_level(mut self, level: u8) -> Self {
-        self.level = level;
-        self
+    const fn with_index(self, index: usize, state: ClWarningState) -> Self {
+        let shift = 3 * (index + 1);
+        Self(self.0 & !(0b111 << shift) | state.bits() << shift)
+    }
+
+    const fn state(self, index: usize) -> ClWarningState {
+        ClWarningState::from_bits(three_bits(self.0 >> (3 * (index + 1))))
+    }
+
+    const fn level(self) -> u8 {
+        three_bits(self.0)
+    }
+
+    pub(crate) const fn with_level(self, level: u8) -> Self {
+        Self(self.0 & !0b111 | level as u64 & 0b111)
     }
 
     /// `state` for every entry of `code`.
     pub(crate) fn with_state(mut self, code: u16, state: ClWarningState) -> Self {
         for (index, warning) in CL_CODED_WARNINGS.iter().enumerate() {
             if warning.code == code {
-                self.states[index] = state;
+                self = self.with_index(index, state);
             }
         }
         self
@@ -156,8 +207,8 @@ impl ClWarnings {
         let index = CL_CODED_WARNINGS
             .iter()
             .position(|warning| warning.code == code)?;
-        match self.states[index] {
-            | ClWarningState::Level(level) if level > self.level => None,
+        match self.state(index) {
+            | ClWarningState::Level(level) if level > self.level() => None,
             | ClWarningState::Disabled => None,
             | state => Some(state),
         }
@@ -168,10 +219,10 @@ impl ClWarnings {
     pub(crate) fn classes(self) -> impl Iterator<Item = (&'static str, ClWarningState)> {
         CL_CODED_WARNINGS
             .iter()
-            .zip(self.states)
-            .map(move |(warning, state)| {
-                let state = match state {
-                    | ClWarningState::Level(level) if level > self.level =>
+            .enumerate()
+            .map(move |(index, warning)| {
+                let state = match self.state(index) {
+                    | ClWarningState::Level(level) if level > self.level() =>
                         ClWarningState::Disabled,
                     | other => other,
                 };

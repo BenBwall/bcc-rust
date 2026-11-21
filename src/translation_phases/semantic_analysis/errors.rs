@@ -2190,7 +2190,7 @@ impl SemanticErrorKind {
                 "switch cases",
                 "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
             ),
-            | Self::ReturnFlow(_) => (
+            | Self::ReturnFlow(_) | Self::ClReturnFlow { .. } => (
                 "control reaches the end of the function",
                 "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
                  reaches the closing brace",
@@ -2202,11 +2202,6 @@ impl SemanticErrorKind {
             | Self::ClError(_) => (
                 "constraint violation",
                 "C99 §5.1.1.3p1: a violated constraint requires a diagnostic",
-            ),
-            | Self::ClReturnFlow { .. } => (
-                "control reaches the end of the function",
-                "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
-                 reaches the closing brace",
             ),
             | Self::SignCompare | Self::SignCompareEquality => (
                 "comparison of integers of different signs",

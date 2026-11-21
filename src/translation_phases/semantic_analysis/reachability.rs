@@ -124,6 +124,10 @@ impl<'s> ReachabilityState<'s> {
 
 /// How a function can leave, which the warnings about reaching its end ask.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about how the function can leave."
+)]
 struct Exits {
     /// Any `return` statement, reached or not, for what GCC's front end asks.
     any_return:   bool,
