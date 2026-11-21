@@ -245,24 +245,53 @@ impl Integer {
         }
     }
 
-    /// The type of a decimal integer constant with `suffix` and `value`:
-    /// the first of its list that can represent the value.
+    /// The type of an integer constant with `suffix` and `value`: the
+    /// first of its list that can represent the value. An octal or
+    /// hexadecimal constant's list (`decimal` unset) takes each unsigned
+    /// type after its signed one, so `0xFFFFFFFF` is an unsigned int where
+    /// `4294967295` is a long.
     ///
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-    pub(super) fn constant(value: i128, suffix: Suffix) -> Option<Self> {
-        let list: &[Self] = match (suffix.unsigned, suffix.long) {
-            | (false, 0) => &[Self::Int, Self::Long, Self::LongLong],
-            | (true, 0) => &[
-                Self::UnsignedInt,
-                Self::UnsignedLong,
-                Self::UnsignedLongLong,
-            ],
-            | (false, 1) => &[Self::Long, Self::LongLong],
-            | (true, 1) => &[Self::UnsignedLong, Self::UnsignedLongLong],
-            | (false, _) => &[Self::LongLong],
-            | (true, _) => &[Self::UnsignedLongLong],
-        };
-        list.iter().copied().find(|ty| ty.fits(value))
+    pub(super) fn constant(value: i128, suffix: Suffix, decimal: bool) -> Option<Self> {
+        list(suffix, decimal)
+            .iter()
+            .copied()
+            .find(|ty| ty.fits(value))
+    }
+}
+
+/// The types an integer constant with `suffix` may have, in the order C
+/// tries them: a decimal constant stays signed unless its suffix says `u`,
+/// while an octal or hexadecimal one tries each unsigned type right after
+/// its signed one.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+pub(super) const fn list(suffix: Suffix, decimal: bool) -> &'static [Integer] {
+    use Integer::{
+        Int,
+        Long,
+        LongLong,
+        UnsignedInt,
+        UnsignedLong,
+        UnsignedLongLong,
+    };
+    match (decimal, suffix.unsigned, suffix.long) {
+        | (true, false, 0) => &[Int, Long, LongLong],
+        | (false, false, 0) => &[
+            Int,
+            UnsignedInt,
+            Long,
+            UnsignedLong,
+            LongLong,
+            UnsignedLongLong,
+        ],
+        | (_, true, 0) => &[UnsignedInt, UnsignedLong, UnsignedLongLong],
+        | (true, false, 1) => &[Long, LongLong],
+        | (false, false, 1) => &[Long, UnsignedLong, LongLong, UnsignedLongLong],
+        | (_, true, 1) => &[UnsignedLong, UnsignedLongLong],
+        | (true, false, _) => &[LongLong],
+        | (false, false, _) => &[LongLong, UnsignedLongLong],
+        | (_, true, _) => &[UnsignedLongLong],
     }
 }
 
@@ -365,11 +394,30 @@ mod tests {
     fn constants_take_the_first_type_that_holds_them() {
         let none = Suffix::default();
         let unsigned = Suffix::parse("u").unwrap();
-        assert_eq!(Integer::constant(1, none), Some(Integer::Int));
-        assert_eq!(Integer::constant(2_147_483_648, none), Some(Integer::Long));
-        assert_eq!(Integer::constant(1, unsigned), Some(Integer::UnsignedInt));
+        assert_eq!(Integer::constant(1, none, true), Some(Integer::Int));
         assert_eq!(
-            Integer::constant(4_294_967_296, unsigned),
+            Integer::constant(2_147_483_648, none, true),
+            Some(Integer::Long)
+        );
+        assert_eq!(
+            Integer::constant(1, unsigned, true),
+            Some(Integer::UnsignedInt)
+        );
+        assert_eq!(
+            Integer::constant(4_294_967_296, unsigned, true),
+            Some(Integer::UnsignedLong)
+        );
+        // An octal or hexadecimal constant tries the unsigned types too.
+        assert_eq!(
+            Integer::constant(4_294_967_295, none, false),
+            Some(Integer::UnsignedInt)
+        );
+        assert_eq!(
+            Integer::constant(4_294_967_295, none, true),
+            Some(Integer::Long)
+        );
+        assert_eq!(
+            Integer::constant(0xFFFF_FFFF_FFFF_FFFF, none, false),
             Some(Integer::UnsignedLong)
         );
         assert_eq!(Suffix::parse("ULL").map(|s| s.long), Some(2));

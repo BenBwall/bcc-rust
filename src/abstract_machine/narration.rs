@@ -119,6 +119,11 @@ pub(super) enum Topic {
     Truncation,
     NotANumber,
     AnnexF,
+    Bases,
+    Bitwise,
+    ShortCircuit,
+    Conditional,
+    Comma,
 }
 
 impl Topic {
@@ -391,6 +396,35 @@ impl Topic {
                  without optimization x86-64's divide instruction traps and the program dies with \
                  SIGFPE, but an optimizer may compute something else instead (GCC -O2 turns 1 / b \
                  into a comparison that never traps).",
+            | Self::Bases =>
+                "Each hexadecimal digit stands for exactly four bits, so 0xFF is eight 1 bits and \
+                 0x80 a single 1 at bit 7: programmers write masks and bit patterns in hexadecimal \
+                 for that reason. A leading 0 is easy to write by accident: 010 is 8, not 10, \
+                 because it makes the constant octal. Octal survives mostly in Unix file \
+                 permissions, where 0755 packs three 3-bit groups.",
+            | Self::Bitwise =>
+                "The bitwise operators treat an integer as a row of bits. `x & 1` is 1 exactly \
+                 when x is odd; `flags | m` sets the bits of a mask m, `flags & ~m` clears them \
+                 and `flags ^ m` flips them, which is how one int holds many on/off flags. `&` and \
+                 `|` are not `&&` and `||`: they always evaluate both operands and combine every \
+                 bit, so `2 & 1` is 0 where `2 && 1` is 1. Bit work is best done in unsigned \
+                 types, whose bits are all value bits.",
+            | Self::ShortCircuit =>
+                "&& and || stop as soon as the result is known: in `p != 0 && *p > 0` the right \
+                 operand runs only when p is not null, so the guard keeps `*p` from dereferencing \
+                 a null pointer. The sequence point after the left operand also makes `i < n && \
+                 a[i] != 0` safe: the test of i is complete before a[i] is read. That is \
+                 guaranteed by C, unlike the operand order of +, which is unspecified.",
+            | Self::Conditional =>
+                "`c ? a : b` is an expression, so it can sit where an if statement cannot: in an \
+                 initializer, a return or an argument. Only the chosen operand runs, so `n != 0 ? \
+                 total / n : 0` never divides by zero. Its type comes from both operands, so `c ? \
+                 1 : 2.5` is a double even when it picks the 1.",
+            | Self::Comma =>
+                "The comma operator is mostly seen in for loops: `for (i = 0, j = n - 1; i < j; \
+                 i++, j--)` runs two updates where C expects one expression. Not every comma is \
+                 one: the commas between a call's arguments or in a declaration only separate, so \
+                 they give no order and no sequence point.",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -2740,6 +2774,46 @@ impl Machine {
                     clauses::UNARY_MINUS,
                 )
             },
+            | "~" => {
+                let ty = ty.unwrap_or(Integer::Int);
+                let name = ty.spelling();
+                let (number, flipped) = match (&value, &output) {
+                    | (&Value::Integer(number), &Value::Integer(flipped)) => (number, flipped),
+                    | _ => (0, 0),
+                };
+                let width = shown_bits(&[number, flipped], ty);
+                let meaning = if ty.signed() {
+                    format!(
+                        "As {}, whose negative values x86-64 stores in two's complement, those \
+                         bits are {shown}: ~x is -x - 1 there.",
+                        article(name)
+                    )
+                } else {
+                    format!(
+                        "For an unsigned type ~x is the largest value minus x: {} - {input} = \
+                         {shown}.",
+                        ty.max()
+                    )
+                };
+                (
+                    format!("Complement {input} → {shown}"),
+                    format!(
+                        "`~` flips every bit of {input}: {} becomes {}, which is {shown}.",
+                        compact_bits(number, width),
+                        compact_bits(flipped, width)
+                    ),
+                    format!(
+                        "`~` works on its operand after the integer promotions, here {}, and \
+                         flips each of its {} bits: every 0 becomes 1 and every 1 becomes 0. \
+                         {input} is {}, so ~{input} is {}. {meaning}",
+                        article(name),
+                        ty.bits(),
+                        bit_text(number, ty.bits()),
+                        bit_text(flipped, ty.bits())
+                    ),
+                    clauses::COMPLEMENT,
+                )
+            },
             | "!" => (
                 format!("Logical not: !{input} → {shown}"),
                 format!("`!` turns 0 into 1 and anything else into 0, so `!{input}` is {shown}."),
@@ -2774,6 +2848,9 @@ impl Machine {
         if unsigned.is_some() && operator == "-" {
             event.clauses.push(clauses::UNSIGNED_WRAP);
             event = noted(event, Topic::Unsigned);
+        }
+        if operator == "~" {
+            event = noted(event, Topic::Bitwise);
         }
         event.result_type = ty.map(|ty| String::from(ty.spelling()));
         event.operands.push(Operand::Value(value));
@@ -3003,6 +3080,14 @@ impl Machine {
                 &right,
                 &output,
             ),
+            | _ if matches!(operator, "&" | "^" | "|") => Self::bitwise(
+                range,
+                operator,
+                ty.unwrap_or(Integer::Int),
+                &left,
+                &right,
+                &output,
+            ),
             | _ if ty.is_some_and(|ty| !ty.signed()) => Self::unsigned_arithmetic(
                 range,
                 operator,
@@ -3086,6 +3171,92 @@ impl Machine {
             .operands
             .extend([Operand::Value(left), Operand::Value(right)]);
         result(event, Operand::Value(output))
+    }
+
+    /// `left operator right` for a bitwise `&`, `^` or `|`, computed in
+    /// `ty`, the operands' common type: the operation bit by bit, with the
+    /// bits shown.
+    ///
+    /// C99: §6.5.10 paragraphs 3-4, p. 87; PDF p. 99.
+    /// C99: §6.5.11 paragraph 4, §6.5.12 paragraph 4, p. 88; PDF p. 100.
+    fn bitwise(
+        range: SourceRange,
+        operator: &str,
+        ty: Integer,
+        left: &Value,
+        right: &Value,
+        output: &Value,
+    ) -> Event {
+        let (Value::Integer(a), Value::Integer(b), Value::Integer(shown)) = (left, right, output)
+        else {
+            return Event::new(EventKind::Arithmetic, range, String::from("Compute"));
+        };
+        let (a, b, shown) = (*a, *b, *shown);
+        let name = ty.spelling();
+        let (keeps, rule, clause, contrast) = match operator {
+            | "&" => (
+                "keeps only the bits that are 1 in both operands",
+                "a result bit is 1 only where both operand bits are 1",
+                clauses::BITWISE_AND,
+                "Unlike &&, & always evaluates both operands and gives every bit, not just 0 or 1.",
+            ),
+            | "|" => (
+                "keeps every bit that is 1 in either operand",
+                "a result bit is 1 where at least one operand bit is 1",
+                clauses::BITWISE_OR,
+                "Unlike ||, | always evaluates both operands and gives every bit, not just 0 or 1.",
+            ),
+            | _ => (
+                "keeps the bits that are 1 in exactly one operand",
+                "a result bit is 1 where the operand bits differ",
+                clauses::BITWISE_XOR,
+                "x ^ m flips the bits of x where the mask m has a 1, and leaves the rest.",
+            ),
+        };
+        let width = shown_bits(&[a, b, shown], ty);
+        let higher = if width < ty.bits() {
+            format!(
+                " (the {} bits above those shown are 0 in all three)",
+                ty.bits() - width
+            )
+        } else {
+            String::new()
+        };
+        let types = if ty == Integer::Int {
+            String::from(
+                "Both operands are int, so the usual arithmetic conversions leave them unchanged",
+            )
+        } else {
+            format!("The operands have the common type {name}")
+        };
+        let summary = format!(
+            "`{operator}` {keeps}: {} {operator} {} = {}, which is {shown}.",
+            compact_bits(a, width),
+            compact_bits(b, width),
+            compact_bits(shown, width)
+        );
+        let text = format!(
+            "{types}, and the machine works on {name}'s {} bits, one position at a time: {rule}. \
+             {a} is {} and {b} is {}{higher}, so {a} {operator} {b} is {}, which is {shown}. \
+             {contrast}{UNORDERED}",
+            ty.bits(),
+            bit_text(a, width),
+            bit_text(b, width),
+            bit_text(shown, width)
+        );
+        noted(
+            explained(
+                Event::new(
+                    EventKind::Arithmetic,
+                    range,
+                    format!("Compute {a} {operator} {b} = {shown}"),
+                ),
+                &summary,
+                &text,
+                &[clause, clauses::USUAL_ARITHMETIC, clauses::EVALUATION_ORDER],
+            ),
+            Topic::Bitwise,
+        )
     }
 
     /// `left operator right` computed in the unsigned type `ty`, whose
@@ -3477,8 +3648,7 @@ impl Machine {
         range: SourceRange,
         source: &str,
         delta: i32,
-        prefix: bool,
-        nested: bool,
+        (prefix, nested, full_expression): (bool, bool, bool),
         target: usize,
         offset: i32,
         current: Value,
@@ -3602,8 +3772,12 @@ impl Machine {
                  else in the condition touches {location}, so no other access can clash with it.",
                 self.short_value(&yielded)
             );
-        } else {
+        } else if full_expression {
             text.push_str(" The full expression ends here, a sequence point.");
+        } else {
+            text.push_str(
+                " It is the left operand of a comma operator, whose sequence point comes next.",
+            );
         }
         let increment = match (prefix, delta > 0) {
             | (true, true) => clauses::PREFIX_INCREMENT,
@@ -3612,11 +3786,11 @@ impl Machine {
             | (false, false) => clauses::POSTFIX_DECREMENT,
         };
         cited.insert(0, increment);
-        cited.push(if nested {
-            clauses::UNSEQUENCED
-        } else {
-            clauses::FULL_EXPRESSION
-        });
+        if nested {
+            cited.push(clauses::UNSEQUENCED);
+        } else if full_expression {
+            cited.push(clauses::FULL_EXPRESSION);
+        }
         let mut event = noted(
             explained(
                 Event::new(
@@ -3630,7 +3804,7 @@ impl Machine {
             ),
             topic,
         );
-        event.sequence_point = !nested;
+        event.sequence_point = !nested && full_expression;
         event.operands.extend([
             Operand::Address {
                 target,
@@ -3876,6 +4050,7 @@ impl Machine {
         [current, right, left, right_converted]: [Value; 4],
         combined: &Value,
         stored: Value,
+        full_expression: bool,
     ) -> Event {
         let location = self.location(target, offset);
         let form = snippet(source, range);
@@ -3902,6 +4077,9 @@ impl Machine {
             | "/" => ("divides, truncating toward zero, by", clauses::DIVISION),
             | "<<" => ("shifts it left by", clauses::LEFT_SHIFT),
             | ">>" => ("shifts it right by", clauses::RIGHT_SHIFT),
+            | "&" => ("keeps only the bits it shares with", clauses::BITWISE_AND),
+            | "|" => ("sets in it every bit set in", clauses::BITWISE_OR),
+            | "^" => ("flips in it every bit set in", clauses::BITWISE_XOR),
             | _ => ("takes the remainder of dividing by", clauses::DIVISION),
         };
         let action = if pointer {
@@ -3994,6 +4172,21 @@ impl Machine {
                 );
                 cited.push(clauses::UNSIGNED_WRAP);
             }
+            if matches!(operator, "&" | "|" | "^") {
+                let width = shown_bits(&[a, b, result], common);
+                let _ = write!(
+                    text,
+                    " In binary, {a} is {} and {b} is {}, so the result is {}{}.",
+                    bit_text(a, width),
+                    bit_text(b, width),
+                    bit_text(result, width),
+                    if result == a {
+                        String::new()
+                    } else {
+                        format!(", which is {result}")
+                    }
+                );
+            }
             let back = &stored != combined;
             if back && leaf.signed() {
                 let _ = write!(
@@ -4066,8 +4259,14 @@ impl Machine {
                 }
             }
         }
-        text.push_str(" The full expression ends here, a sequence point.");
-        cited.push(clauses::FULL_EXPRESSION);
+        if full_expression {
+            text.push_str(" The full expression ends here, a sequence point.");
+            cited.push(clauses::FULL_EXPRESSION);
+        } else {
+            text.push_str(
+                " It is the left operand of a comma operator, whose sequence point comes next.",
+            );
+        }
         let summary = format!(
             "`{form}` is `{meaning}` with {left_text} evaluated once: {location} changes from \
              {old} to {new}."
@@ -4090,7 +4289,7 @@ impl Machine {
                 Topic::CompoundAssign
             },
         );
-        event.sequence_point = true;
+        event.sequence_point = full_expression;
         event.result_type = self
             .leaf_type(target, offset)
             .and_then(Type::arithmetic)
@@ -4238,6 +4437,342 @@ impl Machine {
         event.sequence_point = !omitted;
         event.operands.push(Operand::Value(value.clone()));
         result(event, Operand::Value(value))
+    }
+
+    /// The test of the first operand of `&&` or `||`, `texts` its
+    /// operands: a sequence point follows, and `settled` is the result
+    /// when the first operand decides it, so the second is skipped.
+    ///
+    /// C99: §6.5.13 paragraphs 3-4, §6.5.14 paragraphs 3-4, p. 89; PDF p.
+    /// 101.
+    pub(super) fn logical_test(
+        &self,
+        range: SourceRange,
+        operator: &str,
+        texts: &[String],
+        value: Value,
+        truth: bool,
+        settled: Option<i128>,
+    ) -> Event {
+        let (first, second) = match texts {
+            | [first, second] => (first.as_str(), second.as_str()),
+            | _ => ("the left operand", "the right operand"),
+        };
+        let shown = self.short_value(&value);
+        let counts = truth_words(&value, truth);
+        let whole = format!("{first} {operator} {second}");
+        let (order, value_clause) = if operator == "&&" {
+            (clauses::LOGICAL_AND, clauses::LOGICAL_AND_VALUE)
+        } else {
+            (clauses::LOGICAL_OR, clauses::LOGICAL_OR_VALUE)
+        };
+        let (title, summary, why) = match settled {
+            | Some(result) => (
+                format!(
+                    "Left of {operator} is {}: skip the right, result {result}",
+                    if truth { "true" } else { "false" }
+                ),
+                format!(
+                    "`{first}` is {shown}, so `{whole}` is {result} whatever its right operand \
+                     would give, and `{second}` is never evaluated."
+                ),
+                if operator == "&&" {
+                    format!(
+                        "`&&` yields 1 only when both operands are nonzero, so with a left \
+                         operand of 0 the result is the int 0 already. C then does not evaluate \
+                         the right operand `{second}` at all: none of its reads, calls or side \
+                         effects happen. This is short-circuit evaluation."
+                    )
+                } else {
+                    format!(
+                        "`||` yields 1 when either operand is nonzero, so with a nonzero left \
+                         operand the result is the int 1 already. C then does not evaluate the \
+                         right operand `{second}` at all: none of its reads, calls or side \
+                         effects happen. This is short-circuit evaluation."
+                    )
+                },
+            ),
+            | None => (
+                format!(
+                    "Left of {operator} is {}: evaluate the right",
+                    if truth { "true" } else { "false" }
+                ),
+                format!(
+                    "`{first}` is {shown}, which counts as {}, so `{whole}` depends on its right \
+                     operand, `{second}`, which is evaluated next.",
+                    if truth { "true" } else { "false" }
+                ),
+                format!(
+                    "That does not settle the result: {} the right operand `{second}`, which is \
+                     evaluated next, decides it.",
+                    if operator == "&&" {
+                        "both operands must be nonzero for `&&` to yield 1, so"
+                    } else {
+                        "`||` yields 1 if either operand is nonzero, so"
+                    }
+                ),
+            ),
+        };
+        let text = format!(
+            "`{operator}` evaluates its left operand first and compares it with 0: `{first}` is \
+             {shown}, and {counts}. {why} A sequence point follows the left operand, so \
+             everything it did is complete before anything else happens. Unlike `+` or `&`, whose \
+             operands C may evaluate in either order, `{operator}` always goes left to right."
+        );
+        let mut cited = vec![order];
+        if settled.is_some() {
+            cited.push(value_clause);
+        }
+        cited.push(clauses::SEQUENCE_POINTS);
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::Logical, range, title),
+                &summary,
+                &text,
+                &cited,
+            ),
+            Topic::ShortCircuit,
+        );
+        event.sequence_point = true;
+        event.operands.push(Operand::Value(value));
+        if let Some(result) = settled {
+            event.result_type = Some(String::from("int"));
+            event = self::result(event, Operand::Value(Value::Integer(result)));
+        }
+        event
+    }
+
+    /// The test of the first operand of `?:`, `texts` its three operands:
+    /// a sequence point follows, and only the chosen operand is evaluated.
+    ///
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
+    pub(super) fn conditional_test(
+        &self,
+        range: SourceRange,
+        texts: &[String],
+        value: Value,
+        truth: bool,
+    ) -> Event {
+        let (first, second, third) = match texts {
+            | [first, second, third] => (first.as_str(), second.as_str(), third.as_str()),
+            | _ => ("the condition", "the second operand", "the third operand"),
+        };
+        let shown = self.short_value(&value);
+        let counts = truth_words(&value, truth);
+        let (chosen, skipped, which) = if truth {
+            (second, third, "second")
+        } else {
+            (third, second, "third")
+        };
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Conditional,
+                    range,
+                    format!(
+                        "Condition of ?: is {}: choose `{chosen}`",
+                        if truth { "true" } else { "false" }
+                    ),
+                ),
+                &format!(
+                    "`{first}` is {shown}, which counts as {}, so `?:` evaluates its {which} \
+                     operand, `{chosen}`, and never evaluates `{skipped}`.",
+                    if truth { "true" } else { "false" }
+                ),
+                &format!(
+                    "`?:` evaluates its first operand, compares it with 0, and then evaluates \
+                     exactly one of the others: the second when the first is nonzero, the third \
+                     when it is 0. `{first}` is {shown}, and {counts}, so `{chosen}` is evaluated \
+                     next and `{skipped}` is skipped: none of its reads, calls or side effects \
+                     happen. A sequence point follows the first operand."
+                ),
+                &[clauses::CONDITIONAL, clauses::SEQUENCE_POINTS],
+            ),
+            Topic::Conditional,
+        );
+        event.sequence_point = true;
+        event.operands.push(Operand::Value(value));
+        event
+    }
+
+    /// The value of `&&`, `||`, `?:` or a comma operator, `texts` its
+    /// operands, from its operand `chosen`, whose value was `value`: `to`
+    /// is the type `?:` converts it to.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One operator's complete observation."
+    )]
+    pub(super) fn yielded(
+        &self,
+        range: SourceRange,
+        operator: &str,
+        texts: &[String],
+        chosen: usize,
+        to: Option<Type>,
+        value: Value,
+        output: Value,
+    ) -> Event {
+        let operand = texts.get(chosen).map_or("the operand", String::as_str);
+        let (input, shown) = (self.short_value(&value), self.short_value(&output));
+        let whole = match (operator, texts) {
+            | ("?:", [first, second, third]) => format!("{first} ? {second} : {third}"),
+            | (",", [first, second]) => format!("{first}, {second}"),
+            | (_, [first, second]) => format!("{first} {operator} {second}"),
+            | _ => String::from("the expression"),
+        };
+        let (kind, title, summary, text, cited, topic) = match operator {
+            | "&&" | "||" => {
+                let truth = output == Value::Integer(1);
+                let reason = match (operator, truth) {
+                    | ("&&", true) => "both operands compare unequal to 0",
+                    | ("&&", false) => "its left operand was nonzero, but its right one is 0",
+                    | (_, true) => "its left operand was 0, but its right one is nonzero",
+                    | _ => "neither operand is nonzero",
+                };
+                let value_clause = if operator == "&&" {
+                    clauses::LOGICAL_AND_VALUE
+                } else {
+                    clauses::LOGICAL_OR_VALUE
+                };
+                (
+                    EventKind::Logical,
+                    format!("`{operand}` is {input}: {operator} yields {shown}"),
+                    format!(
+                        "The right operand `{operand}` is {input}, so `{operator}` yields the int \
+                         {shown}: {reason}."
+                    ),
+                    format!(
+                        "`{operator}` yields an int, 1 or 0, never an operand's own value. Its \
+                         left operand did not settle the result, so the right one decides it: \
+                         `{operand}` is {input}, so `{whole}` is {shown}, because {reason}."
+                    ),
+                    vec![value_clause],
+                    Topic::ShortCircuit,
+                )
+            },
+            | "?:" => {
+                let converted = match to.and_then(Type::arithmetic) {
+                    | Some(arithmetic) if value != output => format!(
+                        " The result has the type the usual arithmetic conversions give the \
+                         second and third operands together, {}, so {input} is converted to {}.",
+                        arithmetic.spelling(),
+                        self.short_value(&output)
+                    ),
+                    | Some(arithmetic) => format!(
+                        " The result has the type the usual arithmetic conversions give the \
+                         second and third operands together, {}, which holds {input} unchanged.",
+                        arithmetic.spelling()
+                    ),
+                    | None if to.is_some() => String::from(
+                        " The constant 0 here is a null pointer constant: the result is a null \
+                         pointer.",
+                    ),
+                    | None => String::new(),
+                };
+                let mut cited = vec![clauses::CONDITIONAL];
+                if to.and_then(Type::arithmetic).is_some() {
+                    cited.push(clauses::CONDITIONAL_TYPE);
+                }
+                (
+                    EventKind::Conditional,
+                    format!("`?:` yields {shown}"),
+                    format!("The chosen operand `{operand}` is {input}, so `{whole}` is {shown}."),
+                    format!(
+                        "The value of a conditional expression is the value of whichever operand \
+                         it evaluated: here `{operand}`, which is {input}.{converted}"
+                    ),
+                    cited,
+                    Topic::Conditional,
+                )
+            },
+            | _ => (
+                EventKind::Comma,
+                format!("The comma operator yields {shown}"),
+                format!(
+                    "The comma operator's value is its right operand's: `{operand}` is {shown}."
+                ),
+                format!(
+                    "A comma operator's left operand was evaluated only for its side effects and \
+                     its value thrown away; the right operand gives the result, with its type and \
+                     value: `{whole}` is {shown}."
+                ),
+                vec![clauses::COMMA],
+                Topic::Comma,
+            ),
+        };
+        let mut event = noted(
+            explained(Event::new(kind, range, title), &summary, &text, &cited),
+            topic,
+        );
+        if let Value::Integer(_) = output {
+            event.result_type = match operator {
+                | "&&" | "||" => Some(String::from("int")),
+                | _ => to
+                    .and_then(Type::integer)
+                    .map(|integer| String::from(integer.spelling())),
+            };
+        }
+        event.operands.push(Operand::Value(value));
+        result(event, Operand::Value(output))
+    }
+
+    /// The end of a comma operator's left operand, `texts` its operands:
+    /// `value`, if the operand left one, is discarded, and a sequence point
+    /// follows.
+    ///
+    /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
+    pub(super) fn comma(
+        &self,
+        range: SourceRange,
+        texts: &[String],
+        value: Option<Value>,
+    ) -> Event {
+        let (first, second) = match texts {
+            | [first, second] => (first.as_str(), second.as_str()),
+            | _ => ("the left operand", "the right operand"),
+        };
+        let discarded = value.as_ref().map_or_else(
+            || String::from("it was evaluated for its side effect"),
+            |value| {
+                format!(
+                    "it was evaluated only for its side effects, and its value, {}, is thrown away",
+                    self.short_value(value)
+                )
+            },
+        );
+        let summary = match &value {
+            | Some(value) => format!(
+                "The comma operator throws away `{first}`'s value, {}, and a sequence point \
+                 follows before `{second}` is evaluated.",
+                self.short_value(value)
+            ),
+            | None => format!(
+                "`{first}` is complete: a sequence point follows, before `{second}` begins."
+            ),
+        };
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Comma,
+                    range,
+                    format!("Comma: `{first}` is done, go on to `{second}`"),
+                ),
+                &summary,
+                &format!(
+                    "`{first}` is the left operand of a comma operator: {discarded}. A sequence \
+                     point follows, so everything it did is complete before the right operand \
+                     `{second}` starts, and the comma operator's value will be the right \
+                     operand's."
+                ),
+                &[clauses::COMMA, clauses::SEQUENCE_POINTS],
+            ),
+            Topic::Comma,
+        );
+        event.sequence_point = true;
+        if let Some(value) = value {
+            event.operands.push(Operand::Value(value));
+        }
+        event
     }
 
     #[expect(
@@ -4833,6 +5368,58 @@ fn char_text(value: i128) -> String {
     )
 }
 
+/// What C makes of a scalar `value` compared with 0, `truth` the result:
+/// "zero counts as false", "a null pointer counts as false".
+fn truth_words(value: &Value, truth: bool) -> &'static str {
+    match value {
+        | Value::Pointer { target: None, .. } => "a null pointer counts as false",
+        | Value::Pointer { .. } => "a non-null pointer counts as true",
+        | _ if truth => "any nonzero value counts as true",
+        | _ => "zero counts as false",
+    }
+}
+
+/// How many low bits of `ty` to show for `values`: all of them when one is
+/// negative, whose high bits are all 1, and otherwise enough whole groups
+/// of four for the largest, at least eight.
+fn shown_bits(values: &[i128], ty: Integer) -> u32 {
+    if values.iter().any(|value| *value < 0) {
+        return ty.bits();
+    }
+    let needed = values
+        .iter()
+        .map(|value| 128 - value.leading_zeros())
+        .max()
+        .unwrap_or(0);
+    (needed.div_ceil(4) * 4).max(8).min(ty.bits())
+}
+
+/// The low `width` bits of `value` in two's complement, most significant
+/// first, in groups of four: `0000 1101`.
+fn bit_text(value: i128, width: u32) -> String {
+    let mut text = String::new();
+    for bit in (0..width).rev() {
+        text.push(if (value >> bit) & 1 == 1 { '1' } else { '0' });
+        if bit > 0 && bit % 4 == 0 {
+            text.push(' ');
+        }
+    }
+    text
+}
+
+/// [`bit_text`] shortened for a lead: past 16 bits, when every bit from 8
+/// up to the top four copies the top one, those middle bits become `…`:
+/// `1111 … 1111 0000` for the 32 bits of -16.
+fn compact_bits(value: i128, width: u32) -> String {
+    let top = (value >> (width - 1)) & 1;
+    let uniform = (8..width).all(|bit| (value >> bit) & 1 == top);
+    if width <= 16 || !uniform {
+        return bit_text(value, width);
+    }
+    let high = bit_text(value >> (width - 4), 4);
+    format!("{high} … {}", bit_text(value, 8))
+}
+
 /// The integer constant spelled `spelling`, of type `ty`, evaluates to
 /// `integer`.
 ///
@@ -4845,6 +5432,9 @@ pub(super) fn constant(
     value: Operand,
 ) -> Event {
     let name = ty.spelling();
+    if let Some(event) = prefixed_constant(range, integer, ty, spelling, &value) {
+        return event;
+    }
     let suffix = spelling.trim_start_matches(|character: char| character.is_ascii_digit());
     let mut event = if ty == Integer::Int && suffix.is_empty() {
         let text = format!(
@@ -4902,6 +5492,113 @@ pub(super) fn constant(
     };
     event.result_type = Some(String::from(name));
     result(event, value)
+}
+
+/// The event of an octal or hexadecimal constant, spelled `spelling`, or
+/// `None` for a decimal one (and for `0`, which is octal but reads the same
+/// in every base): its value computed in its base, and its type, the first
+/// of a list that, unlike a decimal constant's, includes the unsigned types.
+///
+/// C99: §6.4.4.1 paragraphs 3-5, pp. 55-56; PDF pp. 67-68.
+fn prefixed_constant(
+    range: SourceRange,
+    integer: i128,
+    ty: Integer,
+    spelling: &str,
+    value: &Operand,
+) -> Option<Event> {
+    let (radix, base, prefix) = match spelling.as_bytes() {
+        | [b'0', b'x' | b'X', ..] => (16, "hexadecimal", 2),
+        | [b'0', next, ..] if next.is_ascii_digit() => (8, "octal", 1),
+        | _ => return None,
+    };
+    let after = &spelling[prefix..];
+    let count = after
+        .chars()
+        .take_while(|character| character.is_digit(radix))
+        .count();
+    let (digits, suffix) = after.split_at(count);
+    let name = ty.spelling();
+    let value_words = positional(digits, radix).map_or_else(
+        || format!("its value is {integer}"),
+        |sum| format!("{sum} = {integer}"),
+    );
+    let prefix = if radix == 16 {
+        "0x makes it base 16, whose digits a to f stand for 10 to 15"
+    } else {
+        "a leading 0 makes it base 8, whose digits are 0 to 7"
+    };
+    let list = super::integers::list(
+        super::integers::Suffix::parse(suffix).unwrap_or_default(),
+        false,
+    )
+    .iter()
+    .map(|ty| ty.spelling())
+    .collect::<Vec<_>>();
+    let list = match list.as_slice() {
+        | [only] => format!("the only type of its list, {only}"),
+        | [rest @ .., final_type] => format!(
+            "the first of {} and {final_type} that can hold {integer}",
+            rest.join(", ")
+        ),
+        | [] => String::from("its type"),
+    };
+    let decimal_note = match ty {
+        | Integer::UnsignedInt | Integer::UnsignedLong | Integer::UnsignedLongLong
+            if suffix.is_empty() =>
+            format!(
+                " A decimal constant without a u would never be unsigned: written as {integer}, \
+                 it would be a wider signed type."
+            ),
+        | _ => String::new(),
+    };
+    let text = format!(
+        "{spelling} is {} {base} constant: {prefix}, so {value_words}. It has type {name}, \
+         {list}.{decimal_note} Evaluating a constant just produces its value.",
+        if radix == 16 { "a" } else { "an" }
+    );
+    let mut event = noted(
+        explained(
+            Event::new(
+                EventKind::Constant,
+                range,
+                format!("Evaluate the constant {spelling} = {integer}"),
+            ),
+            &format!("The {base} constant {spelling} is the {name} value {integer}."),
+            &text,
+            &[clauses::INTEGER_BASE, clauses::PREFIXED_CONSTANT],
+        ),
+        Topic::Bases,
+    );
+    if !ty.signed() {
+        event.clauses.push(clauses::UNSIGNED_TYPES);
+    }
+    event.result_type = Some(String::from(name));
+    Some(result(event, value.clone()))
+}
+
+/// `digits` in base `radix` written as a sum of digit values times powers
+/// of the base, `7 × 64 + 5 × 8 + 5`, for two to four significant digits;
+/// `None` for one digit, whose value needs no sum, or more than four, whose
+/// sum would bury the value.
+fn positional(digits: &str, radix: u32) -> Option<String> {
+    let digits = digits.trim_start_matches('0');
+    let count = u32::try_from(digits.len()).ok()?;
+    if !(2..=4).contains(&count) {
+        return None;
+    }
+    let terms: Vec<String> = digits
+        .chars()
+        .zip((0..count).rev())
+        .filter_map(|(digit, power)| {
+            let value = digit.to_digit(radix)?;
+            (value != 0).then(|| match power {
+                | 0 => format!("{value}"),
+                | _ => format!("{value} × {}", radix.pow(power)),
+            })
+        })
+        .collect();
+    Some(terms.join(" + "))
 }
 
 pub(super) fn implicit_zero(range: SourceRange, value: Operand) -> Event {

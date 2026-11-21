@@ -188,7 +188,9 @@ pub struct Event {
     pub result:         Option<Operand>,
     /// Objects created, read, written or ended by this operation.
     pub objects:        Vec<usize>,
-    /// Whether a full expression ended here (C99 §6.8p4).
+    /// Whether a sequence point follows the operation: a full expression
+    /// ended here (C99 §6.8p4), or the first operand of `&&`, `||`, `?:`
+    /// or a comma operator did (C99 Annex C).
     pub sequence_point: bool,
     /// The type of the value the event started from, when it converted
     /// one: `int` for a promotion, a conversion or a store that converts.
@@ -270,14 +272,24 @@ pub enum EventKind {
     Subscript,
     /// `s.m` or `p->m` designated a structure member.
     Member,
-    /// A unary `+`, `-` or `!` produced its value.
+    /// A unary `+`, `-`, `~` or `!` produced its value.
     Unary,
-    /// An integer `+`, `-`, `*`, `/` or `%` produced its value.
+    /// An arithmetic (`+`, `-`, `*`, `/`, `%`), shift (`<<`, `>>`) or
+    /// bitwise (`&`, `^`, `|`) operator produced its value.
     Arithmetic,
     /// A pointer moved by a number of elements.
     PointerArithmetic,
     /// A relational or equality operator produced 0 or 1.
     Comparison,
+    /// `&&` or `||` tested its first operand, deciding whether the second
+    /// is evaluated, or produced its 0 or 1 from the second.
+    Logical,
+    /// `?:` tested its first operand and chose the operand to evaluate, or
+    /// produced its result from the chosen one.
+    Conditional,
+    /// A comma operator discarded its left operand's value at a sequence
+    /// point, or produced its result from its right operand.
+    Comma,
     /// An initializer stored an object's first value.
     Initialize,
     /// An assignment replaced an object's value.
@@ -332,6 +344,9 @@ impl EventKind {
             | Self::Arithmetic => "arithmetic",
             | Self::PointerArithmetic => "pointer_arithmetic",
             | Self::Comparison => "comparison",
+            | Self::Logical => "logical",
+            | Self::Conditional => "conditional",
+            | Self::Comma => "comma",
             | Self::Initialize => "initialize",
             | Self::Assign => "assign",
             | Self::Increment => "increment",
@@ -376,8 +391,14 @@ impl EventKind {
             | Self::Declare
             | Self::StaticStorage
             | Self::StaticLocal => "lifetime",
-            | Self::Start | Self::Directive | Self::Discard | Self::Jump | Self::Branch =>
-                "control",
+            | Self::Start
+            | Self::Directive
+            | Self::Discard
+            | Self::Jump
+            | Self::Branch
+            | Self::Logical
+            | Self::Conditional
+            | Self::Comma => "control",
             | Self::Call | Self::LibraryCall | Self::Return => "call",
             | Self::Fault => "fault",
         }
@@ -416,6 +437,11 @@ pub struct Evaluation {
     pub values:   Vec<(usize, Operand)>,
     /// The node the last completed operation evaluated.
     pub last:     Option<usize>,
+    /// The nodes `&&`, `||` or `?:` decided not to evaluate: the second
+    /// operand of a `&&` whose first is 0, of a `||` whose first is
+    /// nonzero, and the operand of `?:` that was not chosen (C99
+    /// §6.5.13p4, §6.5.14p4, §6.5.15p4).
+    pub skipped:  Vec<usize>,
     /// A call in progress from this full expression.
     pub calling:  Option<usize>,
 }
@@ -845,18 +871,56 @@ pub(super) enum Op {
         structure:       Option<usize>,
     },
     Increment {
-        delta:  i32,
-        prefix: bool,
+        delta:           i32,
+        prefix:          bool,
         /// Whether the increment is an operand of a larger expression, a
         /// condition's, which then uses its value; otherwise it is a whole
-        /// expression statement.
-        nested: bool,
+        /// expression statement, or an operand of a comma operator there.
+        nested:          bool,
+        /// Whether this ends a full expression (C99 §6.8p4): a statement's
+        /// increment that is not the left operand of a comma operator.
+        full_expression: bool,
     },
     /// `E1 op= E2` as a statement: read the object the address below the
     /// value on the stack designates, apply `op` in `common` (the type the
     /// operator computes in; `None` for pointer arithmetic), store the
     /// result. The last type is `E2`'s, promoted when both are integers.
-    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>),
+    /// The flag says whether it ends a full expression, as it does unless
+    /// it is the left operand of a comma operator.
+    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>, bool),
+    /// The test after the first operand of `&&`, `||` or `?:`, whose
+    /// evaluation a sequence point ends: pop its value. `&&` of a zero
+    /// operand, or `||` of a nonzero one, has its result already: push it
+    /// and skip to `target`, past the second operand, which is never
+    /// evaluated. `?:` of a zero operand skips to `target`, its third
+    /// operand.
+    ///
+    /// C99: §6.5.13 paragraph 4, §6.5.14 paragraph 4, p. 89; PDF p. 101.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
+    Test {
+        operator: &'static str,
+        target:   usize,
+    },
+    /// The value of `&&`, `||`, `?:` or a comma operator, from the operand
+    /// evaluated last: `&&` and `||` yield 1 when it is nonzero and 0
+    /// otherwise, `?:` converts it to `to`, the type of its result; then
+    /// skip to `target`, when set: past the third operand of `?:` after its
+    /// second.
+    ///
+    /// C99: §6.5.13 paragraph 3, §6.5.14 paragraph 3, p. 89; PDF p. 101.
+    /// C99: §6.5.15 paragraph 5, p. 90; PDF p. 102.
+    /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
+    Yield {
+        operator: &'static str,
+        to:       Option<Type>,
+        target:   Option<usize>,
+    },
+    /// The end of a comma operator's left operand: its value, when
+    /// `discard` (an operand that is not a store or an increment), is thrown
+    /// away, and a sequence point follows (C99 §6.5.17p2).
+    Comma {
+        discard: bool,
+    },
     Pop,
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.

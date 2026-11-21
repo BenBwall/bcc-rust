@@ -55,11 +55,6 @@ impl Parser<'_> {
             let right = self.expression(precedence + 1)?;
             let lhs = &self.expressions[left];
             let rhs = &self.expressions[right];
-            if lhs.call || rhs.call {
-                return Err(self.error(
-                    "calls must be whole expressions; operand sequencing is outside this subset",
-                ));
-            }
             if lhs.effect && rhs.effect {
                 return Err(self.error(
                     "two ++ or -- in one condition are outside this subset: without a sequence \
@@ -78,6 +73,36 @@ impl Parser<'_> {
                         combined(lhs.range, rhs.range),
                         "each operand of a shift must have an integer type (C99 §6.5.7p2)",
                         &super::clauses::SHIFT_CONSTRAINT,
+                    )),
+                // C99 §6.5.10p2, §6.5.11p2, §6.5.12p2: integer operands
+                // only; the usual arithmetic conversions give the type.
+                | ("&" | "^" | "|", Type::Integer(left), Type::Integer(right)) =>
+                    Type::Integer(left.promoted().common(right.promoted()).0),
+                | ("&" | "^" | "|", ..) =>
+                    return Err(Diagnostic::constraint(
+                        combined(lhs.range, rhs.range),
+                        &format!(
+                            "each operand of `{operator}` must have an integer type: the bitwise \
+                             operators combine the bits of integers, and a floating value or a \
+                             pointer has none to give (C99 §6.5.10p2, §6.5.11p2, §6.5.12p2)"
+                        ),
+                        &super::clauses::BITWISE_CONSTRAINT,
+                    )),
+                // C99 §6.5.13p2-3, §6.5.14p2-3: scalar operands, an int
+                // result.
+                | ("&&" | "||", left, right)
+                    if (left.arithmetic().is_some() || left.is_pointer())
+                        && (right.arithmetic().is_some() || right.is_pointer()) =>
+                    Type::INT,
+                | ("&&" | "||", ..) =>
+                    return Err(Diagnostic::constraint(
+                        combined(lhs.range, rhs.range),
+                        &format!(
+                            "each operand of `{operator}` must be a scalar, a number or a \
+                             pointer, which it compares with 0; a structure is neither (C99 \
+                             §6.5.13p2, §6.5.14p2)"
+                        ),
+                        &super::clauses::LOGICAL_CONSTRAINT,
                     )),
                 | ("%", left, right)
                     if left.floating().is_some() && right.arithmetic().is_some()
@@ -128,7 +153,79 @@ impl Parser<'_> {
             )?;
             self.expressions[left].effect = effect;
         }
+        if minimum == 0 && self.at("?") {
+            left = self.conditional(left)?;
+        }
         Ok(left)
+    }
+
+    /// `condition ? then : otherwise`, after its condition: the first
+    /// operand is a scalar, and the other two must agree, both arithmetic
+    /// (the result has their common type), the same structure, pointers to
+    /// the same type, or a pointer and a null pointer constant. The third
+    /// operand is itself a conditional expression, so `a ? b : c ? d : e`
+    /// groups as `a ? b : (c ? d : e)`.
+    ///
+    /// C99: §6.5.15 paragraphs 2-5, p. 90; PDF p. 102.
+    fn conditional(&mut self, condition: usize) -> Result<usize, Diagnostic> {
+        self.position += 1;
+        let then = self.expression(0)?;
+        self.expect(":")?;
+        let otherwise = self.expression(0)?;
+        let [first, second, third] = [condition, then, otherwise].map(|at| &self.expressions[at]);
+        let range = combined(first.range, third.range);
+        if !(first.ty.arithmetic().is_some() || first.ty.is_pointer()) {
+            return Err(Diagnostic::constraint(
+                first.range,
+                "the first operand of `?:` must be a scalar, a number or a pointer, which it \
+                 compares with 0 (C99 §6.5.15p2)",
+                &super::clauses::CONDITIONAL_FIRST,
+            ));
+        }
+        if [first, second, third]
+            .iter()
+            .filter(|operand| operand.effect)
+            .count()
+            > 1
+        {
+            return Err(self.error(
+                "two ++ or -- in one condition are outside this subset: a condition may update \
+                 one variable",
+            ));
+        }
+        let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
+        let ty = match (second.ty, third.ty) {
+            | (left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() => left
+                .arithmetic()
+                .zip(right.arithmetic())
+                .map_or(Type::INT, |(left, right)| {
+                    left.promoted().common(right.promoted()).ty()
+                }),
+            | (left, right) if left == right => left,
+            | (Type::Pointer(left, a), Type::Pointer(right, b)) if left == right =>
+                Type::Pointer(left, a || b),
+            | (pointer, Type::Integer(_)) if pointer.is_pointer() && null(third) => pointer,
+            | (Type::Integer(_), pointer) if pointer.is_pointer() && null(second) => pointer,
+            | _ =>
+                return Err(Diagnostic::constraint(
+                    combined(second.range, third.range),
+                    "the second and third operands of `?:` must agree: both numbers, the same \
+                     structure type, pointers to the same type, or a pointer and the null pointer \
+                     constant 0 (C99 §6.5.15p3)",
+                    &super::clauses::CONDITIONAL_CONSTRAINT,
+                )),
+        };
+        let effect = first.effect || second.effect || third.effect;
+        let height = first.height.max(second.height).max(third.height) + 1;
+        let node = self.node(
+            ExprKind::Conditional(condition, then, otherwise),
+            ty,
+            false,
+            range,
+            height,
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
     }
 
     fn prefix(&mut self) -> Result<usize, Diagnostic> {
@@ -145,19 +242,24 @@ impl Parser<'_> {
         }
         if self.updates && (self.at("++") || self.at("--")) {
             self.position += 1;
-            let child = self.expression(6)?;
+            let child = self.expression(UNARY)?;
             return self.update(child, token, true);
         }
         if let Some(operator) = unary(&text) {
             self.position += 1;
-            let child = self.expression(6)?;
+            let child = self.expression(UNARY)?;
             let expression = &self.expressions[child];
-            if expression.call {
-                return Err(self.error("nested calls are outside this subset"));
-            }
             let readonly = expression.readonly;
             let ty = match (operator, expression.ty) {
-                | ("+" | "-", Type::Integer(integer)) => Type::Integer(integer.promoted()),
+                | ("+" | "-" | "~", Type::Integer(integer)) => Type::Integer(integer.promoted()),
+                | ("~", _) =>
+                    return Err(Diagnostic::constraint(
+                        combined(range, expression.range),
+                        "the operand of `~` must have an integer type: it flips the bits of an \
+                         integer, and a floating value or a pointer has none to flip (C99 \
+                         §6.5.3.3p1)",
+                        &super::clauses::COMPLEMENT_CONSTRAINT,
+                    )),
                 | ("+" | "-", floating @ Type::Floating(_)) => floating,
                 | (
                     "!",
@@ -197,7 +299,25 @@ impl Parser<'_> {
             return Ok(node);
         }
         let mut value = if self.take("(") {
-            let value = self.expression(0)?;
+            let mut value = self.expression(0)?;
+            // In parentheses a comma is the comma operator (C99 §6.5.17);
+            // between arguments it only separates them.
+            while self.take(",") {
+                let right = self.expression(0)?;
+                let [left_operand, right_operand] = [value, right].map(|at| &self.expressions[at]);
+                if left_operand.effect || right_operand.effect {
+                    return Err(self.error(
+                        "a ++ or -- in a comma operator's operand is outside this subset, except \
+                         in an expression statement such as `i++, j--`",
+                    ));
+                }
+                let (ty, height) = (
+                    right_operand.ty,
+                    left_operand.height.max(right_operand.height) + 1,
+                );
+                let range = combined(left_operand.range, right_operand.range);
+                value = self.node(ExprKind::Comma(value, right), ty, false, range, height)?;
+            }
             let closing = self.current().range;
             self.expect(")")?;
             self.expressions[value].parenthesized = true;
@@ -265,9 +385,6 @@ impl Parser<'_> {
                     loop {
                         let argument = self.expression(0)?;
                         let expression = &self.expressions[argument];
-                        if expression.call {
-                            return Err(self.error("nested function calls are outside this subset"));
-                        }
                         types.push((
                             expression.ty,
                             matches!(expression.kind, ExprKind::Number(0, ..)),
@@ -346,19 +463,23 @@ impl Parser<'_> {
             self.expect("]")?;
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
-            let element = match base.ty {
-                | Type::Pointer(element, _) => Some(element.ty()),
+            // One operand is the pointer and the other the integer, in
+            // either order: `i[v]` is `*(i + v)` (C99 §6.5.2.1p1-2).
+            let pointer = match (base.ty, subscript.ty) {
+                | (pointer @ Type::Pointer(..), Type::Integer(_))
+                | (Type::Integer(_), pointer @ Type::Pointer(..)) => Some(pointer),
                 | _ => None,
             };
-            let Some(element) = element.filter(|_| {
-                matches!(subscript.ty, Type::Integer(_)) && !base.call && !subscript.call
+            let Some((pointer, element)) = pointer.and_then(|pointer| match pointer {
+                | Type::Pointer(element, _) => Some((pointer, element.ty())),
+                | _ => None,
             }) else {
                 return Err(self.error(
-                    "subscript requires a pointer to an arithmetic type and a side-effect-free \
-                     integer index",
+                    "a subscript takes a pointer to an arithmetic type and an integer index, in \
+                     either order (C99 §6.5.2.1p1)",
                 ));
             };
-            let readonly = base.ty.points_to_const();
+            let readonly = pointer.points_to_const();
             let effect = base.effect || subscript.effect;
             value = self.node(
                 ExprKind::Index(value, index),
@@ -473,9 +594,14 @@ impl Parser<'_> {
                 self.walk(*child, names, updated, indirect);
             },
             | ExprKind::Cast(_, child) => self.walk(*child, names, updated, indirect),
-            | ExprKind::Binary(_, left, right) => {
+            | ExprKind::Binary(_, left, right) | ExprKind::Comma(left, right) => {
                 self.walk(*left, names, updated, indirect);
                 self.walk(*right, names, updated, indirect);
+            },
+            | ExprKind::Conditional(condition, then, otherwise) => {
+                for operand in [condition, then, otherwise] {
+                    self.walk(*operand, names, updated, indirect);
+                }
             },
             | ExprKind::Index(base, index) => {
                 *indirect = true;
@@ -513,7 +639,7 @@ impl Parser<'_> {
             self.expect(")")?;
             (ty, combined(keyword.range, closing.range))
         } else {
-            let operand = self.expression(6)?;
+            let operand = self.expression(UNARY)?;
             let expression = &self.expressions[operand];
             if expression.effect {
                 return Err(self.error("sizeof of an increment is outside this subset"));
@@ -612,21 +738,45 @@ impl Parser<'_> {
         })
     }
 
-    /// The value and type of the integer constant `token`: decimal digits
-    /// and an optional suffix. Octal and hexadecimal constants are outside
-    /// the subset.
+    /// The value and type of the integer constant `token`: decimal, octal
+    /// (a leading `0`) or hexadecimal (a leading `0x`) digits and an
+    /// optional suffix. The base decides the list of types the constant may
+    /// take as well as its value.
     ///
-    /// C99: §6.4.4.1 paragraphs 1 and 5, pp. 54-56; PDF pp. 66-68.
+    /// C99: §6.4.4.1 paragraphs 1 and 3-5, pp. 54-56; PDF pp. 66-68.
     pub(super) fn integer_constant(token: Token<'_>) -> Result<(i128, Integer), Diagnostic> {
         let text = token.text;
-        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
-        let (number, suffix) = text.split_at(digits);
         let error = |kind, message: &str| Err(Diagnostic::new(kind, token.range, message));
-        if (number.len() > 1 && number.starts_with('0')) || suffix.starts_with(['x', 'X']) {
+        let (radix, prefix) = match text.as_bytes() {
+            | [b'0', b'x' | b'X', ..] => (16, 2),
+            | [b'0', ..] => (8, 1),
+            | _ => (10, 0),
+        };
+        let body = &text[prefix..];
+        let digits = body
+            .bytes()
+            .take_while(|byte| byte.is_ascii_hexdigit() && (radix == 16 || byte.is_ascii_digit()))
+            .count();
+        let (number, suffix) = body.split_at(digits);
+        if radix == 16 && number.is_empty() {
             return error(
-                "unsupported",
-                "octal and hexadecimal integer constants are outside this subset; write the value \
-                 in decimal",
+                "syntax",
+                &format!(
+                    "`{text}` is not an integer constant: 0x must be followed by hexadecimal \
+                     digits, 0 to 9 and a to f (C99 §6.4.4.1p1)"
+                ),
+            );
+        }
+        if radix == 8
+            && let Some(digit) = number.bytes().find(|digit| *digit > b'7')
+        {
+            return error(
+                "syntax",
+                &format!(
+                    "`{text}` starts with 0, which makes it an octal constant, and {} is not an \
+                     octal digit: octal uses only 0 to 7 (C99 §6.4.4.1p3)",
+                    char::from(digit)
+                ),
             );
         }
         let Some(suffix) = Suffix::parse(suffix) else {
@@ -638,17 +788,19 @@ impl Parser<'_> {
                 ),
             );
         };
-        let Some(integer) = number
-            .parse::<u64>()
-            .ok()
-            .and_then(|value| Integer::constant(i128::from(value), suffix).map(|ty| (value, ty)))
-        else {
+        // A lone `0` is an octal constant, whose value is the same in
+        // every base.
+        let number = if number.is_empty() { "0" } else { number };
+        let Some(integer) = u64::from_str_radix(number, radix).ok().and_then(|value| {
+            Integer::constant(i128::from(value), suffix, radix == 10).map(|ty| (value, ty))
+        }) else {
             return error(
                 "unsupported",
                 &format!(
                     "no type in the list for `{text}` can hold its value, and bcc has no wider \
-                     extended integer type to give it (C99 §6.4.4.1p5-6); the largest decimal \
-                     constant without a u suffix is 9223372036854775807"
+                     extended integer type to give it (C99 §6.4.4.1p5-6); the largest integer \
+                     constant is 18446744073709551615, 0xFFFFFFFFFFFFFFFF, which needs a u suffix \
+                     when written in decimal"
                 ),
             );
         };
@@ -676,13 +828,8 @@ impl Parser<'_> {
         let to = self.type_name()?;
         let closing = self.current();
         self.position += 1;
-        let child = self.expression(6)?;
+        let child = self.expression(UNARY)?;
         let operand = &self.expressions[child];
-        if operand.call {
-            return Err(self.error(
-                "a cast of a call's result is outside this subset; store the result first",
-            ));
-        }
         let from = operand.ty;
         let allowed = match (from, to) {
             | (from, to) if from.arithmetic().is_some() && to.arithmetic().is_some() => true,
@@ -845,9 +992,6 @@ impl Parser<'_> {
             loop {
                 let argument = self.expression(0)?;
                 let expression = &self.expressions[argument];
-                if expression.call {
-                    return Err(self.error("nested function calls are outside this subset"));
-                }
                 height = height.max(expression.height + 1);
                 arguments.push(argument);
                 if arguments.len() > MAX_ARGUMENTS {
@@ -976,6 +1120,7 @@ impl Parser<'_> {
                         delta,
                         prefix,
                         nested: true,
+                        full_expression: false,
                     },
                     range,
                     tree,
@@ -1081,6 +1226,94 @@ impl Parser<'_> {
                 };
                 let tree = self.tree(operator, range, vec![operand])?;
                 self.emit_node(Op::Unary(operator, integer), range, tree)?;
+                tree
+            },
+            // The first operand, a test that a sequence point ends, and the
+            // second only when the first leaves the result open (C99
+            // §6.5.13p4, §6.5.14p4).
+            | ExprKind::Binary(operator @ ("&&" | "||"), lhs, rhs) => {
+                let left = self.emit_expression(lhs, false)?;
+                let test = self.code.len();
+                self.emit(
+                    Op::Test {
+                        operator,
+                        target: 0,
+                    },
+                    range,
+                )?;
+                let right = self.emit_expression(rhs, false)?;
+                let tree = self.tree(operator, range, vec![left, right])?;
+                self.emit_node(
+                    Op::Yield {
+                        operator,
+                        to: None,
+                        target: None,
+                    },
+                    range,
+                    tree,
+                )?;
+                self.close_test(test, tree);
+                tree
+            },
+            // The condition, a test that a sequence point ends, then one
+            // operand, converted to the result's type (C99 §6.5.15p4-5).
+            | ExprKind::Conditional(condition, then, otherwise) => {
+                let first = self.emit_expression(condition, false)?;
+                let test = self.code.len();
+                self.emit(
+                    Op::Test {
+                        operator: "?:",
+                        target:   0,
+                    },
+                    range,
+                )?;
+                let second = self.emit_expression(then, false)?;
+                let skip = self.code.len();
+                let to = |parser: &Self, operand: usize| {
+                    (parser.expressions[operand].ty != node.ty).then_some(node.ty)
+                };
+                self.emit(
+                    Op::Yield {
+                        operator: "?:",
+                        to:       to(self, then),
+                        target:   Some(0),
+                    },
+                    range,
+                )?;
+                self.close_test(test, usize::MAX);
+                let third = self.emit_expression(otherwise, false)?;
+                let tree = self.tree("?:", range, vec![first, second, third])?;
+                self.emit_node(
+                    Op::Yield {
+                        operator: "?:",
+                        to:       to(self, otherwise),
+                        target:   None,
+                    },
+                    range,
+                    tree,
+                )?;
+                self.close_test(skip, tree);
+                self.code[test].node = Some(tree);
+                tree
+            },
+            // The left operand, discarded at a sequence point, then the
+            // right one, which gives the result (C99 §6.5.17p2).
+            | ExprKind::Comma(lhs, rhs) => {
+                let left = self.emit_expression(lhs, false)?;
+                let comma = self.code.len();
+                self.emit(Op::Comma { discard: true }, range)?;
+                let right = self.emit_expression(rhs, false)?;
+                let tree = self.tree(",", range, vec![left, right])?;
+                self.emit_node(
+                    Op::Yield {
+                        operator: ",",
+                        to:       None,
+                        target:   None,
+                    },
+                    range,
+                    tree,
+                )?;
+                self.code[comma].node = Some(tree);
                 tree
             },
             | ExprKind::Binary(operator, lhs, rhs) => {
@@ -1219,6 +1452,22 @@ impl Parser<'_> {
         Ok(tree)
     }
 
+    /// Point the `Test` or `Yield` at `at` to the next operation emitted,
+    /// and, unless `tree` is `usize::MAX`, tie it to the expression-tree
+    /// node `tree` it is part of, which exists only once all its operands
+    /// do.
+    fn close_test(&mut self, at: usize, tree: usize) {
+        let end = self.code.len();
+        if tree != usize::MAX {
+            self.code[at].node = Some(tree);
+        }
+        match &mut self.code[at].op {
+            | Op::Test { target, .. } => *target = end,
+            | Op::Yield { target, .. } => *target = Some(end),
+            | _ => {},
+        }
+    }
+
     /// Read the value of the lvalue just emitted, of type `ty`: one scalar,
     /// or a copy of a whole structure.
     fn load(&mut self, ty: Type, range: SourceRange, tree: usize) -> Result<(), Diagnostic> {
@@ -1315,34 +1564,50 @@ pub(super) enum ExprKind {
     /// `(type) operand`, converting to the type.
     Cast(Type, usize),
     Call(String, Vec<usize>),
+    /// `condition ? then : otherwise`.
+    Conditional(usize, usize, usize),
+    /// `left, right`: the comma operator, in parentheses.
+    Comma(usize, usize),
     /// A call to a function `<stdio.h>` declares.
     Library(Library, Vec<usize>),
 }
 
+/// The binary operator `text` spells and its precedence, lowest first
+/// (C99 §6.5.5-§6.5.14, whose order of subclauses is the precedence).
 fn binary(text: &str) -> Option<(&'static str, u8)> {
     Some(match text {
-        | "==" => ("==", 1),
-        | "!=" => ("!=", 1),
-        | "<" => ("<", 2),
-        | "<=" => ("<=", 2),
-        | ">" => (">", 2),
-        | ">=" => (">=", 2),
-        | "<<" => ("<<", 3),
-        | ">>" => (">>", 3),
-        | "+" => ("+", 4),
-        | "-" => ("-", 4),
-        | "*" => ("*", 5),
-        | "/" => ("/", 5),
-        | "%" => ("%", 5),
+        | "||" => ("||", 1),
+        | "&&" => ("&&", 2),
+        | "|" => ("|", 3),
+        | "^" => ("^", 4),
+        | "&" => ("&", 5),
+        | "==" => ("==", 6),
+        | "!=" => ("!=", 6),
+        | "<" => ("<", 7),
+        | "<=" => ("<=", 7),
+        | ">" => (">", 7),
+        | ">=" => (">=", 7),
+        | "<<" => ("<<", 8),
+        | ">>" => (">>", 8),
+        | "+" => ("+", 9),
+        | "-" => ("-", 9),
+        | "*" => ("*", 10),
+        | "/" => ("/", 10),
+        | "%" => ("%", 10),
         | _ => return None,
     })
 }
+
+/// The precedence of a unary operator's operand: above every binary
+/// operator (C99 §6.5.3).
+const UNARY: u8 = 11;
 
 fn unary(text: &str) -> Option<&'static str> {
     match text {
         | "+" => Some("+"),
         | "-" => Some("-"),
         | "!" => Some("!"),
+        | "~" => Some("~"),
         | "*" => Some("*"),
         | "&" => Some("&"),
         | _ => None,

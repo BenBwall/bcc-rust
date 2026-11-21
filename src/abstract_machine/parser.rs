@@ -457,9 +457,22 @@ impl<'a> Parser<'a> {
             self.expression_statement()?;
         }
         self.expect(")")?;
-        let iteration = self.code.split_off(iteration_start);
+        let mut iteration = self.code.split_off(iteration_start);
         self.loop_body = true;
         self.control_body()?;
+        // The clause moves after the body: its jumps inside itself (a
+        // `?:` or `&&`'s) move with it.
+        let moved = self.code.len() - iteration_start;
+        for instruction in &mut iteration {
+            match &mut instruction.op {
+                | Op::Test { target, .. }
+                | Op::Yield {
+                    target: Some(target),
+                    ..
+                } => *target += moved,
+                | _ => {},
+            }
+        }
         self.code.extend(iteration);
         self.emit(Op::Jump(head), token.range)?;
         self.patch(branch, self.code.len());
@@ -822,11 +835,6 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     self.require_type(expression, member_type)?;
-                    if self.expressions[expression].call {
-                        return Err(
-                            self.error("calls in initializer lists are outside this subset")
-                        );
-                    }
                     let value = self.emit_expression(expression, false)?;
                     let range = self.expressions[expression].range;
                     let from = self.expressions[expression].ty;
@@ -993,7 +1001,32 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// An expression statement, or a `for` clause: one part, or several
+    /// joined by comma operators, as in `i++, j--`. Each comma's left
+    /// operand ends at a sequence point, so only the last part ends the
+    /// full expression (C99 §6.5.17p2, §6.8p4).
     fn expression_statement(&mut self) -> Result<(), Diagnostic> {
+        let (mut root, mut discard) = self.statement_part()?;
+        while self.at(",") {
+            let comma = self.current();
+            self.position += 1;
+            let at = self.code.len();
+            self.emit(Op::Comma { discard }, comma.range)?;
+            let (right, value) = self.statement_part()?;
+            discard = value;
+            let range = combined(self.nodes[root].range, self.nodes[right].range);
+            root = self.tree(",", range, vec![root, right])?;
+            self.code[at].node = Some(root);
+        }
+        Ok(())
+    }
+
+    /// One part of an expression statement: an assignment, a compound
+    /// assignment, an increment or another expression. Returns its tree's
+    /// root and whether it leaves a value for a comma after it to discard;
+    /// a part that no comma follows ends the full expression, discarding
+    /// its value.
+    fn statement_part(&mut self) -> Result<(usize, bool), Diagnostic> {
         let prefix_token = self.current();
         let prefix = if self.take("++") {
             Some(1)
@@ -1036,14 +1069,14 @@ impl<'a> Parser<'a> {
             self.emit_node(
                 Op::Store {
                     initializer: false,
-                    full_expression: true,
+                    full_expression: !self.at(","),
                     from,
                     structure: structure_of(self.expressions[expression].ty),
                 },
                 range,
                 root,
             )?;
-            return Ok(());
+            return Ok((root, false));
         }
         let postfix_token = self.current();
         let postfix = if prefix.is_some() {
@@ -1090,15 +1123,20 @@ impl<'a> Parser<'a> {
                     delta,
                     prefix: prefix.is_some(),
                     nested: false,
+                    full_expression: !self.at(","),
                 },
                 range,
                 root,
             )?;
+            Ok((root, false))
         } else {
-            let _value = self.emit_expression(expression, false)?;
+            let value = self.emit_expression(expression, false)?;
+            if self.at(",") {
+                return Ok((value, true));
+            }
             self.emit(Op::Pop, range)?;
+            Ok((value, false))
         }
-        Ok(())
     }
 
     /// The constraint an assignment, compound assignment, `++` or `--`
@@ -1144,7 +1182,7 @@ impl<'a> Parser<'a> {
         &mut self,
         expression: usize,
         operator: &'static str,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<(usize, bool), Diagnostic> {
         let token = self.current();
         self.position += 1;
         let value = self.expression(0)?;
@@ -1158,11 +1196,11 @@ impl<'a> Parser<'a> {
         let common = match (left, right) {
             | (Type::Integer(left), Type::Integer(_)) if shift =>
                 Some(Arithmetic::Integer(left.promoted())),
-            | (Type::Integer(_), Type::Integer(_)) if operator == "%" => left
-                .arithmetic()
-                .zip(right.arithmetic())
-                .map(|(left, right)| left.promoted().common(right.promoted())),
-            | _ if shift || operator == "%" => None,
+            | (Type::Integer(_), Type::Integer(_)) if matches!(operator, "%" | "&" | "^" | "|") =>
+                left.arithmetic()
+                    .zip(right.arithmetic())
+                    .map(|(left, right)| left.promoted().common(right.promoted())),
+            | _ if shift || matches!(operator, "%" | "&" | "^" | "|") => None,
             | _ => left
                 .arithmetic()
                 .zip(right.arithmetic())
@@ -1170,6 +1208,18 @@ impl<'a> Parser<'a> {
         };
         match (left, operator) {
             | _ if common.is_some() => {},
+            | (Type::Integer(_) | Type::Floating(_), "&" | "^" | "|")
+                if right.arithmetic().is_some() =>
+                return Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{}` needs integer operands: the bitwise operators combine the bits of \
+                         integers, and a floating value has none to give (C99 §6.5.16.2p2, \
+                         §6.5.10p2)",
+                        token.text
+                    ),
+                    &super::clauses::COMPOUND_CONSTRAINT,
+                )),
             | (Type::Integer(_) | Type::Floating(_), "%" | "<<" | ">>")
                 if right.arithmetic().is_some() =>
                 return Err(Diagnostic::constraint(
@@ -1213,16 +1263,6 @@ impl<'a> Parser<'a> {
                 ));
             },
         }
-        if self.expressions[value].call
-            && !matches!(
-                self.expressions[value].kind,
-                ExprKind::Call(..) | ExprKind::Library(..)
-            )
-        {
-            return Err(self.error(
-                "calls must be whole expressions; operand sequencing is outside this subset",
-            ));
-        }
         let target = self.emit_expression(expression, true)?;
         let operand = self.emit_expression(value, false)?;
         if let Type::Integer(from) = right
@@ -1240,7 +1280,13 @@ impl<'a> Parser<'a> {
                 right_type
             }
         });
-        self.emit_node(Op::Compound(operator, common, right_type), range, root)
+        let full_expression = !self.at(",");
+        self.emit_node(
+            Op::Compound(operator, common, right_type, full_expression),
+            range,
+            root,
+        )?;
+        Ok((root, false))
     }
 
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
@@ -2599,6 +2645,9 @@ fn compound_operator(text: &str) -> Option<&'static str> {
         | "*=" => Some("*"),
         | "/=" => Some("/"),
         | "%=" => Some("%"),
+        | "&=" => Some("&"),
+        | "^=" => Some("^"),
+        | "|=" => Some("|"),
         | "<<=" => Some("<<"),
         | ">>=" => Some(">>"),
         | _ => None,
