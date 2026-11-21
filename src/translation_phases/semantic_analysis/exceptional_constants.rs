@@ -486,7 +486,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let gcc = self.exceptional_rules() == RuleSet::Gcc;
-        if gcc && op == B::LeftShift {
+        if op == B::LeftShift
+            && self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Gcc
+        {
             self.report_gcc_negative_shift(e, left);
         }
         let Some(count) = right.integer else {

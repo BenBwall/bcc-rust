@@ -939,7 +939,9 @@ The following vocabulary entries retain the established diagnostic contracts:
   `?:` whose operands are not all integer constant expressions, which GCC
   folds as it builds them, a comparison of floating or complex operands, and a
   `&&` or `||` with an operand that is no integer constant, unless a
-  conversion to another type folds the `?:` (`(int)(1 ? 1.0 : 2.0)`). GCC
+  conversion to another type folds the `?:` (`(int)(1 ? 1.0 : 2.0)`). Those
+  three refusals belong to GCC's identity alone: TCC's and MSVC's, which
+  take GCC's rules here, judge only the folded operand. GCC
   also matches no bit-field narrower than its
   declared type; Clang matches it and stores the operand whole. A cast
   selected by a constant `?:` and a C23 `constexpr` object a cast

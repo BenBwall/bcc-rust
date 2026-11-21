@@ -528,7 +528,7 @@ impl CompilerConfiguration {
         // GCC's `-Wshift-negative-value` follows the command line's
         // `-Wextra` alone, so it keeps what that made of it.
         let shift = DiagnosticGroup::ShiftNegativeValue as usize;
-        let pinned = (self.identity.rules() != super::RuleSet::Clang
+        let pinned = (self.identity == super::CompilerIdentity::Gcc
             && self.warning_options[shift].enabled().is_none())
         .then(|| self.gcc_extra_shifts());
         let mut configuration = self
@@ -725,7 +725,7 @@ impl CompilerConfiguration {
                         .enabled_with_all(DiagnosticGroup::Unused, false)
                         == Some(true),
             | None if group == DiagnosticGroup::ShiftNegativeValue
-                && self.identity.rules() != super::RuleSet::Clang =>
+                && self.identity == super::CompilerIdentity::Gcc =>
                 self.gcc_extra_shifts(),
             | None if group.default() == GroupDefault::OnInClang =>
                 self.identity != super::CompilerIdentity::Gcc

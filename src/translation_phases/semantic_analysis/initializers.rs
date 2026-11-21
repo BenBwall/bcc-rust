@@ -885,14 +885,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | None => break operand_expression,
             }
         };
-        let gcc = self.context.configuration.compiler_identity().rules()
-            == crate::configuration::RuleSet::Gcc;
+        let identity = self.context.configuration.compiler_identity();
+        let gcc = identity.rules() == crate::configuration::RuleSet::Gcc;
         let mut inner = operand;
         while let ExpressionType::Parenthesized { expression } = inner.kind {
             inner = expression;
         }
         let literal = matches!(inner.kind, ExpressionType::CompoundLiteral { .. });
-        if gcc && (literal || self.evaluates_comma(operand) || self.gcc_leaves_unfolded(operand)) {
+        if gcc
+            && (literal
+                || self.evaluates_comma(operand)
+                || self.gcc_leaves_unfolded(
+                    operand,
+                    identity == crate::configuration::CompilerIdentity::Gcc,
+                ))
+        {
             self.error(
                 SemanticErrorKind::NonConstantInitializer,
                 e.source_vectors,
@@ -940,17 +947,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// neither, which raise IEC 60559 exceptions where a constant
     /// expression is evaluated as during execution.
     ///
-    /// GCC also reads the cast as constant only when the operand it parsed
-    /// was (`TREE_CONSTANT`), before folding: so not when it holds a `?:`
-    /// whose operands are not all integer constant expressions, which GCC
-    /// folds as it builds them, nor a comparison of floating or complex
-    /// operands, nor a `&&` or `||` whose operand is no integer constant. A
-    /// conversion to another type folds a `?:` it converts, picking the
-    /// operand its constant condition selects (`fold_unary`), though not
-    /// the condition itself.
+    /// With `parsed`, for the GCC identity alone, GCC also reads the cast as
+    /// constant only when the operand it parsed was (`TREE_CONSTANT`),
+    /// before folding: so not when it holds a `?:` whose operands are not
+    /// all integer constant expressions, which GCC folds as it builds them,
+    /// nor a comparison of floating or complex operands, nor a `&&` or `||`
+    /// whose operand is no integer constant. A conversion to another type
+    /// folds a `?:` it converts, picking the operand its constant condition
+    /// selects (`fold_unary`), though not the condition itself. Without it,
+    /// for the TCC and MSVC identities, which take GCC's rules here, the
+    /// operand a constant condition selects stands for the `?:`.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57; §F.7.4
     /// paragraph 1, p. 449; PDF p. 461; §6.6 paragraph 6, p. 95; PDF p. 107.
-    fn gcc_leaves_unfolded(&self, e: &'tu Expression<'tu>) -> bool {
+    fn gcc_leaves_unfolded(&self, e: &'tu Expression<'tu>, parsed: bool) -> bool {
         use ExpressionType as E;
         let traps = !self.context.configuration.no_trapping_math();
         let integer_operand = |e: &'tu Expression<'tu>| self.expression_info(e).integer.is_some();
@@ -987,7 +996,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     operator: BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr,
                     left_expression,
                     right_expression,
-                } =>
+                } if parsed =>
                     if !integer_operand(left_expression) || !integer_operand(right_expression) {
                         return true;
                     },
@@ -1005,7 +1014,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             | BinaryOperator::GreaterThan
                             | BinaryOperator::GreaterThanOrEqual
                     );
-                    if comparison && (floating(left_expression) || floating(right_expression)) {
+                    if parsed
+                        && comparison
+                        && (floating(left_expression) || floating(right_expression))
+                    {
                         return true;
                     }
                     let arithmetic = matches!(
@@ -1057,7 +1069,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     work.push((right_expression, converts(right_expression)));
                     work.push((left_expression, converts(left_expression)));
                 },
-                | E::Conditional(c) | E::OmittedConditional(c) => {
+                | E::Conditional(c) | E::OmittedConditional(c) if parsed => {
                     let condition = self.expression_info(c.condition_expression);
                     let folded = condition.ice
                         && self.expression_info(c.then_expression).ice
@@ -1072,6 +1084,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         | _ => return true,
                     }
                     work.push((c.condition_expression, false));
+                },
+                | E::Conditional(c) => {
+                    match Self::constant_truth(self.expression_info(c.condition_expression)) {
+                        | Some(true) => work.push((c.then_expression, false)),
+                        | Some(false) => work.push((c.else_expression, false)),
+                        | None => {},
+                    }
                 },
                 | _ => {},
             }
