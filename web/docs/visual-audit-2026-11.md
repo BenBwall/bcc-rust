@@ -2331,8 +2331,9 @@ stay readable: the notes keep their type sizes (the hand-off is 20 px
 instead of 22), and the output's editor keeps its height. The output now
 starts 403 px down at every stage at 1440x900 and 1366x768, so 365 px of
 it shows at 1366x768. It is narrower: 646 px wide at 1440 (990 before) and
-593 at 1366 (937): a line longer than about 70 characters, such as the
-IRs' folded target line, scrolls sideways in the editor. `-O0` and `-O2` side by side need the width, so then the
+593 at 1366 (937), so a line longer than about 70 characters, such as the
+IRs' folded target line, ran past the column's edge; the review's round
+wraps it (see [Review, round 1](#review-round-1)). `-O0` and `-O2` side by side need the width, so then the
 card keeps the stacked layout. A narrower card (the 1024x768 laptop's,
 whose output is 556 px wide) stacks the stage as a phone does, the output first, but under the
 stage's name, with the reading line above it: the output starts 507 to 551
@@ -2375,8 +2376,11 @@ keyboard focus is on it, its definition shows under the word in the
 glossary's own words, the way the narration's terms show theirs; Escape
 hides it, and the pointer can move onto it. A touch screen has no hover, so
 a tap follows the link to the entry. A screen reader reads the definition
-as the link's description. Below 821 px the definition shows under the
-lede, full width, so it never runs off a phone. The lede is shorter and its
+as the link's description. Up to 1180 px, where the hero is one column,
+the definition shows under the lede, full width; from 1181 px, where the
+lede is the hero's left column, under the word. (This part first put it
+under the word from 821 px, where a word at the end of a line ran it off
+the window: see [Review, round 1](#review-round-1).) The lede is shorter and its
 measure wider (70ch instead of 62ch): five lines at 1440, 1366 and 1024 px
 instead of six, nine on a phone instead of ten. It keeps what it said, but
 for three words: programs are no longer "real", bcc no longer "written" in
@@ -2405,7 +2409,8 @@ what the paragraph says of a preprocessing directive (checked against
 N1256, pp. 146-147, PDF pp. 158-159). That makes the stop a step of the
 preprocessor's, so its note shows the button. The probe loaded `#define
 TWICE(x) ((x) * 2)` at every configuration: the button showed, and pressing
-it opened stage 3, Preprocessor. The README and §3 of "How it works" now
+it opened stage 3, Preprocessor, with the focus on its key (since the review's
+round, as for the button of a `#define` step). The README and §3 of "How it works" now
 say the stop has a button; the site's test of the stop checks it.
 [`preprocessor-stop-1440-light`](screenshots/part11/preprocessor-stop-1440-light-before.png)
 ([after](screenshots/part11/preprocessor-stop-1440-light-after.png)).
@@ -2465,9 +2470,10 @@ and `→` on one still steps the machine. The WebAssembly view's memory
 region keys were a tab list in the same way and change the same way. The
 stage keys are another matter: the pipeline view steps nothing, so the
 arrows are free there, and they are now a tab list with the pattern's
-keys. Only the selected key takes Tab; `←` and `→` (and `↑` and `↓`)
-select the stage before or after, around the ends, `Home` and `End` the
-first and last, and the focus follows the selection. The stage card is the
+keys. Only the selected key takes Tab; `←` and `→` select the stage
+before or after, around the ends, `Home` and `End` the first and last,
+and the focus follows the selection; `↑` and `↓` scroll the page, as the
+pattern has it for a horizontal tab list (this part first took them too). The stage card is the
 tab panel, labelled by the selected key. The probe pressed `→` on stage
 1's key at every configuration and found stage 2 selected and focused,
 the other ten keys out of the tab order, and the panel labelled by stage
@@ -2484,7 +2490,10 @@ the other ten keys out of the tab order, and the panel labelled by stage
   stage" (finding 5); §3 of "How it works" now says its note "has a button
   to" the stage rather than "sends the reader to" it.
 - Figure 2 and Table 1 gain their cards, or the plain lines at a stop
-  before the first step (finding 6).
+  before the first step (finding 6); at such a stop the cells under the
+  head now say "The machine stopped before its first step, so no object
+  began its lifetime." instead of "No objects yet. Entering a block puts
+  the objects it declares on the tape." (review, round 1).
 
 None in the lessons' notes: every title, lead and value flow of the 1,254
 notes of the twelve machine lessons is the same before and after, at
@@ -2494,7 +2503,9 @@ notes of the twelve machine lessons is the same before and after, at
 
 - **No sideways scroll** at any step of the probe or the strip runs in
   any configuration, nor at any note of the lesson walk, and no page logged
-  an error.
+  an error. The probe's widths (390, 1024, 1366, 1440) missed the lede's
+  definitions running off the window from 821 to 965 px, which the review
+  found; the sweep of [Review, round 1](#review-round-1) covers every width.
 - **Contrast:** nothing new is below AA. The lowest new text is the empty
   figures' label in the accent ink on the device in the light theme,
   4.99:1, the same ink and ground as the section numbers Part 10 measured;
@@ -2526,17 +2537,116 @@ notes of the twelve machine lessons is the same before and after, at
   stacks the stage with the output first, so its hand-off, Next and Skip
   come after the output, below the window's foot; the stage keys and the
   heading name the stage above it.
-- **The output's column** is 646 px wide at 1440 and 593 px at 1366, so a
-  line longer than about 70 characters, such as the IRs' folded target
-  line, scrolls sideways in the editor. Giving the notes less than 20rem
-  would wrap the hand-off into more lines than the output gains.
 - **Below 1024 px** the WebAssembly strip still takes two rows (at 900 and
   821 px), as the machine's does at a stop's status.
 - **Figure 0's stations** still open their views and carry no definitions;
   the lede carries them for the same five words.
-- **The cells under the head** still say "No objects yet. Entering a
-  block puts the objects it declares on the tape" at a stop before the
-  first step, where Figure 2 and Table 1 now say that the run stopped.
-- **On a phone** a definition shows under the lede, not under its word, and
-  only for keyboard focus or a mouse; a tap follows the link to the
+- **Up to 1180 px** a definition shows under the lede, not under its
+  word, and on a phone only for keyboard focus or a mouse; a tap follows the link to the
   glossary, which takes the reader away from the landing.
+
+### Review, round 1
+
+The review of the branch found one blocker, a trade-off worth fixing, and
+three small things. The before build is the branch at `d14a7f89e`; the
+after build is the round's fixes, built as above (Trunk without
+`--release`, the dev profile at `opt-level=s`).
+
+#### 1. The lede's definitions ran off the window from 821 to 965 px
+
+From 821 px each definition was a 340 px box under its word, and nothing
+kept it inside the window. Up to 1180 px the hero is one column and the
+lede's third line ends at "a syntax tree, IR,", so at 834 and 900 px IR's
+definition reached 966 px: the window cut it mid-word and the page scrolled
+132 px sideways while it showed. The probe's widths (390, 1024, 1366 and
+1440 px) all happened to fit.
+
+**Fixed.** Up to 1180 px the definition spans the lede under it, as it
+did below 821 px; from 1181 px, where the lede is the hero's left column
+and narrower than half the window, it stays under its word, where a
+340 px box always fits. A sweep focused each of the five terms at every
+window width from 320 to 1440 px, in 1 px steps, in both themes (5,605
+definitions a theme) and checked that the box lies inside the window, the
+page has no sideways scroll, no ancestor's overflow clips the box, its
+text fits in it, and nothing covers its corners or centre: no failures in
+either theme, the closest edge 18 px from the window's (Token's at
+320 px). The same sweep over 800 to 1000 px on the before build failed 173
+times, from 821 to 965 px.
+[`landing-term-834-light`](screenshots/part11/landing-term-834-light-before.png)
+([after](screenshots/part11/landing-term-834-light-after.png)),
+[`landing-term-834-dark`](screenshots/part11/landing-term-834-dark-after.png).
+
+#### 2. Long lines of the output were cut
+
+The output's column beside the notes is 646 px wide at 1440 and 593 px at
+1366, about 65 characters, and the listings did not wrap, so their long
+lines ran past its edge. On each lesson's first screen at 1366 px, 27 of
+209 bcc IR lines and 34 of 221 LLVM IR lines were cut (none of the
+assembly's), and in the lessons that call printf the cut took the
+argument that mattered, as in Floating point's
+`%v10 = call i32 (ptr, ...) @printf(ptr noundef @.str.1, double noundef %v8)`.
+
+**Fixed.** The read-only listings now wrap, as the source already did. A
+wrapped line's later rows hang two indent levels in from the line's own
+(Monaco's `deepIndent`), past where the next instruction starts, and only
+its first row has a line number, so it reads as one line; the token
+colours are those of the line. The line links are decorations of the whole
+line, so pointing at any row of a wrapped line reads that line and marks
+its source, and a source line's mark covers every row of the output lines
+it links to. Where the page scrolls to show a linked or followed line, it
+now measures the whole wrapped line rather than one row. Narrowing the
+notes was the other way: below 20rem they wrap the hand-off into more
+lines than the output gains, and at 1024 px and on a phone the output is
+narrower still, where the wrap helps as much. A wrapped line takes more
+rows, so fewer lines fit on a first screen.
+
+Counted again at 1366x768 light over the twelve machine lessons' bcc IR,
+LLVM IR and x86-64 assembly, a line counting as cut when any of its rows
+runs past the editor's visible width: on the first screens 0 of 159, 0 of
+179 and 0 of 200 lines are cut (26, 21 and 0 of them wrap); scrolling on
+through the listings with the wheel, 0 of 524, 285 and 451 lines (26, 36
+and 5 wrap). Pointing at the second row of Floating point's wrapped
+`printf` call (LLVM IR line 14) read "Line 14 of the LLVM IR came from
+source line 8." and marked source line 8, as pointing at its first row
+does, on this build and the before build.
+[`stage-llvm-ir-1366-light`](screenshots/part11/stage-llvm-ir-1366-light-before.png)
+([after](screenshots/part11/stage-llvm-ir-1366-light-after.png)),
+[`stage-llvm-ir-1366-dark`](screenshots/part11/stage-llvm-ir-1366-dark-after.png),
+[`stage-llvm-ir-390-light`](screenshots/part11/stage-llvm-ir-390-light-before.png)
+([after](screenshots/part11/stage-llvm-ir-390-light-after.png)),
+[`stage-wrapped-row-1366-light`](screenshots/part11/stage-wrapped-row-1366-light.png).
+
+#### 3. Small things
+
+- **`↑` and `↓` on the stage keys** selected the stage after or before.
+  WAI-ARIA's pattern takes only `←` and `→` for a horizontal tab list, so
+  `↑` and `↓` now scroll the page there; the probe pressed both on a stage
+  key at every configuration and the selection stayed.
+- **The focus after the machine's button to the Preprocessor stage** fell
+  to the page's body, since the button goes with the machine's view. It now
+  moves to the Preprocessor stage's key once the pipeline is drawn, as
+  "Skip to bcc IR" does for its stage, both at a preprocessor stop and at
+  a `#define` step; the probe found it there at every configuration.
+- **"Press Step" at a stop.** The review read the blank tape's card, which
+  says to press Step, at a stop before the first step, where Step is
+  disabled. The card is hidden there (the review's probe read the hidden
+  card's text); the probe found no visible card at every configuration.
+  The line that did show the wrong promise was the cells', "No objects
+  yet. Entering a block puts the objects it declares on the tape", which
+  Part 11 had left for later: at such a stop it now says "The machine
+  stopped before its first step, so no object began its lifetime."
+
+#### Checks
+
+- **The probe** above, extended with the vertical arrows, the focus after
+  both buttons to the Preprocessor stage and the cells' line at a stop,
+  ran at 1440x900, 1366x768, 1024x768, 900x800, 834x1112 and 390x844 in
+  both themes: no sideways scroll at any step, no console error or warning,
+  the WebAssembly strip in one row from 1024 px, and every result above.
+- **Contrast** is unchanged: no new colours. The definition under the lede
+  at 834 px is 10.59:1 (light) and 9.40:1 (dark), its word 15.82:1 and
+  13.34:1; the cells' new line 5.89:1 and 6.22:1.
+- **Tests:** the site's tests (164, and the prerender's 2) and its four
+  clippy runs (native, and wasm32 for hydrate, worker and compiler) pass.
+  The worker run prints the engine's existing unfulfilled lint expectation
+  in `src/abstract_machine/parser.rs`, as before; the engine is unchanged.
