@@ -175,12 +175,10 @@ impl ClWarnings {
         Self(self.0 & !(Self::MASK << shift) | state.bits() << shift)
     }
 
-    #[expect(clippy::cast_possible_truncation, reason = "The mask keeps four bits.")]
     const fn state(self, index: usize) -> ClWarningState {
         ClWarningState::from_bits((self.0 >> (Self::BITS * (index + 1)) & Self::MASK) as u8)
     }
 
-    #[expect(clippy::cast_possible_truncation, reason = "The mask keeps four bits.")]
     const fn level(self) -> u8 {
         (self.0 & Self::MASK) as u8
     }
