@@ -25,13 +25,17 @@ line, a `suppress` on a line another reaches extends both) and `once`.
 `__except` or `__finally` block (once per label, the innermost block, `'null'`
 for a `case`), C2703 for a `__leave` outside every `__try` block, and C4532
 at a label a `goto` leaves a `__finally` block for, at `break` and `continue`,
-and not at `return`; `sema-cl-pragma-suppress-push-msvc` pins a `suppress`
+and not at `return`, with no C2705 for a jump from a `__try` statement's own
+`__except` or `__finally` block back into its guarded block, and no C4532 for
+a `goto` from a `__try` block inside the `__finally` block;
+`sema-cl-pragma-suppress-push-msvc` pins a `suppress`
 whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
 19.44 (`/W4 /diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto
 forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
-`goto`, `break`, `continue` and `return`; `sema-seh-reachability-clang` pins
+`goto`, `break`, `continue` and `return`, with the error for a jump from a
+handler back into its own guarded block; `sema-seh-reachability-clang` pins
 that Clang reports nothing about code that runs in an `__except` handler,
 nothing from a filter's full-expression checks but its shift, `-Wreturn-type`
 as if no handler ran, and, in a function with `__finally`, every such warning

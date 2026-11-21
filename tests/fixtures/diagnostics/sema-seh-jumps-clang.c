@@ -126,6 +126,17 @@ done:
     return 0;
 }
 
+int retry(int p) {
+    __try {
+    again:
+        work(p);
+    } __except (1) {
+        if (p--)
+            goto again;
+    }
+    return 0;
+}
+
 int computed(int p) {
     static void *targets[] = {&&target, &&end};
     goto *targets[p];

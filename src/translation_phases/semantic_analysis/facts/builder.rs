@@ -20,6 +20,7 @@ use super::{
     RegionId,
     RegionKind,
     ScopeId,
+    SehBlock,
     StatementFacts,
     StatementId,
     SwitchFacts,
@@ -356,17 +357,26 @@ impl<'tu, 's> Builder<'tu, 's> {
     /// The `__try`, `__except` and `__finally` blocks a jump from `from` to
     /// `to` enters, innermost first, as Clang's `JumpScopeChecker` notes
     /// them; at most `N`. A jump may leave such a block but not enter it.
-    /// Microsoft Learn: "Compiler Error C2705".
+    /// With `cl_scopes`, a `__try` block also holds its own `__except` and
+    /// `__finally` blocks, as `cl` scopes them: a jump from either back into
+    /// the guarded block enters nothing. Microsoft Learn: "Compiler Error
+    /// C2705".
     pub(in crate::translation_phases::semantic_analysis) fn entered_seh_blocks<const N: usize>(
         &self,
         from: RegionId,
         to: RegionId,
+        cl_scopes: bool,
     ) -> [Option<RegionId>; N] {
         let mut entered = [None; N];
         let mut block = self.regions[to.0].nearest_seh;
         for slot in &mut entered {
-            let Some(region) = block.filter(|&region| !ancestor(&self.regions, region, from))
-            else {
+            let Some(region) = block.filter(|&region| {
+                !ancestor(&self.regions, region, from)
+                    && !(cl_scopes
+                        && self
+                            .seh_handler(region)
+                            .is_some_and(|handler| ancestor(&self.regions, handler, from)))
+            }) else {
                 break;
             };
             *slot = Some(region);
@@ -375,6 +385,22 @@ impl<'tu, 's> Builder<'tu, 's> {
                 .and_then(|parent| self.regions[parent.0].nearest_seh);
         }
         entered
+    }
+
+    /// The `__except` or `__finally` block of the `__try` statement whose
+    /// guarded block is `region`. The handler's region opens as the guarded
+    /// block's closes, so it comes right after that block's subtree.
+    fn seh_handler(&self, region: RegionId) -> Option<RegionId> {
+        let block = self.regions[region.0];
+        if block.kind != RegionKind::Seh(SehBlock::Try) {
+            return None;
+        }
+        let handler = self.regions.get(block.subtree_end)?;
+        (matches!(
+            handler.kind,
+            RegionKind::Seh(SehBlock::Except | SehBlock::Finally)
+        ) && handler.parent == block.parent)
+            .then_some(RegionId(block.subtree_end))
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn finalize(

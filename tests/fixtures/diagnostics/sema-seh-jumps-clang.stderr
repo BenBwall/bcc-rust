@@ -49,13 +49,19 @@ sema-seh-jumps-clang.c:124:13: warning: jump out of __finally block has undefine
 sema-seh-jumps-clang.c:114:17: warning: jump out of __finally block has undefined behavior [-Wjump-seh-finally]
   114 |                 goto done;
       |                 ^
-sema-seh-jumps-clang.c:131:5: error: cannot jump from this indirect goto statement to one of its possible targets
-  131 |     goto *targets[p];
+sema-seh-jumps-clang.c:135:13: error: cannot jump from this goto statement to its label
+  135 |             goto again;
+      |             ^
+sema-seh-jumps-clang.c:130:5: note: jump bypasses initialization of __try block
+  130 |     __try {
       |     ^
-sema-seh-jumps-clang.c:133:5: note: possible target of indirect goto statement
-  133 |     target:
+sema-seh-jumps-clang.c:142:5: error: cannot jump from this indirect goto statement to one of its possible targets
+  142 |     goto *targets[p];
       |     ^
-sema-seh-jumps-clang.c:132:5: note: jump bypasses initialization of __try block
-  132 |     __try {
+sema-seh-jumps-clang.c:144:5: note: possible target of indirect goto statement
+  144 |     target:
       |     ^
-4 warnings and 8 errors generated.
+sema-seh-jumps-clang.c:143:5: note: jump bypasses initialization of __try block
+  143 |     __try {
+      |     ^
+4 warnings and 9 errors generated.

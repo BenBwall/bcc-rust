@@ -827,7 +827,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if matches!(
                 jump.statement.kind,
                 crate::translation_phases::parsing::syntax::StatementType::Goto(_)
-            ) && self.leaves_finally(from.region, Some(to.region))
+            ) && self.goto_leaves_finally(from.region, to.region)
             {
                 // Clang's `-Wjump-seh-finally` at each goto, as it finishes
                 // the function; `cl`'s C4532 at the label, once.
@@ -985,9 +985,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     break;
                 }
-                if let [Some(block)] = self
-                    .control
-                    .entered_seh_blocks::<1>(jump.point.region, target)
+                if let [Some(block)] =
+                    self.control
+                        .entered_seh_blocks::<1>(jump.point.region, target, false)
                 {
                     self.report_indirect_seh_jump(jump.source, target_source, block, false);
                     break;

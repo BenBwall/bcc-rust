@@ -1199,13 +1199,15 @@ before the parser sees the resulting tokens.
   handlers, bodies, filters and delimiters produce recovered syntax and preserve
   following input. Semantic analysis analyzes each block in a control region
   that a `goto`, `case` label or computed goto may leave but not enter (Clang's
-  error and notes, or `cl`'s C2705), rejects a `__leave` outside every `__try`
-  block (C2703 under `cl`), and warns of a `goto`, `break`, `continue` or
-  `return` that leaves a `__finally` block (`-Wjump-seh-finally`; `cl`'s C4532
-  for all but `return`). Under every identity but `cl`'s, Clang's reachability
-  holds: no edge enters an `__except` handler, its filter is outside the
-  graph, and a function with `__finally` has no graph at all. Lowering does
-  not translate SEH.
+  error and notes, or `cl`'s C2705; `cl` lets a jump from a `__try`
+  statement's own `__except` or `__finally` block back into its guarded block),
+  rejects a `__leave` outside every `__try` block (C2703 under `cl`), and warns
+  of a `goto`, `break`, `continue` or `return` that leaves a `__finally` block
+  (`-Wjump-seh-finally`; `cl`'s C4532 for all but `return`, and for a `goto`
+  only from the `__finally` block itself). Under every identity but `cl`'s,
+  Clang's reachability holds: no edge enters an `__except` handler, its filter
+  is outside the graph, and a function with `__finally` has no graph at all.
+  Lowering does not translate SEH.
 - `parse_msvc` also owns `__asm`/`_asm` brace blocks and single-line instructions
   as opaque arena token lists with balanced parentheses, brackets and braces. A
   repeated asm keyword separates single-line instructions, and the enclosing C

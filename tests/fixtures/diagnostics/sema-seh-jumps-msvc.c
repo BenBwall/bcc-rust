@@ -126,3 +126,46 @@ done:
     }
     return 0;
 }
+
+// A __try block holds its own __except and __finally blocks, so a jump from
+// them back into it enters nothing; out of __finally, it is C4532 only from
+// the __finally block itself, not from a __try block inside it.
+int retry(int p) {
+    __try {
+    again:
+        work(p);
+        {
+        block:
+            work(1);
+        }
+        __try {
+        inner:
+            work(2);
+        } __finally {
+        }
+    } __except (1) {
+        if (p-- > 2)
+            goto again;
+        if (p-- > 1)
+            goto block;
+        if (p--)
+            goto inner;
+    }
+    return 0;
+}
+
+int retry_finally(int p) {
+    __try {
+    again:
+        work(p);
+    } __finally {
+        if (p--)
+            goto again;
+        __try {
+            if (p--)
+                goto again;
+        } __finally {
+        }
+    }
+    return 0;
+}

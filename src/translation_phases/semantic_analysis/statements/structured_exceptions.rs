@@ -190,6 +190,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
+    /// Whether a goto from `from` to `to` draws Clang's `-Wjump-seh-finally`
+    /// or `cl`'s C4532: it leaves a `__finally` block, which for `cl` is its
+    /// innermost SEH block. `cl` says nothing of a goto from a `__try` or
+    /// `__except` block inside the `__finally` block, though it does of a
+    /// `break` or `continue` there. Microsoft Learn: "Compiler Warning
+    /// (level 1) C4532".
+    pub(in crate::translation_phases::semantic_analysis) fn goto_leaves_finally(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> bool {
+        let regions = &self.control.regions;
+        self.leaves_finally(from, Some(to))
+            && (self.context.configuration.compiler_identity()
+                != crate::configuration::CompilerIdentity::Msvc
+                || regions[from.0].nearest_seh.is_some_and(|block| {
+                    regions[block.0].kind == RegionKind::Seh(SehBlock::Finally)
+                }))
+    }
+
     /// Clang's `-Wjump-seh-finally` and `cl`'s C4532 for a `break`,
     /// `continue` or `return` that leaves a `__finally` block: Clang warns
     /// of each at its keyword (`CheckJumpOutOfSEHFinally`), and `cl` of
@@ -291,6 +311,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// at the jump in Clang's words, with a note at each block it enters,
     /// innermost first; or at the label as `cl`'s C2705, which names the
     /// innermost block and calls a case label `'null'`, once per label.
+    /// `cl` counts a `__try` statement's `__except` and `__finally` blocks
+    /// as inside its `__try` block, so that a jump from either back into the
+    /// guarded block enters nothing ([`Self::goto_leaves_finally`] may still
+    /// warn of it).
     /// Microsoft Learn: "Compiler Error C2705". Clang: `JumpScopeChecker`.
     pub(in crate::translation_phases::semantic_analysis) fn check_seh_entry(
         &mut self,
@@ -299,7 +323,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entry: SehEntry,
         cl_reported: bool,
     ) -> bool {
-        let entered = self.control.entered_seh_blocks::<3>(from.region, to.region);
+        let cl_scopes = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Msvc;
+        let entered = self
+            .control
+            .entered_seh_blocks::<3>(from.region, to.region, cl_scopes);
         let Some(innermost) = entered[0] else {
             return false;
         };
