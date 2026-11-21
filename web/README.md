@@ -140,7 +140,9 @@ compiler; each part is captioned with what its lessons share
   from 1181 px) the output takes the main column under the stage's name,
   beside the source, and these notes a column on its right, so the output
   starts under the name on a laptop; a narrower card puts the output first
-  under the name. The real compiler runs in the browser and recompiles as you
+  under the name. The output wraps a line longer than its column, the rest
+  of the line hanging further in and without a line number of its own, so
+  no instruction is cut at the column's edge. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed,
   drawn as paired bars; at the stages the optimizer changes, the two levels
   can be shown side by side, each linked to the source. Each stage's
