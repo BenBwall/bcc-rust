@@ -180,9 +180,9 @@ impl Topic {
             | Self::Subscript =>
                 "Subscripting is pointer arithmetic: `a[i]` is `*(a + i)` whether `a` is an array, \
                  which decays to a pointer first, or a pointer, so a function given only a pointer \
-                 can index its caller's array. Nothing checks the index: one outside the array is \
-                 undefined behavior, and this machine stops on it, where a compiled program may \
-                 read or overwrite whatever lies there.",
+                 can index its caller's array. Nothing checks the index: reading or storing \
+                 outside the array is undefined behavior, and this machine stops on it, where a \
+                 compiled program may read or overwrite whatever lies there.",
             | Self::Comparison =>
                 "Comparisons yield the int 0 or 1, so their result can be stored, added or tested \
                  like any other int. An if or a loop then treats 0 as false and anything else as \
@@ -223,10 +223,11 @@ impl Topic {
                  parameter never changes the caller's variable. Passing a pointer copies an \
                  address, which still lets the callee reach the caller's objects.",
             | Self::FrameEnd =>
-                "A function's parameters and locals last only while its call runs. return copies \
-                 the value out before the frame ends, so the caller gets it safely; returning the \
-                 address of a local instead would hand back a dangling pointer, since the object \
-                 it points to no longer exists.",
+                "A function's parameters and automatic locals (those not declared static) last \
+                 only while its call runs; a static local lasts the whole run. return copies the \
+                 value out before the frame ends, so the caller gets it safely; returning the \
+                 address of an automatic local instead would hand back a dangling pointer, since \
+                 the object it points to no longer exists.",
             | Self::StaticStorage =>
                 "C has two lifetimes for ordinary variables. Automatic objects (locals) are \
                  created each time their block runs and start indeterminate. Static objects \
@@ -810,9 +811,83 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
 /// base and index.
 pub(super) fn null_subscript(base: &str, index: &str) -> String {
     format!(
-        "`{base}[{index}]` means `*({base} + {index})`, and a null pointer points into no array, \
-         so even the addition has no meaning."
+        "`{base}[{index}]` means `{}`, and a null pointer points into no array, so even the \
+         addition has no meaning.",
+        subscript_meaning(base, index)
     )
+}
+
+/// What the subscript `base[index]` means, spelled from the program's own
+/// text: C99 §6.5.2.1p2 defines `E1[E2]` as `(*((E1)+(E2)))`. The base is a
+/// postfix expression, whose text keeps any parentheses it was written
+/// with, so it binds tighter than `+` as it stands; the index keeps its
+/// parentheses unless it is a primary expression, so `v[i << 1]` means
+/// `*(v + (i << 1))`, not `*(v + i << 1)`.
+///
+/// C99: §6.5.2.1 paragraph 2, p. 70; PDF p. 82.
+fn subscript_meaning(base: &str, index: &str) -> String {
+    if primary(index) {
+        format!("*({base} + {index})")
+    } else {
+        format!("*({base} + ({index}))")
+    }
+}
+
+/// Whether `text` is a primary expression (C99 §6.5.1): an identifier, a
+/// constant, a string literal or a parenthesized expression.
+///
+/// C99: §6.5.1, p. 69; PDF p. 81.
+fn primary(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    match bytes {
+        | [] => false,
+        | [b'\'' | b'"', ..] => literal_end(bytes, 0) == Some(bytes.len()),
+        | [b'(', ..] => enclosing_parenthesis(bytes),
+        | _ => bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'),
+    }
+}
+
+/// Whether the parenthesis that opens `bytes` closes at its last byte.
+fn enclosing_parenthesis(bytes: &[u8]) -> bool {
+    let mut depth = 0_usize;
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            | b'\'' | b'"' => match literal_end(bytes, at) {
+                | Some(end) => {
+                    at = end;
+                    continue;
+                },
+                | None => return false,
+            },
+            | b'(' => depth += 1,
+            | b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return at + 1 == bytes.len();
+                }
+            },
+            | _ => {},
+        }
+        at += 1;
+    }
+    false
+}
+
+/// The end of the character constant or string literal that opens at
+/// `start` in `bytes`, past its closing quote.
+fn literal_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let quote = *bytes.get(start)?;
+    let mut at = start + 1;
+    loop {
+        match *bytes.get(at)? {
+            | b'\\' => at += 2,
+            | byte if byte == quote => return Some(at + 1),
+            | _ => at += 1,
+        }
+    }
 }
 
 /// The title and the one-sentence reason for undefined behavior, from its
@@ -2514,7 +2589,7 @@ impl Machine {
         let location = self.location_of(target, offset, structure);
         let operand = snippet(source, range).trim_start_matches('*');
         let summary = format!(
-            "`*{operand}` follows the pointer in `{operand}` to the object it points to: \
+            "`*{operand}` follows the pointer `{operand}` to the object it points to: \
              `*{operand}` now stands for {location} itself."
         );
         let text = format!(
@@ -2569,16 +2644,18 @@ impl Machine {
         };
         let pointer = self.value_text(&base);
         let (summary, defined) = match written {
-            | Some([array, at]) => (
-                format!(
-                    "`{array}[{at}]` means `*({array} + {at})`: it moves {steps} and designates \
-                     {location}."
-                ),
-                format!(
-                    "C defines `{array}[{at}]` as `*({array} + {at})`. Here `{array}` gives \
-                     {pointer}"
-                ),
-            ),
+            | Some([array, at]) => {
+                let meaning = subscript_meaning(array, at);
+                (
+                    format!(
+                        "`{array}[{at}]` means `{meaning}`: it moves {steps} and designates \
+                         {location}."
+                    ),
+                    format!(
+                        "C defines `{array}[{at}]` as `{meaning}`. Here `{array}` gives {pointer}"
+                    ),
+                )
+            },
             | None => (
                 format!(
                     "Subscripting counts elements from the pointer: it moves {steps} and \
@@ -4423,10 +4500,16 @@ impl Machine {
                 "Reaching main's closing brace returns 0, so the program ends with exit status 0.",
             )
         } else if let Some(call) = call {
-            let frame = if ended.is_empty() {
-                format!("the frame of {function} ends")
-            } else {
-                format!("the frame of {function} ends: its parameters and locals cease to exist")
+            // Only the frame's objects, those of automatic storage duration,
+            // end here; a static local lives on (C99 §6.2.4p3, p4-5).
+            let frame = match ended.len() {
+                | 0 => format!("the frame of {function} ends"),
+                | 1 => format!("the frame of {function} ends: {names} ceases to exist"),
+                | 2 | 3 => format!("the frame of {function} ends: {names} cease to exist"),
+                | _ => format!(
+                    "the frame of {function} ends: its parameters and automatic locals cease to \
+                     exist"
+                ),
             };
             format!("The return hands {shown} back as the value of `{call}`, and {frame}.")
         } else {
