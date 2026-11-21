@@ -28,9 +28,9 @@
 //! which [`Analyzer::finish_full_expression`] walks.
 //!
 //! C99: §6.6 paragraph 4, p. 95; PDF p. 107; §6.5 paragraph 5, p. 67; PDF
-//! p. 79; §6.5.7 paragraphs 3-5, p. 85; PDF p. 97; §6.5.5 paragraphs 5-6, p.
-//! 82; PDF p. 94. GNU extension: GCC manual, "Warning Options", `-Woverflow`
-//! and `-Wshift-count-overflow`.
+//! p. 79; §6.5.7 paragraphs 3-5, pp. 84-85; PDF pp. 96-97; §6.5.5
+//! paragraphs 5-6, p. 82; PDF p. 94. GNU extension: GCC manual, "Warning
+//! Options", `-Woverflow` and `-Wshift-count-overflow`.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html>
 
 use super::{
@@ -267,7 +267,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The value and mark of a shift of `left` at the type of `bits` and
     /// `signed`ness whose count, or whose left operand, makes it undefined.
-    /// C99: §6.5.7 paragraphs 3-4, p. 85; PDF p. 97.
+    /// C99: §6.5.7 paragraphs 3-4, pp. 84-85; PDF pp. 96-97.
     fn exceptional_shift(
         &self,
         op: BinaryOperator,
@@ -468,8 +468,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// expression whose left operand may be anything; the operands of a
     /// compound assignment count too. GCC first warns of a negative constant
     /// shifted left, whatever the count.
-    /// C99: §6.5.7 paragraphs 3-4, p. 85; PDF p. 97; §6.5.5 paragraph 5,
-    /// p. 82; PDF p. 94.
+    /// C99: §6.5.7 paragraphs 3-4, pp. 84-85; PDF pp. 96-97; §6.5.5
+    /// paragraph 5, p. 82; PDF p. 94.
     pub(super) fn report_exceptional_operands(
         &mut self,
         e: &'tu Expression<'tu>,
