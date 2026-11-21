@@ -3216,3 +3216,299 @@ assignment's `x = x op (e)` already parenthesizes its right operand, and
   "Preprocessing tokens" and "Preprocessor" truncate; and from 760 to
   820 px (an iPad in portrait) the card still puts the output first, with
   Next 1,261 px down.
+
+## Part 13: the C a beginner types next (2026-11)
+
+The last review found that a reader who edits a lesson soon meets refusals
+for C that every textbook's first chapters use: `&&` and `||`, the bitwise
+operators, `?:`, the comma operator in a `for` loop, hexadecimal and octal
+constants, a call inside a larger expression, `i[v]`, pointers to pointers,
+arrays of pointers and function pointers. This part measures how much of
+that the machine refused, runs the most valuable constructs with the same
+narration as the rest (what happened to memory and values, the C99 rule,
+why it matters, and what comes next), adds two lessons that teach what the
+other twelve machine lessons do not, and checks every new construct in the
+machine view, the expression panel and the stage views. The work is on
+`agent/machine-subset`.
+
+### Method
+
+- **The corpus.** One small program per construct, written as a textbook
+  or a beginner would, is in [`corpus/`](corpus/): 32 programs (six for
+  the bitwise operators, six for `&&` and `||`, three for `?:`, two for the
+  comma operator, three for constants, four for calls, one for `i[v]`, five
+  for pointers to pointers and arrays of pointers, two for function
+  pointers). A test steps each one to its end, and
+  [`corpus/results-before.txt`](corpus/results-before.txt) and
+  [`corpus/results-after.txt`](corpus/results-after.txt) are its output on
+  `main` and on this branch. The 30 programs the branch runs were also
+  compiled with GCC 13 and run: every exit status and every output
+  agrees.
+- **The notes.** A throwaway engine test dumped every step of every lesson
+  (title, lead, explanation, why it matters, citations, what comes next,
+  and whether a sequence point follows) on `main` and on the branch.
+- **The builds.** The before build is `main` at `4d7c18a25` (Part 12
+  merged), the after build this branch at ``c6f29c6dd``, both with
+  `web/build.sh` as in Parts 7 to 12: Trunk without `--release`, the dev
+  profile at `opt-level=s`.
+- **The browser.** Playwright drove Chromium with reduced motion, one
+  browser at a time, at 1440x900, 1366x768, 1024x768 and 390x844 in both
+  themes, on both builds. Each program was loaded through the page's own
+  Open .c, as a reader's file would be (typing or pasting it lets the
+  editor's auto-indentation and closing braces change it), run with Run
+  edited code and stepped to the step named below, recording the note,
+  the value flow, the cells under the head, Table 1, Figure 2 and its
+  outline for screen readers, sideways scroll and console errors. The two
+  new lessons were also opened from Table 1 and shown in the compiler
+  pipeline and WebAssembly views, and the contrast of the new text was
+  measured against its composited background.
+- **The lesson walk.** Part 9's walk, every note of every machine lesson,
+  on both builds at 1440x900 light and 390x844 dark.
+
+The screenshots are in [`screenshots/part13/`](screenshots/part13/), named
+`<scene>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours to keep them small.
+
+### The corpus, before and after
+
+| Construct | Program | Before: where the engine refused it | After |
+| --- | --- | --- | --- |
+| Bitwise | [`b01_and_mask.c`](corpus/b01_and_mask.c) | parser, 3:21: expected `;` | runs (15 steps), returns 1 |
+| Bitwise | [`b02_or_set.c`](corpus/b02_or_set.c) | lexer, 3:21: unsupported character | runs (15 steps), returns 9 |
+| Bitwise | [`b03_xor_toggle.c`](corpus/b03_xor_toggle.c) | lexer, 3:24: unsupported character | runs (15 steps), returns 6 |
+| Bitwise | [`b04_not_complement.c`](corpus/b04_not_complement.c) | lexer, 3:20: unsupported character | runs (17 steps), returns 240 |
+| Bitwise | [`b05_compound_bits.c`](corpus/b05_compound_bits.c) | lexer, 3:11: unsupported character | runs (20 steps), returns 7 |
+| Bitwise | [`b06_is_odd.c`](corpus/b06_is_odd.c) | parser, 3:11: expected `)` | runs (13 steps), returns 1 |
+| `&&`, `\|\|` | [`l01_and_range.c`](corpus/l01_and_range.c) | parser, 3:15: expected `)` | runs (19 steps), returns 1 |
+| `&&`, `\|\|` | [`l02_or_either.c`](corpus/l02_or_either.c) | lexer, 4:18: unsupported character | runs (24 steps), returns 1 |
+| `&&`, `\|\|` | [`l03_and_value.c`](corpus/l03_and_value.c) | parser, 4:22: expected `;` | runs (25 steps), returns 0 |
+| `&&`, `\|\|` | [`l04_null_guard.c`](corpus/l04_null_guard.c) | parser, 4:16: expected `)` | runs (18 steps), returns 0 |
+| `&&`, `\|\|` | [`l05_while_and.c`](corpus/l05_while_and.c) | parser, 4:18: expected `)` | runs (76 steps), returns 2 |
+| `&&`, `\|\|` | [`l06_not_and.c`](corpus/l06_not_and.c) | parser, 4:16: expected `)` | runs (17 steps), returns 1 |
+| `?:` | [`c01_max.c`](corpus/c01_max.c) | lexer, 4:21: unsupported character | runs (24 steps), returns 9 |
+| `?:` | [`c02_abs_return.c`](corpus/c02_abs_return.c) | lexer, 2:18: unsupported character | runs (16 steps), returns 6 |
+| `?:` | [`c03_printf_choice.c`](corpus/c03_printf_choice.c) | lexer, 5:45: unsupported character | runs (23 steps), returns 0 and prints `1 item` |
+| Comma | [`k01_for_two.c`](corpus/k01_for_two.c) | parser, 5:15: expected `;` | runs (114 steps), returns 4 |
+| Comma | [`k02_comma_value.c`](corpus/k02_comma_value.c) | parser, 3:19: expected `)` | runs (21 steps), returns 20 |
+| Constants | [`h01_hex.c`](corpus/h01_hex.c) | type checker, 2:16: octal and hexadecimal integer constants are outside this subset; write the value in decimal | runs (8 steps), returns 255 |
+| Constants | [`h02_octal.c`](corpus/h02_octal.c) | type checker, 2:23: octal and hexadecimal integer constants are outside this subset; write the value in decimal | runs (8 steps), returns 493 |
+| Constants | [`h03_hex_unsigned.c`](corpus/h03_hex_unsigned.c) | type checker, 2:24: octal and hexadecimal integer constants are outside this subset; write the value in decimal | runs (21 steps), returns 1 |
+| Calls | [`f01_call_sum.c`](corpus/f01_call_sum.c) | type checker, 6:38: calls must be whole expressions; operand sequencing is outside this subset | runs (26 steps), returns 13 |
+| Calls | [`f02_call_condition.c`](corpus/f02_call_condition.c) | parser, 7:20: expected `)` | runs (26 steps), returns 1 |
+| Calls | [`f03_call_argument.c`](corpus/f03_call_argument.c) | type checker, 8:29: nested function calls are outside this subset | runs (17 steps), returns 0 and prints `9` |
+| Calls | [`f04_call_nested.c`](corpus/f04_call_nested.c) | type checker, 6:26: nested function calls are outside this subset | runs (17 steps), returns 12 |
+| `i[v]` | [`i01_index_reversed.c`](corpus/i01_index_reversed.c) | type checker, 4:16: subscript requires a pointer to an arithmetic type and a side-effect-free integer index | runs (21 steps), returns 30 |
+| Pointers | [`p01_pointer_to_pointer.c`](corpus/p01_pointer_to_pointer.c) | parser, 4:10: expected an identifier; keyword or unsupported type found | runs (25 steps), returns 5 |
+| Pointers | [`p02_out_parameter.c`](corpus/p02_out_parameter.c) | parser, 1:15: expected an identifier; keyword or unsupported type found | runs (29 steps), returns 3 |
+| Pointers | [`p03_array_of_pointers.c`](corpus/p03_array_of_pointers.c) | type checker, 5:10: arrays of pointers are outside this subset | runs (36 steps), returns 20 |
+| Pointers | [`p04_array_of_strings.c`](corpus/p04_array_of_strings.c) | type checker, 4:11: arrays of pointers are outside this subset | runs (83 steps), returns 0 and prints `Ada Grace Linus` |
+| Pointers | [`p05_strings_unsized.c`](corpus/p05_strings_unsized.c) | type checker, 4:21: an array of unknown size needs a string literal initializer in this subset; give its size | runs (23 steps), returns 0 and prints `Wed` |
+| Function pointers | [`g01_function_pointer.c`](corpus/g01_function_pointer.c) | parser, 6:9: expected an identifier; keyword or unsupported type found | refused: expected an identifier |
+| Function pointers | [`g02_function_table.c`](corpus/g02_function_table.c) | parser, 10:9: expected an identifier; keyword or unsupported type found | refused: expected an identifier |
+
+On `main` all 32 were refused before their first step. Eight stopped in
+the lexer, which did not know `~`, `|`, `^`, `?` or `:`; fourteen in the
+parser, which read `&` and `&&` as nothing it knew and so expected a `)`
+or `;`, and found no name after a second `*` or in `int (*f)(…)`; and ten
+in the type checker, the part of the parser that gives each expression its
+type: octal and hexadecimal constants, calls inside expressions, `i[v]`,
+arrays of pointers and an array whose length comes from its list. None
+stopped in the stepper: the subset is enforced before the first step. On
+the branch 30 run to the end GCC gives them; the two with
+function pointers are still refused (see "Left for later").
+
+### What changed
+
+#### 1. Bitwise operators show their bits
+
+`&`, `^`, `|` and `~`, and `&=`, `^=` and `|=`, are steps of their own,
+after the integer promotions and the usual arithmetic conversions they
+need. Each writes its operands' bits: `13 & 3` reads "`&` keeps only the
+bits that are 1 in both operands: 0000 1101 & 0000 0011 = 0000 0001, which
+is 1", with as many groups of four as the largest value needs and at least
+eight bits, all of the type's bits when a value is negative, and in the
+lead `1111 … 1111 0000` for the middle of a 32-bit pattern that repeats its
+top bit. `~` says it works on the promoted operand ("flips each of its 32
+bits") and why the result is negative in an int ("~x is -x - 1" in two's
+complement) or the largest value minus x in an unsigned type. A compound
+`mode &= ~WRITE` names the bits it combines after the conversion
+(4294967293, not -3). The constraint for a floating or pointer operand is
+reported as one (C99 §6.5.10p2, §6.5.3.3p1). New "why it matters" note:
+flags and masks, and `&` against `&&`.
+[`bits-1366-light`](screenshots/part13/bits-1366-light-after.png)
+([before](screenshots/part13/bits-1366-light-before.png)).
+
+#### 2. `&&` and `||` stop early, and the page shows what they skipped
+
+The test of the first operand is a step of its own: "Left of && is false:
+skip the right, result 0", with the lead "`i < 3` is 0, so `i < 3 &&
+scores[i] != 5` is 0 whatever its right operand would give, and
+`scores[i] != 5` is never evaluated". It ends at a sequence point, so the
+expression panel's dashed line and the tape's taller clock pulse mark it
+like the end of a statement, and it cites §6.5.13p4 (or §6.5.14p4), the
+value rule §6.5.13p3 when the left operand settles the result, and Annex
+C's list of sequence points. When the left operand does not settle it, a
+second step turns the right operand into the `0` or `1` that `&&` yields
+("`x < 10` is 1: && yields 1"). The engine records the nodes it skipped,
+and Figure 2 draws them faint, their gates dashed and their wires dotted,
+with "skipped" on the wire into the operator; the outline screen readers
+hear says "skipped, never evaluated" where other nodes say "not evaluated
+yet". The value flow reads "0 counts as false so skip the right result
+0". New note: the null and bounds guards short-circuiting makes safe.
+[`logic-1440-light`](screenshots/part13/logic-1440-light-after.png)
+([before](screenshots/part13/logic-1440-light-before.png); [Figure
+2](screenshots/part13/logic-schematic-1440-light-after.png);
+[`logic-390-light`](screenshots/part13/logic-390-light-after.png)).
+
+#### 3. `?:` evaluates only the operand it chooses
+
+The same test, "Condition of ?: is false: choose `0`", then a step that
+gives the conditional its value, converted to the operands' common type
+when they differ (`c ? 1 : 2.5` yields 1.0, citing §6.5.15p5); a null
+pointer constant beside a pointer gives a null pointer. The operand not
+chosen is skipped in Figure 2 as for `&&`.
+[Figure 2 at 1024 px](screenshots/part13/ternary-schematic-1024-light-after.png).
+
+#### 4. The comma operator
+
+`for (i = 0, j = 3; i < j; i++, j--)` runs: the store into `i` no longer
+claims to end the full expression, and a comma step ("Comma: `i = 0` is
+done, go on to `j = 3`") marks the sequence point between the two
+operands. In parentheses, `(x + 1, x * 10)` discards 3 and yields 20.
+[`comma-1366-dark`](screenshots/part13/comma-1366-dark-after.png)
+([before](screenshots/part13/comma-1366-dark-before.png); [Figure
+2](screenshots/part13/comma-schematic-1366-dark-after.png)).
+
+#### 5. Octal and hexadecimal constants
+
+`0xFF` reads "The hexadecimal constant 0xFF is the int value 255", and its
+explanation computes the value in its base ("15 × 16 + 15 = 255") and
+gives the type list octal and hexadecimal constants have, which includes
+the unsigned types: `0xFFFFFFFF` is an unsigned int where `4294967295` is a
+long, and the note says so. `09` and `0x` are refused with what is wrong.
+
+#### 6. Pointers to pointers and arrays of pointers
+
+A declarator takes up to four `*`, and an array may hold pointers; `T
+name[] = {…}` takes its length from the list. `**pp`'s second step names
+`*pp` as the pointer it follows (the old wording stripped every `*` and
+said `*pp`). Under the head, `p` reads `→x ◂pp` and `pp` reads `→p`, so
+the chain reads in both directions; Table 1 spells the types `int **` and
+`int *[3]` (24 bytes); an array of pointers' cells each hold an arrow
+(`→a`, `→b`, `→c`), and an array of strings' cells point into each
+literal (`→"Grace"[0]`).
+[`pp-1440-light`](screenshots/part13/pp-1440-light-after.png)
+([before](screenshots/part13/pp-1440-light-before.png); [the
+cells](screenshots/part13/pp-headrow-1440-light-after.png); [Table
+1](screenshots/part13/pp-datasheet-1440-light-after.png);
+[`pp-390-dark`](screenshots/part13/pp-390-dark-after.png)),
+[`slots-1024-dark`](screenshots/part13/slots-1024-dark-after.png)
+([before](screenshots/part13/slots-1024-dark-before.png); [the
+tape](screenshots/part13/slots-deck-1440-light-after.png)),
+[`strings-390-dark`](screenshots/part13/strings-390-dark-after.png)
+([before](screenshots/part13/strings-390-dark-before.png); [the
+cells](screenshots/part13/strings-headrow-390-dark-after.png)).
+
+#### 7. Calls inside expressions, and `i[v]`
+
+A call may now be an operand of any expression, an argument of another
+call or an element of an initializer list: `square(2) + square(3)` and
+`printf("%d\n", square(3))` run, each call folded in the expression panel
+as before. `i[v]` is `*(i + v)` and runs (C99 §6.5.2.1p1).
+
+#### 8. Two new lessons
+
+- **"Short-circuit evaluation: &&, || and ?:"** ends the first part of
+  Table 1: a search whose last test never reads past the array, a `?:`
+  that picks a null pointer, a null test that keeps `*` from running and a
+  `?:` that picks printf's text. It is the first lesson whose run depends
+  on an operand not being evaluated.
+- **"Bits and masks"** follows the unsigned lesson: three flags, each a
+  `#define` of a hexadecimal constant, set with `|=`, cleared with `&=
+  ~`, flipped with `^=` and tested with `&`, printed with `%x`.
+
+Their comments stand on lines of their own and take at most 36 columns,
+since the compiler view's listing holds about 37 at 1366 px and the
+machine's about 40. Their LLVM IR comes from `web/pipeline/generate.sh`
+with a dev-profile bcc, whose output for the other lessons was byte for
+byte the committed one, and their modules from `web/wasm/generate.sh` with
+wasi-sdk 34, which also rebuilt the other modules unchanged. The first
+part's caption now reads "Objects, output, names for values, calls, and the
+order things happen in."
+[`lesson-short-circuit-1366-dark`](screenshots/part13/lesson-short-circuit-1366-dark-after.png)
+(in the [compiler pipeline](screenshots/part13/lesson-short-circuit-compiler-1366-dark-after.png)
+and the [WebAssembly view](screenshots/part13/lesson-short-circuit-wasm-1366-dark-after.png)),
+[`lesson-bits-and-masks-390-light`](screenshots/part13/lesson-bits-and-masks-390-light-after.png)
+(in the [compiler pipeline](screenshots/part13/lesson-bits-and-masks-compiler-390-light-after.png)).
+
+#### 9. The glossary and "Limits of this model"
+
+The glossary defines short-circuit evaluation (§6.5.13p4), the bitwise
+operators (§6.5.10p4) and two's complement (§6.2.6.2p2). "Limits of this
+model" (§3 of "How it works") now lists what runs, every operator family,
+octal and hexadecimal constants, pointers to pointers, arrays of pointers
+and calls anywhere in an expression, and what does not: switch, do, break,
+continue and goto; typedef, enum, union and _Bool; void and static
+functions; function pointers; arrays of structures or of arrays;
+subtracting or ordering two pointers; an assignment or increment used as
+an operand (except a statement's commas and one update in a condition);
+and the other library functions. A new engine test runs a program for
+each claim of what runs and checks a refusal for each claim of what does
+not.
+
+### Checks
+
+- **The corpus:** 30 of the 32 programs run to the end GCC gives them
+  (`results-after.txt`); every step's "what comes next" named the step
+  that followed it (the engine test `the_corpus_of_beginner_programs_runs`
+  checks this for every program).
+- **The notes:** the engine's dump of every lesson is the same, byte for
+  byte, before and after (952 KB). The browser walk at 1440x900 light and
+  390x844 dark finds none of the twelve machine lessons' 1,254 notes
+  changed in its title, lead, value flow, "why it matters" note or next
+  step, no sideways scroll and no page error; at 390 px, 144 notes' next
+  step sits 1 px higher, as the two new lessons lengthen Table 1 above the
+  workbench. The two new lessons walk 112 and 54 notes, every current line
+  in view, with no sideways scroll.
+- **The scenes:** at the four sizes in both themes, every scene reached
+  its step on the after build and was refused before its first step on
+  the before build. No sideways scroll, no console error or warning.
+  Figure 2 marks 11 nodes skipped at `&&`'s last test and 7 at `?:`'s,
+  with one "skipped" label each, and its outline names each of them
+  "skipped, never evaluated". Both lessons open in the compiler pipeline
+  and the WebAssembly view without a stop or sideways scroll.
+- **Contrast:** the "skipped" label and the skipped operands' text measure
+  10.59:1 in the light theme and 9.40:1 in the dark one at every size;
+  the new leads and value flows use the existing colours (15.82:1 and
+  13.34:1).
+- **Keyboard, screen readers and motion:** the change adds no control.
+  Figure 2's drawing stays hidden from screen readers, whose outline
+  carries the skipped state; the new styles have no transition, and every
+  run used reduced motion.
+- **Tests:** as `pages.yml` runs them, the engine's tests (129, 12 of them
+  new) and its clippy pass, as do the site's tests (164, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs; the worker run prints the engine's existing unfulfilled
+  lint expectation in `src/abstract_machine/parser.rs`, as before.
+  `rustfmt +nightly --check` passes on every touched engine file, and on
+  the site's files every changed line is formatted (the files themselves
+  are not, on `main` either); `git diff --check` is clean.
+
+### Left for later
+
+- **Function pointers** stay outside the subset. They need a value that is
+  a function, a declarator grammar with parentheses (`int (*f)(int,
+  int)`), a call through a pointer, and a way to draw a pointer whose
+  target is code rather than an object, which the tape and the cells have
+  no lane for.
+- **Pointer subtraction and ordering** (`p - q`, `p < q`) still refuse; a
+  beginner's two-pointer loop compares with `!=`, which runs.
+- **An assignment or increment as an operand** (`a = b++`, `while ((c =
+  next()) != 0)`) still refuses: the machine would need to narrate
+  unsequenced side effects, and to stop where C leaves them undefined.
+- **Constant expressions in static initializers** (`static int mask = 1
+  << 3;`) still take only a constant.
+- **Narrow listings:** the listing holds 37 to 40 columns at 1366 and
+  1440 px, so the existing lessons' trailing comments, and three lines of
+  code in each new lesson, wrap; the new lessons keep their comments short
+  instead.
