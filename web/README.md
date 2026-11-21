@@ -119,7 +119,7 @@ compiler; each part is captioned with what its lessons share
   the playhead shows its bytes. printf writes `%f %e %g %a` (and `%Lf` for
   a long double) exactly as glibc does. Any other directive (a function-like macro,
   `#if`, another header) stops the machine before its first step with a
-  card that sends the reader to the Preprocessor stage.
+  card that cites §6.10p2 and has a button to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
