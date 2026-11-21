@@ -354,8 +354,8 @@ first read-only listing, whose folding arrows use it.
   group of keys, each pressed or not, rather than a tab list: the arrow keys
   step the machine wherever the focus is, even on these keys. The stage keys
   of the pipeline, where the arrow keys step nothing, are a tab list: only
-  the selected key takes `Tab`, `←` and `→` (or `↑` and `↓`) select the
-  stage before or after, `Home` and `End` the first and last.
+  the selected key takes `Tab`, `←` and `→` select the stage before or
+  after, `Home` and `End` the first and last, and the focus follows.
 - The landing's lede names the compiler's forms (tokens, syntax tree, IR,
   assembly, machine code); each links to its glossary entry and shows the
   definition on hover or keyboard focus (`Escape` hides it): under the word

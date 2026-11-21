@@ -837,10 +837,11 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
             strip.scroll_to_with_scroll_to_options(&options);
         }
     });
-    // The tab list's keys, as WAI-ARIA's tabs pattern has them: `←` and `→`
-    // select the stage before or after (around the ends), Home and End the
-    // first and last, and the focus follows. The pipeline view does not
-    // step the machine, so the arrow keys are free here.
+    // The tab list's keys, as WAI-ARIA's pattern has them for a horizontal
+    // tab list: `←` and `→` select the stage before or after (around the
+    // ends), Home and End the first and last, and the focus follows; `↑`
+    // and `↓` scroll the page. The pipeline view does not step the
+    // machine, so the arrow keys are free here.
     let moved = move |event: web_sys::KeyboardEvent| {
         let current = stage.get_untracked();
         let index = Stage::ALL
@@ -849,13 +850,13 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
             .unwrap_or(0);
         let last = Stage::ALL.len() - 1;
         let next = match event.key().as_str() {
-            | "ArrowRight" | "ArrowDown" =>
+            | "ArrowRight" =>
                 if index == last {
                     0
                 } else {
                     index + 1
                 },
-            | "ArrowLeft" | "ArrowUp" =>
+            | "ArrowLeft" =>
                 if index == 0 {
                     last
                 } else {
