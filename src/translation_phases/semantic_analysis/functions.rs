@@ -2099,9 +2099,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entity.first = entity.first.or(Some(index));
         entity.latest = index;
         if let Some(FunctionBody::Unique(previous)) = entity.function_body {
-            // `cl`'s error C2084 names the function by its declaration.
+            // `cl`'s error C2084 names the function by its declaration, which
+            // bcc writes only without a typedef name.
             // Microsoft Learn: "Compiler Error C2084".
-            let spelled = if self.context.configuration.msvc_wording() {
+            let spelled = if self.context.configuration.msvc_wording()
+                && !self.cl_spelled_by_name.contains_key(&index)
+            {
                 self.msvc_function_spelling(b.ty, b.name.name)
             } else {
                 None

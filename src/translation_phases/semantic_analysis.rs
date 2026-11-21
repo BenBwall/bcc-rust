@@ -2386,6 +2386,10 @@ struct Analyzer<'a, 'tu, 's> {
     object_alignments:       ArenaMap<'s, usize, (u32, bool)>,
     member_alignments:       ArenaMap<'s, (usize, StringCacheId), u32>,
     register_bindings:       ArenaMap<'s, usize, bool>,
+    /// Function declarations whose result or a parameter is spelled through a
+    /// typedef name or another type specifier `cl` writes by name, which
+    /// `cl`'s words for a call keep and bcc's type printer does not.
+    cl_spelled_by_name:      ArenaMap<'s, usize, ()>,
     /// The general register each GNU local register variable names.
     register_variables:      ArenaMap<'s, usize, u8>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,

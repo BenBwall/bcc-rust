@@ -738,6 +738,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Resolves storage class, linkage inheritance and duration independently.
     /// C99: §6.2.2p2-7, pp. 30-31; PDF pp. 42-43; §6.2.4, p. 32; PDF p. 44;
     /// §6.7.1, p. 98; PDF p. 110; §6.7.4p2-4, p. 112; PDF p. 124.
+    /// Whether the function `declarator` declares with `spec` writes its
+    /// result or a parameter with a typedef name or a type specifier of an
+    /// extension, which `cl` keeps in its words for the function.
+    fn spelled_by_name(
+        &self,
+        spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
+    ) -> bool {
+        let named = |spec: DeclarationSpecifiers<'tu>| {
+            matches!(
+                spec.type_specifiers,
+                TypeSpecifiers::TypedefName(_) | TypeSpecifiers::Extended(_)
+            )
+        };
+        named(spec)
+            || matches!(
+                super::functions::function_derivation(declarator, self.scratch),
+                Some(DirectDeclarator::Function { parameter_list, .. })
+                    if parameter_list.iter().any(|parameter| named(parameter.declaration_specifiers))
+            )
+    }
+
     pub(super) fn bind_declaration(
         &mut self,
         declarator: Declarator<'tu>,
@@ -802,6 +824,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .function_extensions
                 .written_types
                 .insert(self.bindings.len(), written_functions);
+        }
+        if self.context.configuration.msvc_wording()
+            && matches!(self.types.nodes[ty.index], TypeKind::Function { .. })
+            && self.spelled_by_name(spec, declarator)
+        {
+            _ = self.cl_spelled_by_name.insert(self.bindings.len(), ());
         }
         if typedef
             && let TypeKind::Tag(tag) = self.types.nodes[ty.index]

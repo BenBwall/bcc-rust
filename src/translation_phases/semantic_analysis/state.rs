@@ -132,6 +132,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             object_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            cl_spelled_by_name: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_variables: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             functions: functions::State::new(scratch),

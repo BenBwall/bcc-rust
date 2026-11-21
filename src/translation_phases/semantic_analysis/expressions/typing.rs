@@ -1201,10 +1201,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
         // TCC say which way a call misses it.
         // `cl` names the function by its declaration, and an extra
-        // argument at the first.
-        let cl_callee = callee_name
-            .filter(|_| self.context.configuration.msvc_wording())
-            .and_then(|name| self.msvc_function_spelling(target, name));
+        // argument at the first. bcc keeps its own words for a call through
+        // a pointer, and for a declaration that spells a type by a typedef
+        // name, whose spelling `cl` keeps and its type printer does not.
+        let cl_callee = named
+            .filter(|&binding| {
+                self.context.configuration.msvc_wording()
+                    && self.bindings[binding].kind == BindingKind::Function
+                    && !self.cl_spelled_by_name.contains_key(&binding)
+            })
+            .and_then(|binding| {
+                self.msvc_function_spelling(target, self.bindings[binding].name.name)
+            });
         if prototype && arguments.len() < parameters.len() {
             if let Some(callee) = cl_callee {
                 let words = format_in!(self.scratch, "'{callee}': too few arguments for call");
