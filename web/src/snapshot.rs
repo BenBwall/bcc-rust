@@ -146,8 +146,8 @@ pub struct Encoding {
 impl StepEvent {
     /// Whether the step belongs to translation phase 4: a directive the
     /// machine ran, or a step whose rules include the preprocessor's
-    /// (§6.10), as a macro's use does. Such a step links to the
-    /// Preprocessor stage.
+    /// (§6.10), as a macro's use and a stop at a directive the machine does
+    /// not run do. Such a step links to the Preprocessor stage.
     pub fn preprocessed(&self) -> bool {
         self.kind == "directive"
             || self

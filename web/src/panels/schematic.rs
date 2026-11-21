@@ -62,8 +62,19 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                         </p>
                     }.into_any()
                 },
-                | _ if snapshot.with(Option::is_none) => view! {
-                    <p class="schematic-empty">"The expression being evaluated is drawn here as a circuit, its wires filling with values as the machine evaluates it."</p>
+                // Before the first step: what will be drawn here, in a card
+                // like the blank tape's, unless the run stopped there.
+                | _ if snapshot.with(|state| state.as_ref().is_some_and(|state| state.step == 0 && !state.can_step())) => view! {
+                    <p class="schematic-empty">"The machine stopped before its first step, so it evaluated no expression."</p>
+                }.into_any(),
+                | _ if snapshot.with(|state| state.as_ref().is_none_or(|state| state.step == 0)) => view! {
+                    <div class="figure-empty">
+                        <p class="figure-empty-label">"Nothing wired yet"</p>
+                        <p class="figure-empty-text">
+                            "Each full expression the machine evaluates is drawn here as a circuit: its operands \
+                             feed its operators, and the wires fill with values step by step."
+                        </p>
+                    </div>
                 }.into_any(),
                 | _ => view! {
                     <p class="schematic-empty">"This step is not part of an expression. When the machine evaluates one, it is wired up here."</p>

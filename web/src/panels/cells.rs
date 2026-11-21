@@ -88,6 +88,11 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{toggle.announcement}</p>
             {move || snapshot.with(|snapshot| match snapshot {
                 | Some(snapshot) if !snapshot.objects.is_empty() => strip(snapshot, toggle).into_any(),
+                // A run that stopped before its first step (at a directive
+                // the machine does not run) will put nothing here.
+                | Some(snapshot) if snapshot.step == 0 && !snapshot.can_step() => view! {
+                    <p class="cells-empty">"The machine stopped before its first step, so no object began its lifetime."</p>
+                }.into_any(),
                 | Some(_) => view! { <p class="cells-empty">"No objects yet. Entering a block puts the objects it declares on the tape."</p> }.into_any(),
                 | None => view! { <p class="cells-empty">"The objects of the run appear here as cells, under the playhead."</p> }.into_any(),
             })}

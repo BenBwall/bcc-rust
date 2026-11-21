@@ -233,7 +233,19 @@ pub fn PipelineView(
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
             <StageStrip stage compilation=shown />
-            <article class="card stage-card" id="stage-output" data-phase=move || stage.get().phase()>
+            // The selected key's panel. Where the card is wide, its output
+            // takes the main column, under the stage's name, and what the
+            // stage is and does the narrow one beside it, so the output
+            // starts high on a laptop; elsewhere they stack, the output
+            // first (style.css).
+            <article
+                class="card stage-card"
+                class:is-compare=side_by_side
+                id="stage-output"
+                role="tabpanel"
+                aria-labelledby=move || format!("stage-tab-{}", stage.get().key())
+                data-phase=move || stage.get().phase()
+            >
                 <header class="stage-header">
                     <div>
                         <p class="stage-kicker">
@@ -249,6 +261,7 @@ pub fn PipelineView(
                         <OptimizationToggle optimize />
                     </div>
                 </header>
+                <div class="stage-notes">
                 {move || {
                     let stage = stage.get();
                     match (stage.command(&filename.get(), optimize.get()), stage.internal()) {
@@ -289,6 +302,21 @@ pub fn PipelineView(
                         }}
                         <span aria-hidden="true">" →"</span>
                     </button>
+                    // The pipeline opens at its first stage; a reader who
+                    // came for the IR skips the front end from any of its
+                    // stages.
+                    <button
+                        type="button"
+                        class="stage-skip"
+                        hidden=move || {
+                            let stage = stage.get();
+                            stage.phase() != "Front end" || stage.next() == Some(Stage::Ir)
+                        }
+                        on:click=move |_| show_ir(stage)
+                    >
+                        {format!("Skip to {}", Stage::Ir.label())}
+                        <span aria-hidden="true">" ⇥"</span>
+                    </button>
                 </p>
                 <p class="stage-path-note" hidden=move || path_note().is_none()>
                     <strong>"In this program: "</strong>
@@ -297,10 +325,6 @@ pub fn PipelineView(
                 </div>
                 <StageBrief stage />
                 </div>
-                <StopBanner
-                    compilation=shown
-                    level=Signal::derive(move || side_by_side.get().then(|| level_name(optimize.get())))
-                />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if !shown_links.with(Links::is_exact) {
@@ -354,6 +378,12 @@ pub fn PipelineView(
                         "Compare -O0 with -O2"
                     </button>
                 </div>
+                </div>
+                <div class="stage-work">
+                <StopBanner
+                    compilation=shown
+                    level=Signal::derive(move || side_by_side.get().then(|| level_name(optimize.get())))
+                />
                 <p
                     class="link-reading"
                     aria-hidden="true"
@@ -414,6 +444,7 @@ pub fn PipelineView(
                         </button>
                         <code class="stage-command">{move || Stage::Llvm.command(&filename.get(), optimize.get()).map(|command| format!("$ {command}"))}</code>
                     </div>
+                </div>
                 </div>
                 // What the stage did comes first, where a 1440x900 screen
                 // shows it; how it works and what the optimizer changed
@@ -691,16 +722,29 @@ impl PlaceKeeper {
 }
 
 /// Switches to the bcc IR stage and moves the focus to its tab, since the
-/// button that asked for it disappears with the empty state.
+/// button that asked for it disappears as the stage changes.
 fn show_ir(stage: RwSignal<Stage>) {
-    stage.set(Stage::Ir);
+    focus_stage(stage, Stage::Ir);
+}
+
+/// Selects `entry` and moves the focus to its key in the stage strip.
+fn focus_stage(stage: RwSignal<Stage>, entry: Stage) {
+    stage.set(entry);
+    focus_stage_key(entry);
+}
+
+/// Moves the focus to `entry`'s key in the stage strip, if the strip is on
+/// the page.
+pub fn focus_stage_key(entry: Stage) {
     #[cfg(feature = "hydrate")]
     if let Some(tab) = document()
-        .get_element_by_id(&format!("stage-tab-{}", Stage::Ir.key()))
+        .get_element_by_id(&format!("stage-tab-{}", entry.key()))
         .and_then(|tab| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(tab).ok())
     {
         _ = tab.focus();
     }
+    #[cfg(not(feature = "hydrate"))]
+    let _ = entry;
 }
 
 /// Which stage an error stopped bcc in, and why.
@@ -750,6 +794,9 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
                     data-phase=entry.phase()
                     aria-selected=move || (stage.get() == entry).to_string()
                     aria-controls="stage-output"
+                    // One key of the strip takes Tab, the selected one; the
+                    // arrow keys move along the strip (`moved`).
+                    tabindex=move || if stage.get() == entry { "0" } else { "-1" }
                     id=format!("stage-tab-{}", entry.key())
                     on:click=move |_| stage.set(entry)
                 >
@@ -798,8 +845,40 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
             strip.scroll_to_with_scroll_to_options(&options);
         }
     });
+    // The tab list's keys, as WAI-ARIA's pattern has them for a horizontal
+    // tab list: `←` and `→` select the stage before or after (around the
+    // ends), Home and End the first and last, and the focus follows; `↑`
+    // and `↓` scroll the page. The pipeline view does not step the
+    // machine, so the arrow keys are free here.
+    let moved = move |event: web_sys::KeyboardEvent| {
+        let current = stage.get_untracked();
+        let index = Stage::ALL
+            .iter()
+            .position(|&each| each == current)
+            .unwrap_or(0);
+        let last = Stage::ALL.len() - 1;
+        let next = match event.key().as_str() {
+            | "ArrowRight" =>
+                if index == last {
+                    0
+                } else {
+                    index + 1
+                },
+            | "ArrowLeft" =>
+                if index == 0 {
+                    last
+                } else {
+                    index - 1
+                },
+            | "Home" => 0,
+            | "End" => last,
+            | _ => return,
+        };
+        event.prevent_default();
+        focus_stage(stage, Stage::ALL[next]);
+    };
     view! {
-        <div class="stage-strip" role="tablist" aria-label="Compiler stages" node_ref=strip>
+        <div class="stage-strip" role="tablist" aria-label="Compiler stages" node_ref=strip on:keydown=moved>
             <div class="stage-row" role="presentation">
                 <span class="stage-group-label" data-phase="Front end" aria-hidden="true">"Front end"</span>
                 {row(0..6)}
@@ -1258,6 +1337,51 @@ mod tests {
             missing(Stage::Asm, false, Some(&clean), &LiveCompile::Compiled),
             "bcc produced no output for this stage."
         );
+    }
+
+    /// The front end's stages but the last offer the skip to the IR, which
+    /// no other stage shows; the card is the selected stage key's tab panel,
+    /// and that key alone takes Tab.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn the_front_end_skips_to_the_ir_and_the_keys_are_tabs() {
+        for stage in Stage::ALL {
+            let html = render_stage(
+                stage,
+                false,
+                false,
+                LiveCompile::Compiling,
+                [None, None, None],
+            );
+            let skip = html
+                .split("<button")
+                .find(|tag| tag.contains("stage-skip"))
+                .and_then(|tag| tag.split('>').next())
+                .unwrap_or_else(|| panic!("{stage:?} has no skip key"));
+            let offered = stage.phase() == "Front end" && stage != Stage::SemanticTypes;
+            assert_eq!(!skip.contains("hidden"), offered, "{stage:?}: {skip}");
+            assert!(
+                html.contains(&format!(
+                    "role=\"tabpanel\" aria-labelledby=\"stage-tab-{}\"",
+                    stage.key()
+                )),
+                "{stage:?}"
+            );
+            assert_eq!(
+                html.matches("tabindex=\"0\" id=\"stage-tab-").count(),
+                1,
+                "{stage:?}"
+            );
+            assert_eq!(
+                html.matches("tabindex=\"-1\" id=\"stage-tab-").count(),
+                Stage::ALL.len() - 1,
+                "{stage:?}"
+            );
+            assert!(
+                html.contains(&format!("tabindex=\"0\" id=\"stage-tab-{}\"", stage.key())),
+                "{stage:?}"
+            );
+        }
     }
 
     /// The pipeline view at `-O2` (when `optimize`), rendered to HTML, given
