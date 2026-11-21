@@ -2959,8 +2959,8 @@ Lowering emits a folded binary128 value as `fconst.f128` (or converts it to
 the destination format for a static initializer), and static initializers
 read it through `float_parsing::bits::binary128_bits`. A folded invalid
 operation gives the NaN of its [`NanSource`](#folded-nans-2026-11-20): the
-positive one GCC and Clang fold, or, where the compiler leaves the operation
-for run time, the negative default NaN libgcc gives.
+positive one GCC and Clang fold in a static initializer, or, in a function,
+the negative default NaN libgcc gives at run time.
 
 ## Folded NaNs (2026-11-20)
 
@@ -2970,193 +2970,59 @@ differ: x86-64 at run time gives its default NaN, sign bit set
 (`0xFFF8000000000000`), while GCC's `real.c` and LLVM's `APFloat` give the
 positive quiet NaN (`0x7FF8000000000000`). The host bridge computes as the
 hardware does, so `constants.rs` decides the sign afterwards, from
-`Analyzer::nan_source` (C99 §F.7.4 and §F.7.5):
+`Analyzer::nan_source`:
 
-- `NanSource::Compiler`, outside a function and in a static or thread-local
-  object's initializer, and in a function where complex arithmetic is
-  limited (`-fcx-limited-range`, `-fcx-fortran-rules` or `-ffast-math`) and
-  no traps apply: a NaN that an invalid operation made from operands that
-  are not NaNs is positive. Both compilers fold these, at every
-  optimization level; with limited complex arithmetic they compute complex
-  products and quotients inline, where those fold too.
-- `NanSource::GccFunction`, an expression in a function under GCC's rules
-  with `-fno-trapping-math`: real arithmetic folds as the compiler's does,
-  but the product or quotient of two complex values calls `__muldc3` or
-  `__divdc3` at run time, so it keeps the hardware's NaN. GCC's
-  `const_binop` folds them through MPC only in an initializer
-  (`do_nonfinite = folding_initializer`).
-- `NanSource::ClangFunction`, an expression in a function under Clang's
-  rules: Clang folds real arithmetic the same way, but a complex quotient,
-  or a complex product whose parts are both NaNs, calls `__divdc3` or
-  `__muldc3` at run time, so those keep the hardware's NaN.
-- `NanSource::Runtime`, an expression in a function under GCC's rules while
-  math may trap (GCC's default): GCC leaves the operation unfolded
-  (`const_binop` refuses a NaN made from operands that are not NaNs). Under
-  Clang's rules with strict exception behavior, from an explicit
-  `-ftrapping-math` (`CompilerConfiguration::requests_trapping_math`, which
-  Clang's driver maps to `-ffp-exception-behavior=strict`; Clang's default
-  and `-fno-fast-math` ignore exceptions) or a floating-point pragma (below),
-  Clang emits the operation as a constrained intrinsic that LLVM does not
-  fold. Either way the value is the hardware's NaN.
+- `NanSource::Compiler` outside a function and in the initializer of an
+  object with static or thread storage duration, at file or block scope. Such
+  an initializer is a constant expression computed at translation time
+  (C99 §6.7.8p4, §F.7.5p1), and GCC 14 and Clang 23 fold it under every
+  floating-point option (`-ftrapping-math`, `-fno-trapping-math`,
+  `-ffast-math`, `-fcx-limited-range`) and pragma (`STDC FENV_ACCESS`,
+  `clang fp exceptions`, `float_control`, `GCC optimize`), complex products
+  and quotients included. A NaN that an invalid operation makes from
+  operands that are not NaNs is then positive.
+- `NanSource::Runtime` everywhere else: in a function body, automatic
+  initializers included, every invalid operation keeps the hardware's NaN,
+  exactly as before folded NaNs. Its IR is the same as before.
 
 The tcc and msvc identities take `Runtime` everywhere, static initializers
-included, as before folded NaNs (`Analyzer::compiler_nan_source`). Both map
-to GCC's rules, but TCC 0.9.27 accepts `-fno-trapping-math` and
-`-ffast-math` and ignores them: its `gen_opif` folds only finite results, so
-its code computes every invalid operation at run time, and it rejects one in
-a static initializer ("division by zero in constant"). There is no `cl` to
-compare the msvc identity with, and it cannot be given those options except
-on bcc's own command line.
+included. TCC 0.9.27 folds only finite results (its `gen_opif`), so its code
+computes every invalid operation at run time, and it rejects one in a static
+initializer ("division by zero in constant"). There is no `cl` to compare
+the msvc identity with.
 
-### Final values (2026-11-21)
+A NaN operand passes through with its sign, as GCC's `const_binop` and
+LLVM's `APFloat` pass it, and a negation flips it. Binary128 folding follows
+the same rule. A deferred call predicate (`enable_if`, `diagnose_if`) keeps
+the hardware's NaN.
 
-In a function the folded NaN is right only where nothing else combines with
-it at run time. On x86 an operation with two NaN operands returns its first
-operand's NaN, and GCC and Clang order operands differently from bcc's
-lowering: GCC keeps a constant second at `-O2` and commutes some expressions
-at `-O0` (`r + 0*x`, `r * x`), Clang commutes `r + 0*(v/v)` at `-O0`, and
-LLVM folds an operation with a NaN constant operand to that constant at
-`-O2`. Before folded NaNs every NaN in a function was the hardware's, so
-every two-NaN combination matched by accident.
+### Known limit: NaNs in a function
 
-So semantic analysis folds an invalid operation in a function with the
-hardware's NaN (`Runtime`, as before), and records the source above that its
-compiler would fold it with (`Analyzer::defer_function_nan`). When the
-outermost function ends, `Analyzer::settle_function_nans`
-(`function_nans.rs`) folds a constant again with that source, through the
-same `refold` that strict initializers use, only where its value is final:
+C99 §F.7.4p1 evaluates any other floating constant expression as if during
+execution, and the compilers differ there. GCC leaves an invalid operation
+for run time while math may trap, its default, and folds it under
+`-fno-trapping-math`, except a product or quotient of two complex values,
+which calls `__muldc3` or `__divdc3`. Clang folds it unless exceptions are
+strict (`-ftrapping-math`, `STDC FENV_ACCESS ON` and the other pragmas),
+except for an automatic aggregate whose whole initializer its evaluator
+folds. Either may also propagate a folded constant through inlining. So
+GCC's and Clang's code holds the positive NaN in some function bodies where
+bcc's holds the negative one, and `printf` shows `nan` where bcc's program
+shows `-nan`.
 
-- returned, or passed as an argument to a function that is neither a
-  builtin nor a library function, nor a function defined earlier in the
-  translation unit whose code reads that parameter in an operation computed
-  at run time (an inlined call would meet the argument there);
-- the right operand of an assignment statement that stores into a named
-  object (not through a pointer);
-- an automatic object's initializer, including the values a compound
-  literal in it stores, and a scalar compound literal's folded read.
+PR #426 first tried to follow each compiler there, and then to fold only
+values it judged final (returned, passed, stored). Six review rounds found
+that any folded NaN that later meets a NaN computed at run time takes the
+wrong operand's sign: x86 returns the first operand's NaN, and GCC, Clang
+and bcc order operands differently (GCC keeps a constant second at `-O2`,
+both commute some expressions at `-O0`, and LLVM folds `x + NaN` to the
+constant). The value reached such operations through returns, later-defined
+callees, function pointers, globals, `__builtin_assume_aligned`, `memcpy`
+and returned structures, so no local analysis was sound. Main's NaN matches
+every combination of two run-time NaNs, so bcc keeps it in every function.
 
-A store or initializer counts only when every read of its object in the
-function is final as well: a return value or argument as above, the object
-whose address is passed to any function, an argument of a builtin or library
-function whose result is not floating (`printf`, `memcpy`), a discarded
-expression statement, or a copy into another object whose own reads are
-final. Parentheses,
-casts, unary `+`, `-` and `~`, `__real__`, `__imag__`, `&`, `*`, member
-access, subscripts, comma operators, conditional arms, and the pointer
-arithmetic that offsets a taken address (`(char *)&d + 8`) pass a value on.
-Reads in a GNU nested function count for the enclosing function's objects.
-Everything else (an operand of an arithmetic operation or compound
-assignment computed at run time, a constant argument of a builtin or library
-function (one with a floating result may be computed inline, as `fmax` is,
-and another's folded value derives from it), an expression this
-does not follow, a `_Float16` or `__bf16` value, an integer
-derived from the NaN such as `__builtin_signbit(0.0 / 0.0)`) keeps the
-hardware's NaN. A context that requires a constant (`case` labels, static
-assertions, enumeration constants, bit-field widths, alignments) folds with
-the function's source directly, since its value never reaches run time as a
-floating value. Under Clang's strict exception behavior an automatic
-aggregate's constant image is folded again only when its object is final in
-the same sense.
-
-Values that leave the function are not followed: a returned NaN that meets
-a run-time NaN in the caller, an argument for a function defined later or
-in another translation unit, and a global read by another function can
-still differ from GCC at `-O2`, where inlining exposes the combination.
-
-Under Clang's strict exception behavior an automatic array or structure is
-the exception. `EmitAutoVarInit` copies its initial value from a constant
-image when Clang's evaluator folds the whole initializer, with the positive
-NaN, and otherwise Clang's code computes every member at run time. Under
-strict exception behavior the evaluator (`checkFloatingPointResult`) refuses:
-
-- an operation or conversion whose result is not a NaN but raises an
-  exception: an inexact `1.0 / 3.0` or `(float)0.1`, an overflow, an
-  underflow, a division by zero, or an integer that does not convert
-  exactly. A sum or difference with a complex operand, and a product or
-  quotient of two complex values, raise none; a product with one real
-  operand and a complex quotient by a real divisor check each part;
-- an unordered comparison;
-- a builtin call other than the constants, the sign operations, `fmax`,
-  `fmin`, `__builtin_complex`, `__builtin_expect` and the classification
-  and quiet comparison macros (`STRICT_BUILTINS`);
-- an address converted to an integer, or the pointer an array compound
-  literal decays to.
-
-bcc folds such an initializer as `Runtime` does, recording where its
-conversions begin (`Analyzer::begin_strict_initializer`). When it is done,
-`Analyzer::settle_strict_initializer` (`strict_initializers.rs`) checks the
-whole initializer against those rules and against
-`Analyzer::constant_automatic_aggregate`, the constant aggregate test the
-emission policy already applies. If Clang's evaluator would fold it, each
-invalid operation folds again with `Compiler`'s NaN, followed by the
-parentheses, casts, unary `+`, `-` and `~`, arithmetic, comma operators and
-conditionals that derive their values from it. If any other expression
-derives its value from one (a builtin call, a statement expression,
-`_Generic`, a conversion to an integer), or a `_Float16`, `__bf16`,
-binary128, complex integer or vector value takes part, the whole
-initializer keeps the hardware's NaN, as before this rule.
-
-Floating-point pragmas follow a deliberately conservative rule, because
-their scope in Clang (a pragma after a declaration's attributes reaches the
-rest of the file, one in a compound statement only that statement at `-O2`,
-`float_control`'s `push` and `pop`, operands that name macros) defeated each
-attempt to follow it. The preprocessor notes, wherever it is written and in
-whatever form (`#pragma`, `_Pragma`, `__pragma`, a header), whether the
-translation unit holds a pragma that can change a function's floating-point
-environment (`Context::floating_pragmas`, `pragma_floating.rs`), and
-`floating_environment.rs` reads the notes:
-
-- Under Clang's rules (the Clang and clang-cl identities, and bcc's own
-  command line), `STDC FENV_ACCESS` or `STDC FENV_ROUND` with any operand,
-  `float_control` in any form, Microsoft's `fenv_access` whether or not
-  Microsoft's pragmas are on, or a `clang fp` pragma that may set
-  `exceptions`, anywhere in the translation unit, keeps every function's
-  invalid operations at run time (`Runtime`), automatic aggregates included:
-  `settle_strict_initializer` folds them only when the strict exception
-  behavior comes from `-ftrapping-math` alone.
-- Under GCC's rules, `#pragma GCC optimize` or `push_options` anywhere keeps
-  every function's invalid operations at run time, since an option such as
-  `trapping-math`, `no-fast-math`, or an `-O` level after `-Ofast` can turn
-  trapping math back on. An `optimize` attribute does so for every function
-  analyzed after it: GCC applies one only to the function it declares, from
-  that declaration on, and ignores one written after the definition.
-
-This keeps bcc's NaN where it was before folded NaNs, never worse, at the
-cost of precision: Clang folds the positive NaN in a function no strict
-pragma reaches (one before the pragma, after `exceptions(ignore)` or
-`FENV_ACCESS OFF`, after the compound statement that held it at `-O2`, or
-after a `float_control(pop)`), and for an automatic aggregate its evaluator
-folds whole under a pragma, and GCC folds it under `-fno-trapping-math` in a
-function no `optimize` option reaches, where bcc keeps the hardware's NaN in
-each case. Static initializers and code outside functions still fold with
-the compiler's NaN, and the command-line options keep their per-unit
-meaning. The pragmas' diagnostics and their other effects are unchanged.
-
-A NaN operand passes through with its sign in every case, as GCC's
-`const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
-Binary128 folding follows the same rule. Remaining differences:
-
-- GCC rewrites `x * -1.0` to `-x` and `-a + b` to `b - a`, and folds
-  `__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even
-  while leaving the division for run time, where bcc gives the hardware's
-  negative NaN, and NaN + NaN takes the other operand's NaN.
-- Under Clang's strict exception behavior, Clang's evaluator still folds a
-  builtin call whose arguments are constant (`__builtin_signbit`,
-  `__builtin_copysign`) and an integer constant expression from the
-  positive NaN, where bcc reads the hardware's. An automatic array or
-  structure whose initializer the evaluator folds keeps the hardware's NaN
-  in bcc when its value derives from one through such a call, a statement
-  expression or `_Generic`, or when bcc does not take the initializer for a
-  constant (a `const` automatic named in it, a builtin call bcc does not
-  fold, a binary128 or `_Float16` member). Where a floating-point pragma or
-  GCC `optimize` option does not reach a function, the compiler folds what
-  the conservative rule above keeps at run time.
-- Clang folds a complex quotient in a constant automatic aggregate in every
-  mode, which `ClangFunction` leaves to `__divdc3`.
-- bcc does not raise the invalid exception for an operation it folds that
-  the compiler leaves for run time.
-
-Follow-ups found by PR #426's review, each the same before and after it:
+Remaining differences in static initializers, each the same before and
+after folded NaNs:
 
 - A NaN + NaN fold picks the wrong operand's NaN for `float`, `long double`,
   `_Float16` and `__float128` (`-(0/0) + (0/0)`): both compilers take the
@@ -3168,11 +3034,6 @@ Follow-ups found by PR #426's review, each the same before and after it:
   `+0`.
 - GCC canonicalizes the payload of a NaN operand in a complex product it
   folds through MPC (`-nan(0x123) * 0`).
-- Clang's `_Float16` arithmetic in a function stays for run time
-  (`half_result`), where the interpreter and the native back end give the
-  hardware's NaN and LLVM folds the positive one.
-- Under GCC's `-ffast-math`, GCC's finite-math complex arithmetic gives
-  numbers, not NaNs (`1.0` for some quotients), and bcc gives NaNs.
 - TCC 0.9.27 rejects a static initializer that makes a NaN from an invalid
   operation, which bcc's TCC identity accepts, with the hardware's NaN.
 
