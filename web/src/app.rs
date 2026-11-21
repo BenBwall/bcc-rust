@@ -1862,9 +1862,9 @@ fn form_tip_place(word: NodeRef<leptos::html::Span>) -> Option<FormTipPlace> {
     let link = word.first_element_child()?.get_bounding_client_rect();
     let width = lede.width().min(340.0);
     Some(FormTipPlace {
-        left:  (link.left() - lede.left()).clamp(0.0, (lede.width() - width).max(0.0)),
+        left: (link.left() - lede.left()).clamp(0.0, (lede.width() - width).max(0.0)),
         width,
-        top:   link.bottom() - lede.top() + 6.0,
+        top: link.bottom() - lede.top() + 6.0,
     })
 }
 
@@ -1891,12 +1891,27 @@ fn ReadingMap(state: State) -> impl IntoView {
     // Each station: its row, name, what the statement looks like there, the
     // stage that shows it and its glossary entry, if it has one.
     const STATIONS: [(&str, &str, Stage, Option<&str>); 6] = [
-        ("Tokens", "total = total + next ;", Stage::Tokens, Some("token")),
-        ("Syntax tree", "=(total, +(total, next))", Stage::SyntaxTree, Some("syntax-tree")),
+        (
+            "Tokens",
+            "total = total + next ;",
+            Stage::Tokens,
+            Some("token"),
+        ),
+        (
+            "Syntax tree",
+            "=(total, +(total, next))",
+            Stage::SyntaxTree,
+            Some("syntax-tree"),
+        ),
         ("Types", "int = int + int", Stage::SemanticTypes, None),
         ("IR", "load · add · store", Stage::Ir, Some("ir")),
         ("Assembly", "addl %ecx, %eax", Stage::Asm, Some("assembly")),
-        ("Machine code", "01 c8", Stage::MachineCode, Some("machine-code")),
+        (
+            "Machine code",
+            "01 c8",
+            Stage::MachineCode,
+            Some("machine-code"),
+        ),
     ];
     let row = |index: usize| 74.0 + crate::panels::px(index) * 34.0;
     let stop = |index: usize| 150.0 + crate::panels::px(index) * 52.0;
