@@ -525,8 +525,27 @@ impl CompilerConfiguration {
     /// `-Wextra` named by a pragma, which holds what `-Wextra` on the command
     /// line does ([`Self::with_extra_warnings`]).
     fn with_pragma_extra(self, class: PragmaClass) -> Self {
-        self.with_extra_warnings(class != PragmaClass::Ignored)
-            .with_pragma_class_of(DiagnosticGroup::UNDER_EXTRA, class)
+        // GCC's `-Wshift-negative-value` follows the command line's
+        // `-Wextra` alone, so it keeps what that made of it.
+        let shift = DiagnosticGroup::ShiftNegativeValue as usize;
+        let pinned = (self.identity.rules() != super::RuleSet::Clang
+            && self.warning_options[shift].enabled().is_none())
+        .then(|| self.gcc_extra_shifts());
+        let mut configuration = self
+            .with_extra_warnings(class != PragmaClass::Ignored)
+            .with_pragma_class_of(DiagnosticGroup::UNDER_EXTRA, class);
+        if let Some(enabled) = pinned {
+            configuration.warning_options[shift].apply(WarningOption::Enable(enabled), false);
+        }
+        configuration
+    }
+
+    /// Whether GCC's `-Wextra` enables `-Wshift-negative-value`: given, and
+    /// from C99 on (`c_common_post_options` in GCC's `c-opts.cc`), whatever
+    /// the order of the options.
+    fn gcc_extra_shifts(self) -> bool {
+        self.warning_options[DiagnosticGroup::Extra as usize].all() == Some(true)
+            && self.standard() >= super::CStandard::C99
     }
 
     /// Sets whether `groups` are errors, without enabling them: what enables
@@ -705,6 +724,9 @@ impl CompilerConfiguration {
                     && self.warning_options[DiagnosticGroup::Unused as usize]
                         .enabled_with_all(DiagnosticGroup::Unused, false)
                         == Some(true),
+            | None if group == DiagnosticGroup::ShiftNegativeValue
+                && self.identity.rules() != super::RuleSet::Clang =>
+                self.gcc_extra_shifts(),
             | None if group.default() == GroupDefault::OnInClang =>
                 self.identity != super::CompilerIdentity::Gcc
                     || self.extension_policy != ExtensionPolicy::Allow,
@@ -1108,8 +1130,8 @@ diagnostic_groups! {
     /// GCC's report of [`Self::ShiftOverflow`], which names the option with
     /// the level it takes.
     GccShiftOverflow => Some("shift-overflow="), Warning, false;
-    /// Clang: a negative constant shifted left. GCC reports it only under
-    /// `-Wextra`, which is not modeled.
+    /// A negative constant shifted left: on by default in Clang; GCC's is
+    /// off, and `-Wextra` enables it from C99 on.
     ShiftNegativeValue => Some("shift-negative-value"), Warning, false;
     /// An ordinary multi-character constant.
     Multichar => Some("multichar"), Warning, false;

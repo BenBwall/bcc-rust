@@ -4105,9 +4105,21 @@ single evaluation of each full expression (`Sema::CheckForIntOverflow`), so
 that `y ? 2147483647+1 : 0` says nothing and `y + (2147483647+1)` does. The
 groups are `-Woverflow` (GCC), `-Winteger-overflow` (Clang),
 `-Wshift-count-overflow`, `-Wshift-count-negative`, `-Wshift-overflow` (GCC
-prints `-Wshift-overflow=`), Clang's `-Wshift-negative-value`, GCC's
+prints `-Wshift-overflow=`), `-Wshift-negative-value`, GCC's
 `-Wdiv-by-zero` and Clang's `-Wdivision-by-zero`, which also answers to
 `-Wno-div-by-zero`. `-Wno-overflow` does not reach Clang's warning.
+
+`-Wshift-negative-value` differs most. Clang's is on by default and needs a
+constant count. GCC's ("left shift of negative value") is off by default,
+and `-Wextra` enables it from C99 on, before or after the standard option
+(`c_common_post_options` in GCC's `c-opts.cc`). Its own option, `-Werror=` or
+a pragma naming it enables it in C90 too, while a pragma naming `-Wextra`
+does not reach it. GCC warns at the operator whatever the count
+(`-1 << x`), when the left operand is a negative integer constant of a type
+that does not wrap. A comma operand, `-fwrapv`, unevaluated operands and an
+operator a system header spells are silent, and `__extension__` does not
+silence it. GCC also warns of a statement expression such as
+`({ -1; }) << 1`, which bcc does not fold.
 
 Known differences that remain: `1LL<<(1ULL<<63)`, a 64-bit left operand with
 that count, is no constant under GCC and 1 here; Clang's code shifts
@@ -4117,8 +4129,8 @@ Clang's `-Wgnu-folding-constant` on `_Alignas` under `-pedantic` and on a
 `__builtin_choose_expr` operand it does not select are not reproduced; Clang's
 silence in the body of `while (0)` is not, since bcc's unreachable-code model
 does not cover it; a `case` label's `?:` warns under Clang's overflow check here
-but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` and
-GCC's `-Wextra` `-Wshift-negative-value` are not modeled; and
+but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` is
+not modeled; and
 `int *p = (int *)(2147483647 + 1);` keeps a false `-Wint-to-pointer-cast`.
 
 ## An address's truth in a constant (2026-11-07)

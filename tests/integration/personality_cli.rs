@@ -2560,6 +2560,90 @@ mod tests {
         }
     }
 
+    /// GCC 14's `-Wshift-negative-value` is off by default, and `-Wextra`
+    /// enables it from C99 on in either order; its own option, `-Werror=`
+    /// and a pragma naming it enable it in any revision, and a pragma naming
+    /// `-Wextra` does not reach it. Clang 23's is on by default. Each row
+    /// was checked against both compilers: the standard, the options, any
+    /// pragma, and the warnings GCC reports (an error under `-Werror`).
+    #[test]
+    fn gcc_warns_of_negative_left_shifts_under_wextra_from_c99() {
+        const CODE: &str = "int f(int x) {\n  return (-1 << 1) + (-2 << x) + (-1 >> 1) + (0 ? -1 \
+                            << 1 : 0) + (int)sizeof(-1 << 1) + (-1u << 1) + ((0, -1) << 1);\n}\n";
+        const GCC: &str =
+            "c.c:3:14: warning: left shift of negative value [-Wshift-negative-value]";
+        const CLANG: &str = "c.c:3:14: warning: shifting a negative signed value is undefined \
+                             [-Wshift-negative-value]";
+        let table: [(&str, &[&str], &str, usize); 13] = [
+            ("gnu11", &[], "", 0),
+            ("gnu11", &["-Wextra"], "", 2),
+            ("c99", &["-W"], "", 2),
+            ("gnu89", &["-Wextra"], "", 0),
+            ("c89", &["-Wshift-negative-value"], "", 2),
+            ("gnu11", &["-Wno-shift-negative-value", "-Wextra"], "", 0),
+            ("gnu11", &["-Wextra", "-Wno-extra"], "", 0),
+            ("gnu11", &["-Wextra", "-w"], "", 0),
+            ("gnu11", &["-Wextra", "-fwrapv"], "", 0),
+            ("gnu11", &["-Wextra", "-pedantic-errors"], "", 2),
+            (
+                "gnu11",
+                &[],
+                "#pragma GCC diagnostic warning \"-Wextra\"\n",
+                0,
+            ),
+            (
+                "gnu89",
+                &[],
+                "#pragma GCC diagnostic warning \"-Wshift-negative-value\"\n",
+                2,
+            ),
+            (
+                "gnu11",
+                &["-Wextra"],
+                "#pragma GCC diagnostic ignored \"-Wextra\"\n",
+                2,
+            ),
+        ];
+        let directory = Directory::new();
+        for (standard, options, pragma, count) in table {
+            // The pragma takes the first line, so the code keeps its lines.
+            let first = if pragma.is_empty() { "\n" } else { pragma };
+            directory.write("c.c", &format!("{first}{CODE}"));
+            let std = format!("-std={standard}");
+            let mut arguments = vec![std.as_str(), "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            let text = stderr(&output);
+            succeeds(&output);
+            assert_eq!(
+                text.matches("left shift of negative value").count(),
+                count,
+                "{standard} {options:?} {pragma}: {text}"
+            );
+            if count != 0 {
+                assert!(text.contains(GCC), "{standard} {options:?}: {text}");
+                assert!(
+                    text.contains("c.c:3:26: warning: left shift of negative value"),
+                    "{standard} {options:?}: {text}"
+                );
+            }
+        }
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=gnu11", "-Wextra", "-Werror", "-fsyntax-only", "c.c"],
+        );
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output)
+                .contains("error: left shift of negative value [-Werror=shift-negative-value]"),
+            "{}",
+            stderr(&output)
+        );
+        directory.write("c.c", &format!("\n{CODE}"));
+        let output = directory.bcc("--clang-mode", &["-std=gnu11", "-fsyntax-only", "c.c"]);
+        assert!(stderr(&output).contains(CLANG), "{}", stderr(&output));
+    }
+
     /// Wider types and bit-precise ones of any width fold the same way, as
     /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
     #[test]

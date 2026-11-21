@@ -1212,6 +1212,21 @@ at its `?`, column 68. The last two rows initialize file-scope unions
 with casts to a union type, which GCC accepts; only the unmarked one warns,
 in bcc's wording for GCC's "ISO C forbids casts to union type".
 
+### GCC's negative left shifts
+
+`sema-shift-negative-value-gcc.c` (`-std=gnu99 -Wextra`) pins GCC's
+`-Wshift-negative-value`, "left shift of negative value", at the operator:
+for a negative literal, an enumerator, a cast constant and a `long`, with a
+constant count or a variable one, inside `__extension__`, and before the
+`-Wshift-count-overflow` of the same shift. The second function is silent:
+a comma operand, an operand a constant `?:` skips or `sizeof` holds, an
+unsigned or nonnegative operand, a right shift. Checked 21 November 2026
+against GCC 14 (`LC_ALL=C`), which it matches byte for byte. The options that
+enable it (`-Wextra` from C99 on, its own option and pragma in C90, never a
+pragma naming `-Wextra`) are pinned by
+`gcc_warns_of_negative_left_shifts_under_wextra_from_c99` in
+`tests/integration/personality_cli.rs`.
+
 ### Predefined function-name identifiers
 
 `sema-predefined-outside-function.c` renders the default warning
