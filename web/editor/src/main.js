@@ -274,7 +274,9 @@ class Editor {
       // Monaco guesses a model's tab size from its text by default, and
       // a wrapped row hangs by tab stops, so the listings (LLVM IR indents
       // by 2) hung 4 columns in some and 8 in others. A fixed size keeps
-      // every listing's hang the same, 8 columns past its line's indent.
+      // every listing's hang the same: a wrapped row goes on two tab stops
+      // past its line's indent, at column 8 for an unindented line and for
+      // LLVM IR's 2-space instructions alike (6 columns past those).
       // (Monaco keeps model options in one configuration for all editors,
       // so the source takes the same fixed size; its lessons indent by 4.)
       tabSize: 4,

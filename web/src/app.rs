@@ -1768,15 +1768,27 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
     // definition showed before it did: a tap that finds it hidden shows it
     // instead of following the link.
     let pressed = StoredValue::new((false, false));
+    // Whether a press inside the word, its definition included, is under
+    // way: a tap on the definition's text moves the focus to the page,
+    // which must not hide it. A click or a key ends the press.
+    let held = StoredValue::new(false);
     let show = move || {
         place.set(form_tip_place(word));
         open.set(true);
     };
     Effect::new(move || {
-        // The page lives as long as the listener.
+        // The page lives as long as the listeners.
         let _handle = window_event_listener(ev::pointerdown, move |event| {
             if open.get_untracked() && !within(word, event.target()) {
+                held.set_value(false);
                 open.set(false);
+            }
+        });
+        // A resize or a rotation moves the word, so an open definition
+        // follows it.
+        let _handle = window_event_listener(ev::resize, move |_| {
+            if open.get_untracked() {
+                place.set(form_tip_place(word));
             }
         });
     });
@@ -1795,14 +1807,18 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
                     open.set(false);
                 }
             }
+            on:pointerdown=move |_| held.set_value(true)
+            on:click=move |_| held.set_value(false)
             on:focusin=move |_| show()
-            // Focus that moves onto the definition's own link keeps it open.
+            // Focus that moves onto the definition's own link, or leaves
+            // for the page under a press on the definition, keeps it open.
             on:focusout=move |event| {
-                if !within(word, event.related_target()) {
+                if !held.get_value() && !within(word, event.related_target()) {
                     open.set(false);
                 }
             }
             on:keydown=move |event| {
+                held.set_value(false);
                 if event.key() == "Escape" && open.get_untracked() {
                     event.stop_propagation();
                     open.set(false);

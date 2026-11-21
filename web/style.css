@@ -1369,12 +1369,14 @@
   /* Beside the listing (from 821 px) a narrow card is a laptop's or a
      tablet's, whose output runs past the window's foot: the hand-off with
      Next (and Skip) comes before it, in a compact line, so the way on is in
-     sight without scrolling past the output. A phone keeps the output
-     first; its channel keys lead the way on. */
+     sight without scrolling past the output. Why bcc stopped, if it did,
+     still comes first (order -4), so the hand-off takes -3, ahead of the
+     reading link by source order. A phone keeps the output first; its
+     channel keys lead the way on. */
   @media (min-width: 821px) {
     @container insight (max-width: 839px) {
       .stage-lead, .stage-lead-main { display: contents; }
-      .stage-lead-main > .stage-handoff { order: -4; margin: 0 0 12px; font-size: 18px; max-width: none; }
+      .stage-lead-main > .stage-handoff { order: -3; margin: 0 0 12px; font-size: 18px; max-width: none; }
     }
   }
   /* A wide card (a laptop's, from 1280 px) splits under the stage's name:
