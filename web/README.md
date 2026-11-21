@@ -129,11 +129,18 @@ compiler; each part is captioned with what its lessons share
   and every expression's type), bcc IR before and after ABI lowering, LLVM
   IR, native x86-64 assembly, and machine code with its encoded bytes, each
   with a short explanation and, for the front end, the C99 rules it applies.
+  Every way into the pipeline (its view key, the landing's third step,
+  lesson 13) opens it at its first stage, and each front-end stage before
+  the last has a **Skip to bcc IR** key for readers who came for the IR.
   Each stage leads with one sentence on what it takes from the stage before
-  and hands to the next, with a button to that next stage, and beside it
+  and hands to the next, with a button to that next stage, and with it
   three lines (`Stage::brief`): what goes in, what comes out, and why a
   compiler has the stage, their terms linked to the glossary's second part,
-  Compiler terms. The real compiler runs in the browser and recompiles as you
+  Compiler terms. Where the stage's card is at least 840 px wide (windows
+  from 1181 px) the output takes the main column under the stage's name,
+  beside the source, and these notes a column on its right, so the output
+  starts under the name on a laptop; a narrower card puts the output first
+  under the name. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed,
   drawn as paired bars; at the stages the optimizer changes, the two levels
   can be shown side by side, each linked to the source. Each stage's
@@ -227,7 +234,10 @@ below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
 bottom of the window. In the compiler pipeline a phone shows each stage's
-output right under the stage keys, before the stage's heading and hand-off.
+output right under the stage keys, before the stage's heading and hand-off,
+and a laptop beside the hand-off (above). Between 821 and 1180 px the view
+keys drop their numbers and the control strip tightens, so the WebAssembly
+view's strip keeps to one row from 1024 px as the machine's does.
 Windows 600 px tall or less (a phone held sideways, a
 zoomed laptop) let the header scroll away and drop the source's legends and
 the encoders.
@@ -336,7 +346,17 @@ first read-only listing, whose folding arrows use it.
   strip, where `→` steps at once and `Tab` goes on to the controls.
 - Before the first step the tape is blank, and a card over it says what
   will fill it (a column a step, a lane for each object from the step its
-  lifetime begins) and that **Step** or `→` starts the run.
+  lifetime begins) and that **Step** or `→` starts the run. Figure 2 and
+  Table 1 carry cards in its manner saying what they will hold.
+- The view keys (Abstract machine, Compiler pipeline, WebAssembly) are a
+  group of keys, each pressed or not, rather than a tab list: the arrow keys
+  step the machine wherever the focus is, even on these keys. The stage keys
+  of the pipeline, where the arrow keys step nothing, are a tab list: only
+  the selected key takes `Tab`, `←` and `→` (or `↑` and `↓`) select the
+  stage before or after, `Home` and `End` the first and last.
+- The landing's lede names the compiler's forms (tokens, syntax tree, IR,
+  assembly, machine code); each links to its glossary entry and shows the
+  definition under it on hover or keyboard focus (`Escape` hides it).
 - **Step** (`→` or `j`) performs one evaluation; **Back** (`←` or `k`) shows
   the previous state; **Over** (`o`) runs to the last step of the expression
   the step belongs to, through any call it makes, or from that last step to
