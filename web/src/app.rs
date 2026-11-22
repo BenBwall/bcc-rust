@@ -2665,9 +2665,9 @@ fn About() -> impl IntoView {
                          comparison and logical operators, with && and || stopping as soon as they know the result, \
                          ?: and the comma operator; pointers to numbers, chars, structures or other pointers; arrays \
                          of numbers, of chars or of pointers, and string literals; structures, nested or reached \
-                         through pointers; const, casts and sizeof; a typedef of any of these types, at file or block \
-                         scope; subtracting two pointers into one array and ordering two pointers into one object (p \
-                         - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
+                         through pointers; const, casts and sizeof; a typedef of any of these types but a const \
+                         one, at file or block scope; subtracting two pointers into one array and ordering two \
+                         pointers into one object (p - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
                          such as 1 << 3, string literals or the names of functions; functions that return a number, \
                          an enumeration, a structure or a pointer to a function, called anywhere in an expression; \
                          pointers to functions, kept in variables, tables, parameters and structure members, called \

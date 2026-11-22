@@ -537,9 +537,10 @@ pub static TERMS: [Term; 60] = [
         id:         "case-label",
         name:       "Case label",
         phrases:    &["case label", "case labels"],
-        definition: "A place in a switch's body, case 3: or default:, that the switch can jump to. \
-                     The switch jumps to the label whose constant equals its value, and execution \
-                     then runs on past later labels until a break.",
+        definition: "A place in a switch's body, such as case 3:, that the switch can jump to: it \
+                     jumps to the case label whose constant equals its value, or else to the \
+                     default: label, which has no constant. Execution then runs on past later \
+                     labels until a break.",
         clause:     "6.8.4.2p5",
         page:       146,
     },
