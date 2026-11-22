@@ -211,8 +211,8 @@ pub static DEMOS: [Demo; 17] = [
     Demo {
         key:     "strings",
         title:   "Walking a string with a pointer",
-        summary: "`*p++` reads through a pointer and moves it on, an assignment hands its value \
-                  to the loop's test, and two pointers subtract to the count of elements between \
+        summary: "*p++ reads through a pointer and moves it on, an assignment hands its value to \
+                  the loop's test, and two pointers subtract to the count of elements between \
                   them.",
         topics:  &["*p++", "assignment as an operand", "pointer difference"],
         part:    Part::Memory,

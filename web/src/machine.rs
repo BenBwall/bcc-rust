@@ -1439,7 +1439,7 @@ mod tests {
             Err("Load a program before stepping.".into())
         );
         for source in [
-            "int main(void) { int a[2] = {3, 7}; int *p = a; *p++; return a[0]; }",
+            "int main(void) { switch (0) {} return 0; }",
             "int main(void) { return later(); } int later(void) { return 7; }",
         ] {
             let rejected = machine.load(source.to_owned());
