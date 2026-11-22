@@ -1257,9 +1257,8 @@ impl Type {
         match self.chain() {
             | Some((Target::Arithmetic(arithmetic, _), 1)) => Some(arithmetic.ty()),
             | Some((Target::Struct(id), 1)) => Some(Self::Struct(id)),
-            | Some((Target::Function(_), 1)) => None,
+            | Some((Target::Function(_), 1)) | None => None,
             | Some((target, depth)) => Some(target.pointer(depth - 1)),
-            | None => None,
         }
     }
 

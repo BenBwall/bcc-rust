@@ -976,7 +976,7 @@ impl Parser<'_> {
                 reach.seal();
                 reach.join(Reach::opaque(node.range));
             },
-            | ExprKind::Function(_) => {},
+            | ExprKind::Function(_)
             | ExprKind::Number(..)
             | ExprKind::Real(..)
             | ExprKind::Character(..)

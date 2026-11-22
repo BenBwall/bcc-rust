@@ -246,6 +246,13 @@ impl Program {
             .map(|function| function.name.as_str())
     }
 
+    /// Where function `function`, in definition order, is defined: its
+    /// name in its definition, where a pointer to it leads.
+    #[must_use]
+    pub fn function_range(&self, function: usize) -> Option<SourceRange> {
+        self.functions.get(function).map(|function| function.range)
+    }
+
     /// The expression-tree nodes of the full expression rooted at `root` in
     /// `function`, in evaluation order (children before parents); the root is
     /// last. Node indices are absolute, as [`Evaluation`] uses them.

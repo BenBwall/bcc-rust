@@ -473,33 +473,8 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.address_of(range, target, offset, structure, value)
             },
-            | Op::Function { name, address } => {
-                let Some(function) = self.functions.iter().position(|known| known == name) else {
-                    return Err(self.error("unknown function"));
-                };
-                let value = Value::Function(function);
-                self.push(Operand::Value(value.clone()))?;
-                self.function_designator(range, program, function, *address, value)
-            },
-            | Op::FunctionIndirection => {
-                let pointer = self.pop_value()?;
-                let Value::Function(function) = pointer else {
-                    // A null pointer points to no function, and `*` of it
-                    // is undefined (C99 §6.5.3.2p4, footnote 87).
-                    return Err(Diagnostic::ub(
-                        self.state.source_range,
-                        &format!(
-                            "`{}` applies * to a null pointer, which points to no function: there \
-                             is no function for it to designate",
-                            source.get(range.start..range.end).unwrap_or("*")
-                        ),
-                        &clauses::INDIRECTION,
-                        Undefined::NullIndirection,
-                    ));
-                };
-                self.push(Operand::Value(pointer.clone()))?;
-                self.function_indirection(range, source, program, function, pointer)
-            },
+            | Op::Function { .. } | Op::FunctionIndirection | Op::CallPointer { .. } =>
+                self.function_operation(instruction, program)?,
             | Op::Dereference => {
                 let pointer = self.pop_value()?;
                 let (target, offset, structure) = self.dereference(&pointer)?;
@@ -678,20 +653,7 @@ impl Machine {
                     return Err(self.error("unknown function"));
                 };
                 let arguments = self.arguments(types)?;
-                self.call(program, instruction, function, types, arguments, None)?
-            },
-            | Op::CallPointer { signature, types } => {
-                let arguments = self.arguments(types)?;
-                let pointer = self.pop_value()?;
-                let function = self.called_function(program, instruction, &pointer, *signature)?;
-                self.call(
-                    program,
-                    instruction,
-                    function,
-                    types,
-                    arguments,
-                    Some(pointer),
-                )?
+                self.call(program, instruction, function, types, &arguments, None)?
             },
             | &Op::Return(from) => {
                 let value = self.pop_value()?;
@@ -980,6 +942,60 @@ impl Machine {
         }
     }
 
+    /// An operation on a pointer to a function: a function's name becoming
+    /// one, `*fp`, or a call through one.
+    fn function_operation(
+        &mut self,
+        instruction: &Instruction,
+        program: &Program,
+    ) -> Result<Event, Diagnostic> {
+        let range = instruction.range;
+        let source = &program.source;
+        Ok(match &instruction.op {
+            | &Op::Function { ref name, address } => {
+                let Some(function) = self.functions.iter().position(|known| known == name) else {
+                    return Err(self.error("unknown function"));
+                };
+                let value = Value::Function(function);
+                self.push(Operand::Value(value.clone()))?;
+                self.function_designator(range, program, function, address, value)
+            },
+            | Op::FunctionIndirection => {
+                let pointer = self.pop_value()?;
+                let Value::Function(function) = pointer else {
+                    // A null pointer points to no function, and `*` of it
+                    // is undefined (C99 §6.5.3.2p4, footnote 87).
+                    return Err(Diagnostic::ub(
+                        self.state.source_range,
+                        &format!(
+                            "`{}` applies * to a null pointer, which points to no function: there \
+                             is no function for it to designate",
+                            source.get(range.start..range.end).unwrap_or("*")
+                        ),
+                        &clauses::INDIRECTION,
+                        Undefined::NullIndirection,
+                    ));
+                };
+                self.push(Operand::Value(pointer.clone()))?;
+                self.function_indirection(range, source, program, function, pointer)
+            },
+            | Op::CallPointer { signature, types } => {
+                let arguments = self.arguments(types)?;
+                let pointer = self.pop_value()?;
+                let function = self.called_function(program, instruction, &pointer, *signature)?;
+                self.call(
+                    program,
+                    instruction,
+                    function,
+                    types,
+                    &arguments,
+                    Some(pointer),
+                )?
+            },
+            | _ => return Err(self.error("expected an operation on a pointer to a function")),
+        })
+    }
+
     /// The arguments of a call, popped in order: one per type.
     fn arguments(&mut self, types: &[Type]) -> Result<Vec<Value>, Diagnostic> {
         let mut arguments = Vec::new();
@@ -1058,7 +1074,7 @@ impl Machine {
         instruction: &Instruction,
         function: usize,
         types: &[Type],
-        arguments: Vec<Value>,
+        arguments: &[Value],
         through: Option<Value>,
     ) -> Result<Event, Diagnostic> {
         if self.activations.len() >= MAX_FRAMES {
@@ -1069,7 +1085,7 @@ impl Machine {
         }
         let name = program.functions[function].name.as_str();
         // Read before the callee's activation becomes the innermost.
-        let callee = self.callee_text(program, instruction);
+        let callee_source = self.callee_text(program, instruction);
         let recursive = self
             .activations
             .iter()
@@ -1106,12 +1122,12 @@ impl Machine {
             name,
             id,
             recursive,
-            &arguments,
+            arguments,
             types,
             parameters,
         );
         if let Some(pointer) = through {
-            event = self.called_through(event, program, function, callee, pointer);
+            event = self.called_through(event, program, function, callee_source, pointer);
         }
         Ok(event)
     }
