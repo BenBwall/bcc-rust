@@ -6285,6 +6285,163 @@ fn an_order_c_leaves_open_stops_the_run() {
     );
 }
 
+// C99 §6.5.16.2p3: `E1 op= E2` is `E1 = E1 op (E2)` with `E1` evaluated
+// once, so its read of `E1` is an operand of `op`, unsequenced with all of
+// `E2` (§6.5p3): an update of `E1`'s object inside `E2` is undefined even
+// behind a sequence point there (§6.5p2), as the spelled-out form is.
+#[test]
+fn a_compound_assignment_reads_its_left_operand_unsequenced_with_its_right() {
+    // By name: refused before the first step.
+    for source in [
+        "int main(void) { int x = 1; x += (x++, 5); return x; }",
+        "int main(void) { int x = 1; x += (x++ && 1); return x; }",
+        "int main(void) { int x = 1; x |= (x++ || 1); return x; }",
+        "int main(void) { int x = 1; x -= x++ ? 1 : 2; return x; }",
+        "int main(void) { int x = 1; x *= (x = 3, 2); return x; }",
+        "int id(int v) { return v; } int main(void) { int x = 1; x += id(x++); return x; }",
+        "int main(void) { int x = 1; if ((x <<= (x++, 1)) > 0) {} return x; }",
+        "struct s { int a; }; int main(void) { struct s v = {1}; struct s w = {2}; v.a %= (v = w, \
+         4); return v.a; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert!(
+            diagnostic.message.contains("and its right operand updates"),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+    // The spelled-out form is refused too.
+    let _diagnostic = compile("int main(void) { int x = 1; x = x + (x++, 5); return x; }")
+        .expect_err("x = x + (x++, 5)");
+    // Through a pointer, a subscript or a member: the run stops there.
+    for source in [
+        "int main(void) { int x = 1; int *p = &x; *p += (x++, 5); return x; }",
+        "int id(int v) { return v; } int main(void) { int x = 1; int *p = &x; *p += id((*p)++); \
+         return x; }",
+        "int main(void) { int x = 1; int *p = &x; x /= (*p = 3, 2); return x; }",
+        "int main(void) { int a[2] = {1, 2}; int i = 0; int j = 0; a[i] ^= (a[j]++ || 1); return \
+         a[0]; }",
+        "struct s { int a; }; int main(void) { struct s v = {8}; v.a >>= (v.a++, 1); return v.a; }",
+    ] {
+        let session = run(source);
+        let state = session.state();
+        assert_eq!(state.status, "undefined_behavior", "{source}");
+        assert_eq!(
+            state.diagnostics[0].undefined,
+            Some(super::Undefined::Unsequenced),
+            "{source}"
+        );
+    }
+    // Defined: another object updated, the left operand's object only
+    // read, a sequence point inside the left operand, a call that touches
+    // the object only in its body, and a plain update.
+    returned(
+        "int main(void) { int x = 1; int y = 0; x += (y++, 5); return x * 10 + y; }",
+        61,
+    );
+    returned(
+        "int main(void) { int x = 1; int y = 0; int *p = &x; *p += (y++, 5); return x * 10 + y; }",
+        61,
+    );
+    returned("int main(void) { int x = 2; x *= (x, 3); return x; }", 6);
+    returned(
+        "int main(void) { int x = 1; *(x++, &x) += 1; return x; }",
+        3,
+    );
+    returned(
+        "int g = 10; int bump(void) { g = g + 1; return 0; } int main(void) { g += bump(); return \
+         g; }",
+        11,
+    );
+    returned("int main(void) { int x = 1; x += 1; return x; }", 2);
+}
+
+// C99 §6.5p2 with §6.5.16p3: an update the right operand completes at a
+// sequence point of its own comes before the assignment's store, whether
+// the store is to a variable or to a member of one; `s.a` designates part
+// of `s` without reading it (§6.5.2.3p3).
+#[test]
+fn a_member_store_after_a_sequenced_update_of_its_structure_runs() {
+    returned(
+        "int main(void) { int i = 0; i = (i = 3, i + 10); return i; }",
+        13,
+    );
+    returned(
+        "struct s { int a; int b; }; int main(void) { struct s v = {1, 2}; struct s w = {3, 4}; \
+         v.a = (v = w, 5); return v.a * 10 + v.b; }",
+        54,
+    );
+    returned(
+        "struct i { int a; int b; }; struct s { int a; struct i in; }; int main(void) { struct s \
+         v = {1, {2, 3}}; struct s w = {7, {8, 9}}; v.in.a = (v = w, 5); return v.in.a * 10 + \
+         v.a; }",
+        57,
+    );
+    // The same update unsequenced with a read, or before a compound
+    // assignment's read, is still refused.
+    for source in [
+        "struct s { int a; }; int main(void) { struct s v = {1}; struct s w = {2}; v.a = (v = w, \
+         5) + v.a; return v.a; }",
+        "struct s { int a; }; int main(void) { struct s v = {1}; struct s w = {2}; v.a += (v = w, \
+         5); return v.a; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
+// Review fixes: a member of an assignment's value is refused for what it
+// is; a substatement without braces is a block all the same (C99
+// §6.8.4p3, §6.8.5p5); a quote of code spread over lines reads as one
+// line.
+#[test]
+fn small_review_fixes_say_what_happens() {
+    let diagnostic = compile(
+        "struct s { int a; }; int main(void) { struct s v = {1}; struct s w = {2}; int r = (v = \
+         w).a; return r; }",
+    )
+    .expect_err("(v = w).a");
+    assert!(
+        diagnostic
+            .message
+            .contains("a member of an assignment's value"),
+        "{}",
+        diagnostic.message
+    );
+    let states =
+        stepped(
+            "#include <stdio.h>\nint main(void) {\n    int i = 0;\n    while (i < 1)\n        \
+             i++;\n    if (i)\n        i = 2;\n    printf(\"%d\\n\",\n           i);\n    return \
+             0;\n}\n",
+        );
+    let entries: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::EnterBlock)
+        .collect();
+    // `main`'s braces begin `i`'s lifetime.
+    assert!(!entries[0].event.summary.contains("no braces"));
+    assert!(cited(entries[0]).contains(&"6.8.2p2"));
+    let body = entries
+        .iter()
+        .find(|state| state.event.summary.contains("a loop body"))
+        .expect("the loop body's block");
+    assert!(body.event.summary.contains("no braces"));
+    assert!(cited(body).contains(&"6.8.5p5"));
+    let branch = entries
+        .iter()
+        .find(|state| state.event.summary.contains("if statement"))
+        .expect("the branch's block");
+    assert!(cited(branch).contains(&"6.8.4p3"));
+    let discard = step(&states, EventKind::Discard, "Discard the result");
+    assert!(
+        discard
+            .event
+            .explanation
+            .starts_with("`printf(\"%d\\n\", i)` is an expression statement"),
+        "{}",
+        discard.event.explanation
+    );
+}
+
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end except those that use function pointers (`g…`), which are refused,
