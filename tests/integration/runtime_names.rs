@@ -225,24 +225,43 @@ mod tests {
     }
 
     /// The native back end calls libgcc's `__powidf2` for the IR's `powi`,
-    /// so it refuses a static function of that name as it refuses one of
-    /// its other runtime routines' names; the LLVM back end calls it as
-    /// Clang does, the name being reserved.
+    /// so it refuses a module whose `powi` call would reach a static
+    /// function or an object of that name, as for its other runtime
+    /// routines' names; the LLVM back end calls the static one as Clang
+    /// does, the name being reserved. A file that names the routine but
+    /// uses no `powi` compiles as before.
     #[test]
     fn the_native_back_end_refuses_a_static_power_routine() {
         let source = "static int __powidf2(int a) { return a + 1; }\nint use(int a) { return \
                       __powidf2(a); }\ndouble d(double x, int n) { return __builtin_powi(x, n); \
                       }\n";
+        let object = "int __powisf2;\nfloat d(float x, int n) { return __builtin_powif(x, n); }\n";
         for level in ["-O0", "-O2"] {
-            let args = ["--target", LINUX, "--backend=native", level];
-            assert_refused(
-                &compile(source, &args),
-                "not yet supported by the native back end: a module-local definition of the \
-                 runtime symbol `__powidf2`",
-                &args,
-            );
+            for (source, name) in [(source, "__powidf2"), (object, "__powisf2")] {
+                let args = ["--target", LINUX, "--backend=native", level];
+                assert_refused(
+                    &compile(source, &args),
+                    &format!(
+                        "not yet supported by the native back end: a module-local definition of \
+                         the runtime symbol `{name}`"
+                    ),
+                    &args,
+                );
+            }
             let args = ["--target", LINUX, "--backend=llvm", level];
             assert_compiles(&compile(source, &args), &args);
+        }
+        let unused = [
+            "static int __powidf2(int a) { return a + 1; }\nint use(int a) { return __powidf2(a); \
+             }\n",
+            "extern int __powidf2;\nint *use(void) { return &__powidf2; }\n",
+            "static float __powisf2;\nfloat *use(void) { return &__powisf2; }\ndouble d(double x, \
+             int n) { return __builtin_powi(x, n); }\n",
+        ];
+        for source in unused {
+            for args in compilations(LINUX) {
+                assert_compiles(&compile(source, &args), &args);
+            }
         }
     }
 

@@ -103,7 +103,7 @@ use crate::{
 /// Symbols the back end calls or reads on its own (`_tls_index` is the
 /// Windows image's TLS index); a module may not define them internally,
 /// since those references would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 72] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 68] = [
     "memmove",
     "__main",
     "___chkstk_ms",
@@ -112,11 +112,6 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 72] = [
     "fmodf",
     "fmodl",
     "fmodf128",
-    // `powi`, as LLVM's code generator lowers `llvm.powi`.
-    "__powisf2",
-    "__powidf2",
-    "__powixf2",
-    "__powitf2",
     "__divti3",
     "__udivti3",
     "__modti3",

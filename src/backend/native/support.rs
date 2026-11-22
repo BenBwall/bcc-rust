@@ -232,6 +232,27 @@ impl Checker<'_, '_> {
                 let values = body.value_list(args);
                 self.variadic_arguments(body, signature, values.get(1..).unwrap_or_default())
             },
+            | InstData::Intrinsic { intrinsic, .. } => match intrinsic.powi_routine() {
+                | Some((name, _)) => self.routine(name),
+                | None => Ok(()),
+            },
+            | _ => Ok(()),
+        }
+    }
+
+    /// Checks the runtime routine the back end calls for one instruction
+    /// (`__powidf2` for `powi`) as [`check_module`] checks the names it
+    /// calls for any module: the call would bind to a function of that name
+    /// with internal linkage, or to an object. A module that names the
+    /// routine but has no such instruction compiles as any other; the name
+    /// is reserved for the implementation. C99: §7.1.3p1, p. 166; PDF
+    /// p. 178.
+    fn routine(&self, name: &'static str) -> Result<(), Construct> {
+        match self.module.symbol(name) {
+            | Some(Symbol::Function(func))
+                if self.module.function(func).linkage == Linkage::Internal =>
+                Err(Construct::RuntimeName(name)),
+            | Some(Symbol::Global(_)) => Err(Construct::RuntimeName(name)),
             | _ => Ok(()),
         }
     }
