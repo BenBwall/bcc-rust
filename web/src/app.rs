@@ -1751,8 +1751,8 @@ fn Hero(state: State) -> impl IntoView {
 /// while a mouse is over it or the keyboard focus is on it (Escape hides
 /// it). A touch screen has no hover, so a first tap shows the definition,
 /// with a link to the entry in it, and a second tap on the word follows the
-/// link; a tap elsewhere, or Escape, hides it. A screen reader reads the definition as
-/// the link's description.
+/// link; a tap elsewhere, or Escape, hides it. A screen reader reads the
+/// definition as the link's description.
 #[component]
 fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
     // The page is rendered at build time, so a word without an entry fails
