@@ -170,16 +170,15 @@ fn directive(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
 }
 
 /// An enumeration's declaration: the type, and the constants it declares
-/// with their values. The step names the enumeration in its title; one
-/// without a tag or a typedef name has no name to draw.
+/// with their values. The step's range is the declaration's, which tells
+/// two enumerations with one name apart, as in sibling blocks; one without
+/// a tag or a typedef name has no name to draw.
 fn enumeration(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
-    let named = event.title.split('`').nth(1).and_then(|name| {
-        program
-            .enumerations()
-            .iter()
-            .find(|known| known.name == name)
-    });
-    let Some(declared) = named else {
+    let Some(declared) = program
+        .enumerations()
+        .iter()
+        .find(|known| known.range == event.range && !known.name.is_empty())
+    else {
         return Vec::new();
     };
     let constants: Vec<String> = declared
@@ -565,13 +564,13 @@ fn truth(condition: Option<&Operand>) -> bool {
 /// A switch's step: its value, and where it sent control. A switch
 /// compares its value with its labels rather than testing it for truth
 /// (C99 §6.8.4.2p5), so its chips name the label its title names after
-/// "jump to", `default`, or the end of its body.
+/// "jump to", `default`, or, when it skips its body, the body.
 fn switched(event: &Event, value: Option<FlowPart>) -> Vec<Option<FlowPart>> {
-    let target = match event.title.split_once("jump to ") {
-        | Some((_, label)) => label.trim_matches('`').to_owned(),
-        | None => "past its body".to_owned(),
+    let (verb, target) = match event.title.split_once("jump to ") {
+        | Some((_, label)) => ("jumps to", label.trim_matches('`').to_owned()),
+        | None => ("skips", "its body".to_owned()),
     };
-    vec![value, Some(arrow("jumps to")), Some(part("label", &target))]
+    vec![value, Some(arrow(verb)), Some(part("label", &target))]
 }
 
 fn arrow(verb: &str) -> FlowPart {

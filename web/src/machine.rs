@@ -1531,6 +1531,65 @@ mod tests {
             ["1", "jumps to", "case SQUARE"]
         );
         assert_eq!(chips("switch on 2"), ["2", "jumps to", "default"]);
+        let states = execute(
+            &mut machine,
+            "int main(void) { int r = 0; switch (42) { case 1: r = 1; break; } return r; }\n",
+        );
+        let skipped = states
+            .iter()
+            .find(|state| state.event.title.starts_with("switch on 42"))
+            .expect("the switch");
+        let flow: Vec<&str> = skipped
+            .event
+            .flow
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
+        assert_eq!(flow, ["42", "skips", "its body"]);
+    }
+
+    // Two enumerations may share a tag in sibling blocks (C99 §6.2.1p4);
+    // each declaration's value flow draws its own constants.
+    #[test]
+    fn sibling_enumerations_draw_their_own_constants() {
+        let mut machine = Machine::default();
+        for (source, name) in [
+            (
+                "int main(void) {\n    int s = 0;\n    { enum e { A = 1, B }; enum e v = B; s = \
+                 v; }\n    { enum e { C = 10, D = 20 }; enum e w = D; s += w; }\n    return \
+                 s;\n}\n",
+                "enum e",
+            ),
+            (
+                "int main(void) {\n    int s = 0;\n    { typedef enum { A = 1, B } t; t v = B; s \
+                 = v; }\n    { typedef enum { C = 10, D = 20 } t; t w = D; s += w; }\n    return \
+                 s;\n}\n",
+                "t",
+            ),
+        ] {
+            let states = execute(&mut machine, source);
+            assert_eq!(states.last().expect("a final state").status, "finished");
+            let flows: Vec<Vec<&str>> = states
+                .iter()
+                .filter(|state| state.event.kind == "enumeration")
+                .map(|state| {
+                    state
+                        .event
+                        .flow
+                        .iter()
+                        .map(|part| part.text.as_str())
+                        .collect()
+                })
+                .collect();
+            assert_eq!(
+                flows,
+                [
+                    [name, "declares", "A = 1, B = 2"],
+                    [name, "declares", "C = 10, D = 20"]
+                ],
+                "{source}"
+            );
+        }
     }
 
     // An object of an enumeration reaches the page with the name of the

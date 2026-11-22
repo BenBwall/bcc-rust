@@ -68,7 +68,7 @@ pub(super) struct Alias {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     clippy::partial_pub_fields,
-    reason = "The page reads the constants; the rest is the engine's own."
+    reason = "The page reads the name, constants and range; the rest is the engine's own."
 )]
 pub struct Enumeration {
     /// How the type is spelled: `enum color`, or for an enumeration without
@@ -80,8 +80,9 @@ pub struct Enumeration {
     pub(super) tag:      Option<String>,
     /// The compatible integer type.
     pub(super) integer:  Integer,
-    /// The whole declaration, from `enum` (or `typedef`) to its `;`.
-    pub(super) range:    SourceRange,
+    /// The whole declaration, from `enum` (or `typedef`) to its `;`, which
+    /// is also the range of the step that declares its constants.
+    pub range:           SourceRange,
     /// The function a block-scope enumeration is declared in.
     pub(super) function: Option<String>,
 }
