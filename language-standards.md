@@ -1385,7 +1385,7 @@ attribute catalog exactly as bundled Clang does for the selected target
 refuses or only accepts, and 0 for other names and vendors; see
 [the attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14).
 `__has_builtin` returns 1 for `__builtin_va_arg`, x86 `__rdtsc` (and
-Microsoft's `__debugbreak` with Microsoft extensions),
+Microsoft's `__debugbreak` and `__assume` with Microsoft extensions),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -2800,6 +2800,14 @@ was run):
   `__debugbreak` is the Microsoft breakpoint with Microsoft extensions
   (`llvm.debugtrap`, `int3`); the interpreter ends the program as an
   undebugged breakpoint does.
+  `__assume(e)` is Microsoft's promise that `e` holds, with Microsoft
+  extensions (`void (bool)`, as in Clang): `__assume(0)` marks the point
+  unreachable, for the return-flow warnings and in the IR, and another
+  operand becomes an `assume` instruction, `llvm.assume` for LLVM's back
+  end, which the optimizer drops first for the other back ends, and the
+  native back end skips with what only its condition needs. An operand with
+  side effects is never evaluated, as in `cl` and Clang; the Clang
+  identities warn of it (`-Wassume`), `cl` does not.
   `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
   Microsoft's debug-information annotation with Microsoft extensions: its
   arguments must be wide string literals and it does not execute (bcc emits

@@ -58,7 +58,23 @@ deep in another innermost block, and no C4532 for a `goto` from a `__try`
 block inside the `__finally` block;
 `sema-cl-pragma-suppress-push-msvc` pins a `suppress`
 whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
-19.44 (`/W4 /diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
+19.44 (`/W4 /diagnostics:column`) byte for byte.
+`cl`'s conversion and constant-condition warnings (2026-11-22):
+`sema-cl-conversions-msvc` pins C4244 at its three levels (an integer made a
+narrower type when its value is wider, a floating value made an integer or
+a narrower floating type, an `int` made `float`), C4305 for constants that
+do not fit, and C4245 for a negative one made unsigned, in each context
+(`initializing`, `=`, `+=`, `function`, `return`), with types named as
+written (`Byte`, `const int`, `U32`), none for values `cl` measures as
+narrow enough (`ch + 1`, `i % 10`, `u >> 16`, `u & 0xff`) or for `|=`, and
+an automatic object's initializers after the function's other warnings.
+`sema-cl-constant-condition-msvc` pins C4127 and its exemptions: a literal
+0 or 1 under parentheses, unary operators, a cast to its own type, a macro or
+the operand a constant `?:` selects; none for an address.
+`sema-cl-narrowing-wall-msvc` pins `/Wall`'s C4242 (`--cl-warning=4242:4`)
+in place of C4244 for an uncomputed or 64-bit value, also where a pragma
+disables C4244. The three match `cl` 19.44 (`/W4` or `/Wall`,
+`/diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto
 forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
