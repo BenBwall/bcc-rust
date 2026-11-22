@@ -104,10 +104,17 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         // ranges remain relative to the preprocessing error it joins.
         let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
         let location = context.get_source_vectors(source);
+        let tcc = context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Tcc;
+        // TCC reports in one pass, so a semantic warning `-Werror` makes an
+        // error keeps its place among the others: TCC stops at the first
+        // error in the unit, whichever phase reports it.
+        let warning = diagnostic.severity == ErrorSeverity::Warning
+            || (tcc && is_semantic(error) && error.group().is_some());
         let ordering_location = match error {
             | TranslationError::Parsing(error) => error.ordering_location,
             // Preprocessing errors may still point into a macro definition.
-            | _ if diagnostic.severity != ErrorSeverity::Warning => None,
+            | _ if !warning => None,
             | _ => match report_order(error) {
                 | ReportOrder::AtSite => location
                     .first()
@@ -130,12 +137,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         // that also has a warning of the other phases keeps the order of
         // places ([`Self::order_source_runs`]).
         let tcc_line = ordering_location
-            .filter(|_| {
-                diagnostic.severity == ErrorSeverity::Warning
-                    && report_order(error) == ReportOrder::AtSite
-                    && context.configuration.diagnostic_format()
-                        == crate::configuration::DiagnosticFormat::Tcc
-            })
+            .filter(|_| warning && tcc && report_order(error) == ReportOrder::AtSite)
             .map(|(file, index)| {
                 let line_start = context
                     .source_text(file)

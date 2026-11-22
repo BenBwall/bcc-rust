@@ -58,9 +58,14 @@ impl Analyzer<'_, '_, '_> {
         if !self.unused.return_flow || self.tainted {
             return;
         }
-        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
-        // Clang's analysis stops at the unit's first error.
-        if !gcc && self.context.error_count() != 0 {
+        let identity = self.context.configuration.compiler_identity();
+        // Clang's analysis stops at the unit's first error. TCC's stops at
+        // the first error before it, which the reporter leaves for TCC's
+        // format: an error the parser reported later in the unit, as a
+        // warning `-Werror` makes one, is no reason to say nothing.
+        if !matches!(identity, CompilerIdentity::Gcc | CompilerIdentity::Tcc)
+            && self.context.error_count() != 0
+        {
             return;
         }
         let Some(binding) = function.binding else {
@@ -110,7 +115,7 @@ impl Analyzer<'_, '_, '_> {
             if !void {
                 self.cl_return_flow(binding, end_reached, end, &flow);
             }
-        } else if gcc {
+        } else if identity == CompilerIdentity::Gcc {
             self.gcc_return_flow(binding, noreturn, end_reached, end, &flow);
         } else {
             self.clang_return_flow(binding, noreturn, end_reached, end, &flow);

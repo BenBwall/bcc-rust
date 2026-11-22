@@ -1,0 +1,1 @@
+sema-tcc-werror-phases.c:3: error: function might return no value: 'f'
