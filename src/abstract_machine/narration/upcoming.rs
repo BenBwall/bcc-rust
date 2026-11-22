@@ -65,7 +65,7 @@ impl Machine {
                     (
                         EventKind::LeaveBlock,
                         String::from("leave the block"),
-                        clauses::COMPOUND_STATEMENT,
+                        self.block_clause(program, next),
                     )
                 } else {
                     (
@@ -688,6 +688,48 @@ impl Machine {
         match location.split_once(" (in ") {
             | Some((place, rest)) => format!("`{place}` (in {rest}"),
             | None => format!("`{location}`"),
+        }
+    }
+
+    /// The paragraph that makes the block `leave` ends a block: a compound
+    /// statement's, or for a for statement or a substatement without braces,
+    /// the loop body's or the selection statement's, as the step that
+    /// entered it said. A substatement's block begins and ends at its first
+    /// token, so the entry with the same range says whether it is a loop
+    /// body.
+    ///
+    /// C99: §6.8.2 paragraph 2, p. 132; PDF p. 144.
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+    /// C99: §6.8.5 paragraph 5, p. 135; PDF p. 147.
+    fn block_clause(&self, program: &Program, leave: &Instruction) -> Clause {
+        match program
+            .source
+            .get(leave.range.start..leave.range.end)
+            .unwrap_or("")
+        {
+            | "}" => return clauses::COMPOUND_STATEMENT,
+            | "for" => return clauses::LOOP_BODY,
+            | _ => {},
+        }
+        let iteration = self.activations.last().is_some_and(|frame| {
+            program.functions[frame.function]
+                .code
+                .iter()
+                .any(|instruction| {
+                    instruction.range == leave.range
+                        && matches!(
+                            instruction.op,
+                            Op::Enter {
+                                iteration: true,
+                                ..
+                            }
+                        )
+                })
+        });
+        if iteration {
+            clauses::LOOP_BODY
+        } else {
+            clauses::SELECTION_BLOCK
         }
     }
 

@@ -6483,6 +6483,15 @@ fn small_review_fixes_say_what_happens() {
         .find(|state| state.event.summary.contains("if statement"))
         .expect("the branch's block");
     assert!(cited(branch).contains(&"6.8.4p3"));
+    // "What comes next" before leaving each of them cites the same
+    // paragraph as the step that entered it, not the compound statement's.
+    let leaving: Vec<&str> = states
+        .iter()
+        .filter_map(|state| state.upcoming.as_ref())
+        .filter(|upcoming| upcoming.text == "leave the block")
+        .map(|upcoming| upcoming.clause.id)
+        .collect();
+    assert_eq!(leaving, ["6.8.5p5", "6.8.4p3"]);
     let discard = step(&states, EventKind::Discard, "Discard the result");
     assert!(
         discard
