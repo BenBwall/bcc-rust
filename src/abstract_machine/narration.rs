@@ -1728,13 +1728,13 @@ impl Machine {
             let _ = write!(
                 text,
                 " {whose}, {}, is an enumeration, {}. So {holder} may hold any value of that \
-                 type; C does not check that it holds one of {}.",
+                 type; C does not check that it holds {}.",
                 enumeration.name,
                 enumerations::compatible_text(enumeration),
                 if constants.len() == 1 {
-                    format!("its constant, {}", constants[0])
+                    format!("its only constant, {}", constants[0])
                 } else {
-                    format!("the constants {}", list_words(&constants))
+                    format!("one of the constants {}", list_words(&constants))
                 },
             );
             cited.push(clauses::ENUMERATED_TYPE);

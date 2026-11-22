@@ -585,3 +585,31 @@ fn a_function_returns_pointers_to_objects_and_its_own_dangle() {
     let diagnostic = compile("typedef int row[3]; row f(void);").expect_err("an array return");
     assert_eq!(diagnostic.kind, "constraint");
 }
+
+// Part 16's nits: an unnamed array parameter's refusal points at its type,
+// and an enumeration with one constant is said in the singular.
+#[test]
+fn an_unnamed_parameter_and_a_single_constant_are_said_exactly() {
+    let diagnostic =
+        compile("typedef int row[3];\nint first(row);\nint main(void) { return 0; }\n")
+            .expect_err("an array parameter");
+    assert_eq!(
+        (diagnostic.source_range.line, diagnostic.source_range.column),
+        (2, 11),
+        "{}",
+        diagnostic.message
+    );
+    let states = finished(
+        "enum one { ONLY };\nint main(void) {\n    enum one v = ONLY;\n    return v;\n}\n",
+        0,
+    );
+    let declared = step(&states, EventKind::Declare, "Declare `v`");
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("C does not check that it holds its only constant, ONLY."),
+        "{}",
+        declared.event.explanation
+    );
+}

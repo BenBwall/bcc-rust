@@ -2058,6 +2058,7 @@ impl<'a> Parser<'a> {
                  function with one here",
             ));
         }
+        let specifiers = self.current().range;
         let base = self.base_type()?;
         let depth = self.pointer()?;
         if self.at_function_declarator() {
@@ -2069,7 +2070,11 @@ impl<'a> Parser<'a> {
         } else {
             Some(self.identifier()?)
         };
-        let range = parameter.map_or(self.current().range, |token| token.range);
+        // An unnamed parameter is where its type is written.
+        let range = parameter.map_or_else(
+            || combined(specifiers, self.tokens[self.position - 1].range),
+            |token| token.range,
+        );
         let ty = match (base, depth) {
             | (Base::Arithmetic(_, true) | Base::Enum(_, true), 0) =>
                 return Err(Diagnostic::new(
