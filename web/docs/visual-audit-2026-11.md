@@ -5329,9 +5329,11 @@ bytes on x86-64, 0 to 4294967295; C promises only 0 to 65535". C99
 constants' values, which may be a char.
 
 **Fixed.** It reads "an enum color object (4 bytes on x86-64, 0 to
-4294967295; C promises only that it holds the values of its constants, 0
-to 6)", "-3 to 11" for constants from -3 to 11, and "the value of its
-constant, 4" for one constant. The next sentence lost its two colons in a
+4294967295; C promises only that its type can represent its constants'
+values, so at least 0 to 6)", "-3 to 11" for constants from -3 to 11, and
+"its constant's value, 4" for one constant. Round 2 changed "it holds" to
+"its type can represent": the object may hold any value of the type, such
+as 42 after `enum color c = 42;`. The next sentence lost its two colons in a
 row: "Its type, enum color, is an enumeration, compatible with unsigned
 int: C lets each implementation choose an integer type that holds every
 constant, and GCC chooses int when a constant is negative and unsigned int
@@ -5415,7 +5417,7 @@ t;` in two blocks.
 
 - **Engine tests:** 160 pass, three new: a typedef'd array is no parameter
   type (B1), break and fall-through say what the body holds (B2 and the
-  fall-through step), and an enumeration's object promises only its
+  fall-through step), and an enumeration's type promises only its
   constants' range (B3, with the parameter's name). One changed for the new
   type sentence. The engine's clippy passes.
 - **Site:** as `pages.yml` runs them, the site's tests (172, one new for
@@ -5439,7 +5441,7 @@ t;` in two blocks.
   `e05_fallthrough.c` reaches "Run on past `case LOW:`" at step 16
   ([`review1-fallthrough-1440-light`](screenshots/part16/review1-fallthrough-1440-light.png)).
   The final break's note says nothing follows it and names no later label,
-  `c`'s declaration reads "C promises only that it holds the values of its
-  constants, 0 to 6", and the limits text reads "a typedef of any of these
+  `c`'s declaration reads "C promises only that its type can represent its
+  constants' values, so at least 0 to 6", and the limits text reads "a typedef of any of these
   types but a const one". No sideways scroll, console error or warning, or
   running animation.

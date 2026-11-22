@@ -69,16 +69,19 @@ pub(super) fn compatible_text(enumeration: &Enumeration) -> String {
     )
 }
 
-/// What C promises of the range of `enumeration`'s type: only that it
-/// holds the values of its constants, "0 to 6" (C99 §6.7.2.2p4).
+/// What C promises of the range of `enumeration`'s type: only that it can
+/// represent the values of its constants, "0 to 6" (C99 §6.7.2.2p4). An
+/// object of the type may hold any other value of that type.
 pub(super) fn promised_range(enumeration: &Enumeration) -> String {
     let values = enumeration.constants.iter().map(|constant| constant.value);
     match (values.clone().min(), values.max()) {
         | (Some(low), Some(high)) if low == high =>
-            format!("C promises only that it holds the value of its constant, {low}"),
-        | (Some(low), Some(high)) =>
-            format!("C promises only that it holds the values of its constants, {low} to {high}"),
-        | _ => String::from("C promises only that it holds the values of its constants"),
+            format!("C promises only that its type can represent its constant's value, {low}"),
+        | (Some(low), Some(high)) => format!(
+            "C promises only that its type can represent its constants' values, so at least {low} \
+             to {high}"
+        ),
+        | _ => String::from("C promises only that its type can represent its constants' values"),
     }
 }
 

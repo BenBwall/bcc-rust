@@ -644,8 +644,8 @@ fn an_enumerations_object_promises_only_its_constants_range() {
     );
     assert!(
         color.contains(
-            "an enum color object (4 bytes on x86-64, 0 to 4294967295; C promises only that it \
-             holds the values of its constants, 0 to 6)"
+            "an enum color object (4 bytes on x86-64, 0 to 4294967295; C promises only that its \
+             type can represent its constants' values, so at least 0 to 6)"
         ),
         "{color}"
     );
@@ -666,7 +666,7 @@ fn an_enumerations_object_promises_only_its_constants_range() {
         signed.contains("-2147483648 to 2147483647; C promises only"),
         "{signed}"
     );
-    assert!(signed.contains("its constants, -3 to 11"), "{signed}");
+    assert!(signed.contains("values, so at least -3 to 11"), "{signed}");
     assert!(
         signed.contains("GCC chooses int when a constant is negative, as one is here"),
         "{signed}"
@@ -686,7 +686,7 @@ fn an_enumerations_object_promises_only_its_constants_range() {
         "enum one { ONLY = 4 };\nint main(void) {\n    enum one o = ONLY;\n    return o - 4;\n}\n",
         "Declare `o` (enum one)",
     );
-    assert!(single.contains("the value of its constant, 4)"), "{single}");
+    assert!(single.contains("its constant's value, 4)"), "{single}");
     // A parameter of an enumerated type is named as declared.
     let states = finished(
         "enum color { RED, GREEN };\nint is_green(enum color c) { return c == GREEN; }\nint \
