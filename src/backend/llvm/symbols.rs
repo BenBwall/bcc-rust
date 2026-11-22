@@ -68,7 +68,17 @@ pub(super) fn declare<'id, 'a, 'm>(
             functions.push(api.null(api.ty(Type::Ptr)));
             continue;
         }
-        let value = api.function(api.name(function.name), ty);
+        let name = if function.linkage == IrLinkage::Internal
+            && function.body.is_some()
+            && libcall_type(function.name).is_some_and(|(params, result)| {
+                (signature.params, signature.result, signature.variadic)
+                    != (params, Some(result), false)
+            }) {
+            &*format_in!(arena, "{}.internal", function.name)
+        } else {
+            function.name
+        };
+        let value = api.function(api.name(name), ty);
         api.add_attributes(value, &function::attributes(api, signature, arena), false);
         if module.returns_twice(id) {
             function::returns_twice(api, value, false);
@@ -130,7 +140,15 @@ pub(super) fn declare<'id, 'a, 'm>(
             globals.push(api.null(api.ty(Type::Ptr)));
             continue;
         }
-        let value = api.global(api.name(global.name), ty);
+        let name = if global.linkage == IrLinkage::Internal
+            && global.init.is_some()
+            && libcall_type(global.name).is_some()
+        {
+            &*format_in!(arena, "{}.internal", global.name)
+        } else {
+            global.name
+        };
+        let value = api.global(api.name(name), ty);
         api.alignment(value, global.align.bytes());
         api.constant_global(value, global.constant);
         if let Some(linkage) = linkage(global.linkage, global.init.is_some()) {
@@ -218,6 +236,25 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
     }
     Ok((functions, globals))
+}
+
+/// The parameter and result types of a C library function that LLVM's code
+/// generator calls by name on its own: for `llvm.memcpy`, `llvm.memmove` and
+/// `llvm.memset`, and for loops its optimizer recognizes as one. Its call
+/// binds to a symbol of the module with the name, so [`declare`] gives
+/// another name to a function with internal linkage and another type, or an
+/// internal object, that a file which does not include `<string.h>` may
+/// name so, and the call reaches the library's function. Clang keeps the
+/// name and calls the unit's function with the library function's
+/// arguments.
+/// C99: §7.1.3 paragraphs 1-2, p. 166; PDF p. 178; §7.21.2.1, p. 325;
+/// §7.21.2.2, p. 326; §7.21.6.1, p. 333; PDF pp. 337-345.
+fn libcall_type(name: &str) -> Option<(&'static [Type], Type)> {
+    match name {
+        | "memcpy" | "memmove" => Some((&[Type::Ptr, Type::Ptr, Type::I64], Type::Ptr)),
+        | "memset" => Some((&[Type::Ptr, Type::I32, Type::I64], Type::Ptr)),
+        | _ => None,
+    }
 }
 
 /// The LLVM linkage of a symbol, when it differs from LLVM's external
