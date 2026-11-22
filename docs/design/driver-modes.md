@@ -1422,8 +1422,15 @@ mob@e23dabed`), Ubuntu's `tcc` 0.9.27+git20200814.62c30a4a, which prints
 `tcc version 0.9.27`, and the `release_0_9_27` tag built from source
 (without its bounds checker, which no longer builds against glibc). bcc
 claims 0.9.27 (`__TINYC__ 927`, `-dumpversion`), and its reference is
-Ubuntu's build: Debian and Ubuntu ship that snapshot as 0.9.27, the CI
-compares against it, and 0.9.28 has never been released. The snapshot's
+Ubuntu's build, the `mob` snapshot `0.9.27+git20200814.62c30a4a`: Debian
+and Ubuntu ship that snapshot as 0.9.27, the CI compares against it, and
+0.9.28 has never been released. Its warnings are the snapshot's, which
+are not the release's: the `release_0_9_27` tag has no `function might
+return no value` at all, and under `-Werror` writes its warnings as
+`warning:` though it exits with 1. Of the 52 files bcc's TCC warnings were
+probed with, compiled with no options, the tag differs from the snapshot
+on 8: the 6 that warn of a missing return, and 2 whose conditional
+expressions mix pointer types, which it does not warn of. The snapshot's
 predefined macros are the tag's with 12 GCC-style ones (`__CHAR_BIT__`,
 `__INT_MAX__`, `__SIZEOF_INT__`...) and a `__builtin_offsetof` macro
 added; `mob`'s `tccdefs.h` adds 13 more (`__amd64__`, `__has_attribute`,
@@ -1631,7 +1638,7 @@ condition:
 | `pointer type mismatch in comparison('int *' and 'char *')`, `... in conditional expression ('int *' and 'char *')` | incompatible pointers, with bcc's spelling of the types |
 | `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than a `main` returning TCC's `VT_INT`: `int`, `unsigned int`, an enumeration TCC represents as one of those, or a 32-bit `long` (below) |
 | `unnamed struct/union that defines no instances` | a structure or union with no tag and no declarator, a `typedef` among them, at the line of its `;` |
-| `static storage ignored for redefinition of 'f'` | a `static` declaration of a function after one with external linkage, neither of them `inline`; the function stays external |
+| `static storage ignored for redefinition of 'f'` | a `static` declaration of a function after one with external linkage, neither it nor TCC's `inline` flag of the function so far `inline` (below); the function stays external |
 | `storage mismatch for redefinition of 'x'` | a declaration of an object whose `static` differs from its first declaration's, `extern` after `static` among them; the object keeps the first declaration's linkage |
 | `__mode__(X) not supported`, then an empty line | a `__mode__` other than `__QI__`, `__HI__`, `__SI__`, `__DI__` and `__word__`, which leaves the type alone |
 | `integer constant overflow` | an integer constant whose digits overflow 64 bits, or a decimal one without `u` of 2<sup>63</sup> or more, which keeps its wrapped value (typed `unsigned long` unless it says `ll`) |
@@ -1645,9 +1652,29 @@ union or enumeration (`int;`, `typedef int;`, `const;`) with `identifier
 expected`, and accepts the others silently. It ignores a `section`
 attribute on anything but a function or a static object, a `typedef`
 among them, and the `__mode__` attribute after a declarator or spelled
-`mode`; it applies `__word__` as `int`. A wide character constant of
+`mode`; it applies `__word__` as `int`. It applies a mode where it reads
+it among the declaration specifiers, so a type specifier after it other
+than `int`, `signed` or `unsigned` replaces it (`__attribute__((
+__mode__(__word__))) long` is `long`, `__attribute__((__mode__(__QI__)))
+enum E` an enumeration), unless another attribute after that applies the
+mode again. A wide character constant of
 several characters takes the last, and a narrow one packs its bytes as
 signed `char`s, as `'\xff\x01'` is `0xffffff01`.
+
+A `static` declaration of a function after one with external linkage
+keeps TCC's `inline` flag where it or the flag so far says `inline`
+(`patch_type`), and TCC gives a function whose flag is set when the unit
+ends a local symbol (`update_storage`). So `int f(void); static inline
+int f(void) {...}`, or `static inline int rand(void) {...}` after
+`<stdlib.h>`, gives the function internal linkage at every declaration,
+and the calls before the definition bind to the local function, as under
+TCC. A
+later declaration that clears the flag (`int f(void);` again) would make
+the function external once more, and one after a definition the earlier
+declarations left external (`inline int f(void) {...} static int
+f(void);`) would make it internal after its body; bcc refuses both with
+`identifier has both internal and external linkage`, as it refuses these
+redeclarations in the other identities.
 
 What `function might return no value` sees is TCC's: the C library's
 declarations lose their attributes, as glibc's `<sys/cdefs.h>` defines
@@ -1684,14 +1711,19 @@ These still differ from TCC 0.9.27:
 - TCC defers every diagnostic of a deferred `inline` function's body, and
   says nothing of one nothing uses; bcc defers only `function might return
   no value` and reports the rest where they stand.
-- `int f(void); static inline int f(void) {...}` is silent in both, but TCC
-  compiles a local function and bcc keeps it external.
+- The `static` redeclarations that bcc refuses above are accepted, TCC
+  compiling a local or a global function, as the flag ends.
 - A label before the `}` that ends an `if` or loop body that is no block
   (`if (x) l: }`) is an error, where TCC warns and closes the enclosing
   block.
 - A constant in a macro's replacement list draws `unknown escape sequence`
   and, in `#if`, `multi-character character constant` at the `#define`'s
   line, where TCC names the line of each use.
+- Under `-Werror`, a warning of preprocessing is the error bcc stops at
+  wherever it falls, as preprocessing reports before the other phases: in
+  `int f(void) { }` followed by `char *s = "\q";` it is the escape, where
+  TCC stops at `function might return no value`. A parser's or semantic
+  analysis's warning is the first by place, as under TCC.
 - A line with a warning from preprocessing or parsing as well as those of
   semantic analysis orders them all by place, so in `char *s = "\q"; int
   f(int c, int *p, char *q) { return c ? p : q; }` the conversion comes

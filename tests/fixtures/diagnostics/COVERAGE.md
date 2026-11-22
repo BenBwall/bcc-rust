@@ -6,10 +6,12 @@ options `--tcc-mode` passes bcc (`.args`) and match Ubuntu's TCC 0.9.27
 `sema-tcc-storage-redefinition` pins `static storage ignored for
 redefinition` and `storage mismatch for redefinition`, `extern` after
 `static` and a block's `extern` included, and an `inline` one left silent;
-`sema-tcc-werror` pins `-Werror` stopping at the first as an error.
-`sema-tcc-mode-attribute` pins `__mode__(X) not supported` with its empty
-line, `mode` ignored, a known mode applied among the specifiers only and
-`__word__` as `int` (checked by `_Static_assert`). `pp-tcc-integer-overflow`
+`sema-tcc-werror` pins `-Werror` stopping at the first as an error, and
+`sema-tcc-werror-phases` the first by place, a semantic warning before a
+parser's. `sema-tcc-mode-attribute` pins `__mode__(X) not supported` with
+its empty line, `mode` ignored, a known mode applied among the specifiers
+only, where a later type specifier replaces it, and `__word__` as `int`
+(checked by `_Static_assert`). `pp-tcc-integer-overflow`
 pins `integer constant overflow` and the wrapped values and types.
 `sema-tcc-empty-declarations`, `sema-tcc-empty-declaration-error` and
 `sema-tcc-empty-typedef-error` pin `decl0`'s warning and `identifier
