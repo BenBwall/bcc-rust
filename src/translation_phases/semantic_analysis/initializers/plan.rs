@@ -13,6 +13,7 @@
 use super::super::{
     Analyzer,
     BitRange,
+    cl_warnings::ClTarget,
     InitOperation,
     InitValue,
     InitValueId,
@@ -380,6 +381,8 @@ pub(super) struct Site<'s> {
     /// Clang's context location for the element's conversion: where the
     /// list it belongs to begins.
     pub(super) context:       SourceVectors,
+    /// The declaration whose written type `cl` names as the subobject's.
+    pub(super) cl_target:     ClTarget,
 }
 
 impl Site<'_> {
@@ -394,6 +397,7 @@ impl Site<'_> {
             own_flexible: false,
             braced: false,
             context: SourceVectors::default(),
+            cl_target: ClTarget::Unknown,
         }
     }
 
@@ -419,6 +423,7 @@ pub(super) struct Container<'s> {
     pub(super) offset:     u64,
     pub(super) qualifiers: TypeQualifiers,
     pub(super) unions:     Option<&'s UnionLink<'s>>,
+    pub(super) cl_target:  ClTarget,
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
@@ -430,6 +435,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             offset: site.offset,
             qualifiers,
             unions: self.union_link(ty.qualified(site.qualifiers), site.unions),
+            cl_target: site.cl_target,
         }
     }
 
@@ -447,6 +453,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             offset:     at.offset.checked_add(offset)?,
             qualifiers: child.qualifiers | at.qualifiers,
             unions:     self.union_link(child.qualified(at.qualifiers), at.unions),
+            cl_target:  self.cl_subobject(container, at.cl_target, index),
         })
     }
 
@@ -469,7 +476,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             own_flexible: false,
             braced: false,
             context: SourceVectors::default(),
+            cl_target: self.cl_subobject(container, at.cl_target, index),
         })
+    }
+
+    /// The target of subobject `index` of `container`, whose own is
+    /// `target`: an element is one deeper in its array's declaration, and a
+    /// named member is its own.
+    fn cl_subobject(&self, container: TypeId, target: ClTarget, index: u64) -> ClTarget {
+        match self.types.nodes[container.index] {
+            | TypeKind::Array(..) => target.element(),
+            | TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum => self.types.tags[id]
+                .members
+                .get()
+                .get(usize::try_from(index).unwrap_or(usize::MAX))
+                .and_then(|member| member.name)
+                .map_or(ClTarget::Unknown, |name| ClTarget::Member(id, name.name, 0)),
+            | _ => target,
+        }
     }
 
     /// The union types containing a subobject, outermost last, for a copy

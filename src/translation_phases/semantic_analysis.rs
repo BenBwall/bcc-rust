@@ -70,6 +70,7 @@ mod scopes;
 mod state;
 
 // Syntax traversal and constraints
+mod cl_warnings;
 mod declarations;
 mod emission;
 mod expressions;
@@ -777,6 +778,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.check_switch_condition(statement, slot);
                 } else {
                     self.check_condition_parentheses(slot);
+                    if self.unused.cl {
+                        self.check_constant_condition_as_cl(slot);
+                    }
                 }
             },
             | Work::RequireConstant(e, assertion, before) => {
@@ -1528,6 +1532,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::MemberDone(tag, d, members, errors_before, packed, member) => {
                 let ty = self.take_type();
                 if let Some(name) = d.declarator.and_then(Declarator::identifier) {
+                    if self.unused.cl {
+                        _ = self.cl_written_fields.insert(
+                            (tag, name.name),
+                            cl_warnings::Written::member(&member, d.declarator),
+                        );
+                    }
                     let written = self.written_function_types(
                         DeclarationSpecifiers {
                             type_specifiers: member.type_specifiers,
@@ -2396,6 +2406,16 @@ struct Analyzer<'a, 'tu, 's> {
     /// typedef name or another type specifier `cl` writes by name, which
     /// `cl`'s words for a call keep and bcc's type printer does not.
     cl_spelled_by_name:      ArenaMap<'s, usize, ()>,
+    /// How each binding's declaration wrote its type, under the `cl`
+    /// identity, whose conversion warnings name it (`cl_warnings.rs`).
+    cl_written:              ArenaMap<'s, usize, cl_warnings::Written<'tu>>,
+    /// The same for each member, by its declaring tag and name.
+    cl_written_fields:       ArenaMap<'s, (usize, StringCacheId), cl_warnings::Written<'tu>>,
+    /// The binding whose declaration's initializer is being checked.
+    cl_initialized:          Option<usize>,
+    /// The initializer conversions of the current function's automatic
+    /// objects, which `cl` reports at its end.
+    cl_initializers:         ArenaVec<'s, cl_warnings::ClFinding<'s>>,
     /// The general register each GNU local register variable names.
     register_variables:      ArenaMap<'s, usize, u8>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,

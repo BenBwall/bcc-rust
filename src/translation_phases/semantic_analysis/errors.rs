@@ -1672,6 +1672,12 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::SignCompareEquality
+                    | crate::configuration::DiagnosticGroup::ClConstantCondition
+                    | crate::configuration::DiagnosticGroup::ClFloatingConversion
+                    | crate::configuration::DiagnosticGroup::ClWideConversion
+                    | crate::configuration::DiagnosticGroup::ClIntConversion
+                    | crate::configuration::DiagnosticGroup::ClTruncation
+                    | crate::configuration::DiagnosticGroup::ClNarrowingConversion
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
@@ -3270,6 +3276,12 @@ impl SemanticErrorKind {
             | Self::Parentheses(G::Parentheses) => 4706,
             | Self::ExceptionalConstant(G::ShiftCountOverflow | G::ShiftCountNegative, _) => 4293,
             | Self::JumpOutOfFinally => 4532,
+            | Self::ValueWarning(G::ClConstantCondition) => 4127,
+            | Self::ValueWarning(
+                G::ClFloatingConversion | G::ClWideConversion | G::ClIntConversion,
+            ) => 4244,
+            | Self::ValueWarning(G::ClTruncation) => 4305,
+            | Self::ValueWarning(G::ClNarrowingConversion) => 4242,
             | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
             | Self::VoidReturnMismatch => 4098,
             | Self::ReturnMismatch => 4033,
@@ -3547,6 +3559,16 @@ impl SemanticError {
             | SemanticErrorKind::SignCompare => ("C4018", arena.alloc_str(name)),
             | SemanticErrorKind::SignCompareEquality => ("C4389", arena.alloc_str(name)),
             | SemanticErrorKind::Parentheses(G::Parentheses) => ("C4706", arena.alloc_str(name)),
+            // Worded by `Analyzer::check_conversion_as_cl` and
+            // `Analyzer::check_constant_condition_as_cl`.
+            | SemanticErrorKind::ValueWarning(G::ClConstantCondition) =>
+                ("C4127", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(
+                G::ClFloatingConversion | G::ClWideConversion | G::ClIntConversion,
+            ) => ("C4244", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClTruncation) => ("C4305", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClNarrowingConversion) =>
+                ("C4242", arena.alloc_str(name)),
             | SemanticErrorKind::UndeclaredIdentifier
             | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",

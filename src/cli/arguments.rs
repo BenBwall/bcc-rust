@@ -418,19 +418,18 @@ impl Cli {
             let Ok(code) = code.parse() else {
                 continue;
             };
-            let Some(default) = ClWarnings::default_level(code) else {
+            if ClWarnings::default_level(code).is_none() {
                 continue;
-            };
-            let state = match value {
-                | "d" => ClWarningState::Disabled,
-                | "e" => ClWarningState::Error,
-                | "o" => ClWarningState::Once(default),
+            }
+            warnings = match value {
+                | "d" => warnings.with_state(code, ClWarningState::Disabled),
+                | "e" => warnings.with_state(code, ClWarningState::Error),
+                | "o" => warnings.with_default(code, true),
                 | level => match level.parse() {
-                    | Ok(level @ 1..=4) => ClWarningState::Level(level),
+                    | Ok(level @ 1..=4) => warnings.with_state(code, ClWarningState::Level(level)),
                     | _ => continue,
                 },
             };
-            warnings = warnings.with_state(code, state);
         }
         warnings
     }

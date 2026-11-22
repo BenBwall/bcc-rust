@@ -460,6 +460,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if !clang_cl {
         common.extend(state.coded_warning_options());
         common.push(format!("--cl-warning-level={}", state.warning_level).into());
+        // `/Wall` shows the warnings that are off by default at their own
+        // level, unless a setting says otherwise.
+        if state.all_warnings {
+            for warning in CL_CODED_WARNINGS.iter().filter(|warning| warning.off) {
+                common.push(format!("--cl-warning={}:{}", warning.code, warning.level).into());
+            }
+        }
         for &(code, setting) in &state.warning_settings {
             let value = match setting {
                 | WarningSetting::Disabled => "d".to_owned(),
@@ -918,6 +925,9 @@ struct State {
     diagnostics:             &'static str,
     /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
     warning_level:           u8,
+    /// The last level option was `/Wall`, which also shows the warnings
+    /// that are off by default.
+    all_warnings:            bool,
     /// Where in [`State::bcc`] the options of the last level stand, and how
     /// many there are.
     warning_level_options:   (usize, usize),
@@ -967,6 +977,7 @@ impl Default for State {
             standard_given:          false,
             diagnostics:             "msvc-caret",
             warning_level:           1,
+            all_warnings:            false,
             warning_level_options:   (0, 0),
             warnings_error:          false,
             warning_settings:        Vec::new(),
@@ -1089,15 +1100,18 @@ impl State {
             | "W4" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
             // clang-cl's `/Wall` is `-Weverything`; `cl`'s is its level 4
             // and more.
-            | "Wall" => self.set_warning_level(
-                invocation,
-                4,
-                if invocation.personality.is_clang_cl() {
-                    &["-Weverything"]
-                } else {
-                    &["-Wall", "-Wextra"]
-                },
-            ),
+            | "Wall" => {
+                self.set_warning_level(
+                    invocation,
+                    4,
+                    if invocation.personality.is_clang_cl() {
+                        &["-Weverything"]
+                    } else {
+                        &["-Wall", "-Wextra"]
+                    },
+                );
+                self.all_warnings = true;
+            },
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());
@@ -1680,6 +1694,7 @@ impl State {
             drop(self.bcc.drain(at..at + count));
         }
         self.warning_level = level;
+        self.all_warnings = false;
         self.warning_level_options = (self.bcc.len(), options.len());
         self.bcc.extend(options.iter().map(OsString::from));
     }

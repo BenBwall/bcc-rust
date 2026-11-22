@@ -412,6 +412,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Duration::Automatic,
                         None,
                     );
+                    if let Some(syntax) = syntax {
+                        self.record_written_binding(
+                            &syntax.declaration_specifiers,
+                            syntax.declarator,
+                        );
+                    }
                     if let Some(prototype) = parameter.binding {
                         if self.unused.tracking {
                             self.inherit_unused_exemption(prototype, self.bindings.len() - 1);

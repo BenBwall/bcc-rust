@@ -214,7 +214,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ty,
             initializer,
             Writes::ROOT,
-            Site::root(initializer.source_vectors),
+            Site {
+                cl_target: self
+                    .cl_initialized
+                    .map_or(super::cl_warnings::ClTarget::Unknown, |binding| {
+                        super::cl_warnings::ClTarget::Binding(binding, 0)
+                    }),
+                ..Site::root(initializer.source_vectors)
+            },
         ));
         while let Some(task) = work.pop() {
             #[cfg(test)]
@@ -296,6 +303,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 // Suppress constant-initializer errors after a
                                 // rejected conversion (C99 §6.7.8p11).
                                 continue;
+                            }
+                            if self.unused.cl {
+                                self.cl_initializer_conversion(
+                                    target,
+                                    info,
+                                    site.cl_target,
+                                    diagnostic_site,
+                                    static_storage,
+                                );
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
                             let root = std::ptr::eq(init, initializer);
@@ -2463,6 +2479,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
             return;
         }
+        let initialized = self.cl_initialized.replace(index);
         let (ty, flexible) = self.check_initializer(
             binding.ty,
             initializer,
@@ -2470,6 +2487,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             binding.duration.is_static_or_thread(),
             Some(binding.name.source_vectors),
         );
+        self.cl_initialized = initialized;
         self.bindings[index].ty = ty;
         if let Some(flexible) = flexible {
             _ = self.flexible_arrays.insert(index, flexible);
