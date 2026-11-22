@@ -1235,7 +1235,7 @@ fn microsoft_assumptions_count_side_effects_as_clang_does() {
         kinds(source, microsoft),
         [SemanticErrorKind::Nonnull(
             DiagnosticGroup::PointerBoolConversion,
-            crate::translation_phases::semantic_analysis::always_nonnull::NonnullNote::Plain
+            always_nonnull::NonnullNote::Plain
         )]
     );
     assert_eq!(

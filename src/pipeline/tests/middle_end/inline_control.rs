@@ -282,10 +282,7 @@ fn clang_evaluates_assumptions_without_side_effects() {
         .with_msvc_extensions(true);
     for (configuration, promises) in [
         (microsoft, 2),
-        (
-            microsoft.with_compiler_identity(crate::configuration::CompilerIdentity::Msvc),
-            0,
-        ),
+        (microsoft.with_compiler_identity(CompilerIdentity::Msvc), 0),
     ] {
         with_configured_module(
             source,

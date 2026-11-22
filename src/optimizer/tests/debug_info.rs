@@ -157,7 +157,7 @@ fn an_instruction_moved_out_of_its_loop_loses_its_line() {
         .block_insts(entry)
         .iter()
         .copied()
-        .find(|&inst| body.inst(inst).opcode() == crate::ir::Opcode::Imul)
+        .find(|&inst| body.inst(inst).opcode() == Opcode::Imul)
         .expect("the invariant multiplication left the loop");
     assert_eq!(body.inst_location(multiply), None);
     // What stayed keeps its own, the terminators too.
