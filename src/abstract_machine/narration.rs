@@ -2719,12 +2719,12 @@ impl Machine {
                      `{name}`: `*{operand}` now stands for {location} itself."
                 ),
                 format!(
-                    "`{operand}` yields {}, the value `{name}` {when} its update: \
-                     `{update}` binds tighter than `*`, so `*{operand}` is `*({operand})`, and \
-                     the `*` uses what `{operand}` yields. The unary `*` operator (indirection) \
-                     turns that pointer back into the object it points to, so `*{operand}` is an \
-                     lvalue: another name for {location}, the same place in memory, not a copy of \
-                     it. Nothing is read or written yet: the operator around it decides which.",
+                    "`{operand}` yields {}, the value `{name}` {when} its update: `{update}` \
+                     binds tighter than `*`, so `*{operand}` is `*({operand})`, and the `*` uses \
+                     what `{operand}` yields. The unary `*` operator (indirection) turns that \
+                     pointer back into the object it points to, so `*{operand}` is an lvalue: \
+                     another name for {location}, the same place in memory, not a copy of it. \
+                     Nothing is read or written yet: the operator around it decides which.",
                     self.value_text(&pointer),
                 ),
             )
@@ -6163,7 +6163,7 @@ fn count_word(count: usize) -> String {
         | 2 => String::from("two"),
         | 3 => String::from("three"),
         | 4 => String::from("four"),
-        | _ => count.to_string(),
+        | _ => format!("{count}"),
     }
 }
 
