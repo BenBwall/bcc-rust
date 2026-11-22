@@ -416,7 +416,7 @@ pub(in crate::abstract_machine) fn past_labels(
     count: usize,
 ) -> Event {
     let labels = snippet(source, range);
-    let (them, they) = if count == 1 {
+    let (phrase, pronoun) = if count == 1 {
         ("the label", "it")
     } else {
         ("the labels", "them")
@@ -426,14 +426,14 @@ pub(in crate::abstract_machine) fn past_labels(
             Event::new(EventKind::Jump, range, format!("Run on past `{labels}`")),
             &format!(
                 "The statement before `{labels}` has finished, and no break came, so execution \
-                 runs on past {them} into the statements after {they}."
+                 runs on past {phrase} into the statements after {pronoun}."
             ),
             &format!(
                 "A case or default label only marks a place the switch can jump to; it does not \
-                 alter the flow of control. Execution that reaches {them} from the statement \
-                 before, as here, continues across {they} into the statements that follow, \
+                 alter the flow of control. Execution that reaches {phrase} from the statement \
+                 before, as here, continues across {pronoun} into the statements that follow, \
                  whatever value the switch compared. This is called falling through. A `break;` \
-                 before {them} would have left the switch instead."
+                 before {phrase} would have left the switch instead."
             ),
             &[clauses::LABELS_FLOW, clauses::SWITCH_JUMP],
         ),
