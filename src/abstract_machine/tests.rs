@@ -5909,6 +5909,292 @@ fn the_limits_the_site_states_hold() {
     }
 }
 
+// C99 §6.5.2.4p2, §6.5p2: `*s++` reads the element `s` points to and
+// moves `s`; the machine decides by the object each access reaches whether
+// two of them clash, so pointer idioms run and true clashes stop.
+#[test]
+fn pointer_idioms_follow_the_objects_they_reach() {
+    let states =
+        stepped(
+            "int length(const char *s) {\n    const char *start = s;\n    while (*s++)\n        \
+             ;\n    return s - start - 1;\n}\nint main(void) { return length(\"hello\"); }\n",
+        );
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    assert_eq!(last.return_value, Some(Value::Integer(5)));
+    let update = step(&states, EventKind::Increment, "Update `s`");
+    assert!(
+        update.event.summary.contains("yields `s`'s old value"),
+        "{}",
+        update.event.summary
+    );
+    assert!(
+        update
+            .event
+            .explanation
+            .contains("compares every access in the condition"),
+        "{}",
+        update.event.explanation
+    );
+    assert!(!update.event.sequence_point);
+    assert!(cited(update).contains(&"6.5p2"));
+    returned(
+        "int main(void) { char s[] = \"copy\"; char t[8]; char *d = t; const char *c = s; while \
+         ((*d++ = *c++) != 0) {} return t[3] * 0 + (int)(d - t); }",
+        5,
+    );
+    returned(
+        "int main(void) { int v[3]; int *p = v; *p++ = 1; *p++ = 2; *p = 3; return v[0] * 100 + \
+         v[1] * 10 + v[2]; }",
+        123,
+    );
+    returned(
+        "int main(void) { int a[4] = {1, 2, 3, 4}; int *lo = a; int *hi = a + 3; while (lo < hi) \
+         { int t = *lo; *lo++ = *hi; *hi-- = t; } return a[0] * 1000 + a[1] * 100 + a[2] * 10 + \
+         a[3]; }",
+        4321,
+    );
+    // Two pointers to one object, or a pointer to a variable the
+    // expression also updates by name: the clash is decided on the object.
+    returned(
+        "int main(void) { int a[2] = {1, 2}; int i = 0; int j = 1; a[i] = a[j]++; return a[0] * \
+         10 + a[1]; }",
+        23,
+    );
+    for source in [
+        "int main(void) { int i = 0; int *p = &i; *p = i++; return i; }",
+        "int main(void) { int i = 0; int *a = &i; return a[i++]; }",
+        "int main(void) { int x = 1; int *p = &x; x = (*p)++; return x; }",
+        "int main(void) { int x = 0; int *p = &x; int *q = &x; return (*p)++ + (*q)++; }",
+        "int main(void) { int a[2] = {1, 2}; int *p = a; int **pp = &p; *pp = p++; return *p; }",
+        "int main(void) { int a[2] = {1, 2}; int i = 0; int j = 0; a[i] = a[j]++; return a[0]; }",
+        "int main(void) { int x = 3; int y = 5; int *a = &x; int *b = &y; *a ^= *b ^= *a ^= *b; \
+         return x; }",
+        "int main(void) { int x = 0; int *p = &x; return (*p = 1) + x; }",
+    ] {
+        let session = run(source);
+        let state = session.state();
+        assert_eq!(state.status, "undefined_behavior", "{source}");
+        let diagnostic = &state.diagnostics[0];
+        assert_eq!(
+            diagnostic.undefined,
+            Some(super::Undefined::Unsequenced),
+            "{source}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("with no sequence point between the two"),
+            "{source}: {}",
+            diagnostic.message
+        );
+        assert_eq!(
+            state.event.title,
+            "Undefined behavior: unsequenced accesses"
+        );
+    }
+    // A store that reads what it stores into to find where to store.
+    let session = run("int main(void) { int a[2] = {0, 5}; a[a[0]] = 1; return a[0]; }");
+    assert_eq!(session.state().status, "error");
+    assert_eq!(
+        session.state().event.title,
+        "Stopped: a store that reads where it stores"
+    );
+}
+
+// C99 §6.5.16p3: an assignment's value is the value stored in its left
+// operand, and its store completes by the next sequence point.
+#[test]
+fn assignments_yield_the_value_they_store() {
+    returned(
+        "int main(void) { int x; int y; x = y = 7; return x + y; }",
+        14,
+    );
+    returned(
+        "int main(void) { int a = 0; int b = 5; a = b++; return a * 10 + b; }",
+        56,
+    );
+    returned(
+        "int k = 0; int next(void) { return k < 3 ? ++k : 0; } int main(void) { int c; int n = 0; \
+         while ((c = next()) != 0) n += c; return n; }",
+        6,
+    );
+    returned(
+        "int main(void) { int total = 1; int r = (total += 4) * 2; return r + total; }",
+        15,
+    );
+    returned(
+        "int main(void) { int i = 1; i = (i++, i + 10); return i; }",
+        12,
+    );
+    returned(
+        "int id(int v) { return v + 1; } int main(void) { int x = 1; x = id(x++); return x; }",
+        2,
+    );
+    let states = stepped("int main(void) { char c; int v = (c = 300); return v + 1; }");
+    let store = step(&states, EventKind::Assign, "Store 44 into `c`");
+    assert!(
+        store
+            .event
+            .summary
+            .contains("As an operand, `(c = 300)` yields that value, 44, to the expression"),
+        "{}",
+        store.event.summary
+    );
+    assert!(
+        store
+            .event
+            .explanation
+            .contains("by the next sequence point, the end of the full expression"),
+        "{}",
+        store.event.explanation
+    );
+    assert!(!store.event.sequence_point);
+    assert!(cited(store).contains(&"6.5.16p3"));
+    assert_eq!(
+        states.last().map(|state| state.return_value.clone()),
+        Some(Some(Value::Integer(45)))
+    );
+    let states = stepped(
+        "int half(int x) { return x / 2; } int main(void) { int n; if ((n = half(9)) > 0) return \
+         n; return 0; }",
+    );
+    let store = step(&states, EventKind::Assign, "Store 4 into `n`");
+    assert!(
+        store
+            .event
+            .summary
+            .contains("yields that value, 4, to the condition"),
+        "{}",
+        store.event.summary
+    );
+    assert!(
+        store.event.explanation.contains("the end of the condition"),
+        "{}",
+        store.event.explanation
+    );
+    // The same variable stored twice with nothing between: refused.
+    for source in [
+        "int main(void) { int i = 1; i = i++; return i; }",
+        "int main(void) { int x = 0; x = (x = 1) + 1; return x; }",
+        "int main(void) { int x = 1; x += x++; return x; }",
+        "int main(void) { int i = 0; int a[2] = {i++, 0}; return a[0]; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
+// C99 §6.5.6p9, §6.5.8p5: pointers into one array subtract to the count
+// of elements between them and order by subscript; others are undefined.
+#[test]
+fn pointer_differences_count_elements_and_order_by_place() {
+    let states = stepped(
+        "int main(void) { int v[5] = {1, 2, 3, 4, 5}; int *p = &v[1]; int *q = &v[4]; long n = q \
+         - p; return (int)n; }",
+    );
+    let difference = step(&states, EventKind::PointerArithmetic, "Pointer difference");
+    assert_eq!(difference.event.title, "Pointer difference: q - p = 3");
+    assert_eq!(difference.event.result_type.as_deref(), Some("long"));
+    assert!(
+        difference.event.summary.contains("4 - 1 = 3, a ptrdiff_t"),
+        "{}",
+        difference.event.summary
+    );
+    assert_eq!(cited(difference)[0], "6.5.6p9");
+    returned(
+        "int main(void) { int v[3] = {1, 2, 3}; int *p; int n = 0; for (p = v; p < v + 3; p++) n \
+         += *p; return n * 10 + (p == v + 3) + (v + 1 <= p); }",
+        62,
+    );
+    returned(
+        "struct pt { int x; int y; }; int main(void) { struct pt a = {1, 2}; int *p = &a.x; int \
+         *q = &a.y; return (p < q) * 10 + (q >= p); }",
+        11,
+    );
+    returned(
+        "int main(void) { char s[10]; return sizeof(&s[9] - &s[0]); }",
+        8,
+    );
+    for (source, cause) in [
+        (
+            "int main(void) { int x = 1; int y = 2; int *p = &x; int *q = &y; return q - p; }",
+            super::Undefined::PointerDifference,
+        ),
+        (
+            "int main(void) { int x[2] = {1, 2}; int y[2] = {3, 4}; return &x[0] < &y[0]; }",
+            super::Undefined::PointerOrder,
+        ),
+        (
+            "int main(void) { int v[2] = {1, 2}; int *p = 0; int *q = v; return q - p; }",
+            super::Undefined::PointerDifference,
+        ),
+        (
+            "struct two { int a[2]; int b[2]; }; int main(void) { struct two t = {{1, 2}, {3, \
+             4}}; int *p = t.a; int *q = t.b; return q - p; }",
+            super::Undefined::PointerDifference,
+        ),
+    ] {
+        assert_eq!(undefined(source).0, Some(cause), "{source}");
+    }
+    let diagnostic =
+        compile("int main(void) { int v[2] = {1, 2}; char c[2] = \"a\"; return &v[1] - &c[0]; }")
+            .map(|_| ())
+            .expect_err("pointers to different types");
+    assert_eq!(diagnostic.kind, "constraint");
+    assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.5.6p3"));
+}
+
+// C99 §6.5p3, §6.5.2.2p10: a call's body runs before or after the other
+// operands as a whole; when the order would decide the result, the machine
+// stops instead of choosing.
+#[test]
+fn an_order_c_leaves_open_stops_the_run() {
+    for source in [
+        "int g = 0; int bump(void) { g = g + 1; return g; } int main(void) { return g + bump(); }",
+        "#include <stdio.h>\nint counter = 0; int next(void) { return ++counter; } int main(void) \
+         { printf(\"%d %d\\n\", next(), next()); return 0; }",
+        "#include <stdio.h>\nint main(void) { return printf(\"a\") + printf(\"b\"); }",
+        "int set(int *p) { *p = 5; return 1; } int main(void) { int x = 0; return set(&x) + x; }",
+        "int counter = 0; int next(void) { return ++counter; } int main(void) { int a[2] = \
+         {next(), next()}; return a[0]; }",
+    ] {
+        let session = run(source);
+        let state = session.state();
+        assert_eq!(state.status, "error", "{source}");
+        assert_eq!(
+            state.diagnostics[0].clause.map(|clause| clause.id),
+            Some("6.5p3"),
+            "{source}"
+        );
+        assert_eq!(
+            state.event.title,
+            "Stopped: the result depends on an open order"
+        );
+        assert!(
+            state.diagnostics[0]
+                .message
+                .contains("C99 leaves unspecified which of the two is evaluated first"),
+            "{source}: {}",
+            state.diagnostics[0].message
+        );
+    }
+    // Calls that only read, a call's store before the assignment that uses
+    // its value, and calls on different objects run.
+    returned(
+        "int g = 3; int get(void) { return g; } int main(void) { return get() + get() + g; }",
+        9,
+    );
+    returned(
+        "int g = 2; int f(void) { g = 9; return 4; } int main(void) { g = f(); return g; }",
+        4,
+    );
+    returned(
+        "int inc(int *p) { *p = *p + 1; return *p; } int main(void) { int x = 0; int y = 5; \
+         return inc(&x) + inc(&y); }",
+        7,
+    );
+}
+
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end except those that use function pointers.

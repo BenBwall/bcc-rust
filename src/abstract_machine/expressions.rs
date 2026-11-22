@@ -696,7 +696,13 @@ impl Parser<'_> {
                 let right = self.reach(*value)?;
                 match &self.expressions[*target].kind {
                     | ExprKind::Name(name, ..) => {
-                        if right.updates.iter().any(|(other, _)| other == name) {
+                        // An update the right operand completes at a
+                        // sequence point of its own comes before the store.
+                        if right
+                            .updates
+                            .iter()
+                            .any(|(other, at)| other == name && !right.sealed.contains(at))
+                        {
                             return Err(self.unsequenced_error(name, node.range));
                         }
                         // The right operand's reads come before the store.
@@ -740,22 +746,27 @@ impl Parser<'_> {
             // §6.5.14p4, §6.5.17p2).
             | ExprKind::Binary("&&" | "||", left, right) | ExprKind::Comma(left, right) => {
                 reach = self.reach(*left)?;
+                reach.seal();
                 reach.join(self.reach(*right)?);
             },
             | ExprKind::Binary(_, left, right) =>
                 reach = self.unsequenced(self.reach(*left)?, self.reach(*right)?)?,
             // A sequence point follows the first operand, and only one of
             // the others is evaluated (C99 §6.5.15p4).
-            | ExprKind::Conditional(condition, then, otherwise) =>
-                for operand in [condition, then, otherwise] {
+            | ExprKind::Conditional(condition, then, otherwise) => {
+                reach = self.reach(*condition)?;
+                reach.seal();
+                for operand in [then, otherwise] {
                     reach.join(self.reach(*operand)?);
-                },
+                }
+            },
             // The arguments are unsequenced with one another, and a sequence
             // point precedes the call (C99 §6.5.2.2p10).
             | ExprKind::Call(_, arguments) | ExprKind::Library(_, arguments) => {
                 for argument in arguments {
                     reach = self.unsequenced(reach, self.reach(*argument)?)?;
                 }
+                reach.seal();
                 reach.join(Reach::opaque(node.range));
             },
             | ExprKind::Number(..)
@@ -1861,6 +1872,11 @@ struct Reach {
     /// `*`, `[]`, `->` or a member, and one that such an access or a call
     /// in another unsequenced operand might reach.
     checked: Vec<usize>,
+    /// The updates a sequence point inside the part completes: in the
+    /// first operand of `&&`, `||`, `?:` or a comma, or in a call's
+    /// arguments. They come before an assignment around the part stores,
+    /// though not before the part's unsequenced siblings.
+    sealed:  Vec<usize>,
 }
 
 impl Reach {
@@ -1886,6 +1902,18 @@ impl Reach {
         self.names.extend(other.names);
         self.opaque = self.opaque.or(other.opaque);
         self.checked.extend(other.checked);
+        self.sealed.extend(other.sealed);
+    }
+
+    /// Mark every update so far as completed by a sequence point that
+    /// follows the part.
+    fn seal(&mut self) {
+        self.sealed.extend(
+            self.updates
+                .iter()
+                .map(|&(_, node)| node)
+                .chain(self.checked.iter().copied()),
+        );
     }
 }
 

@@ -181,19 +181,31 @@ impl Machine {
         later: &Access,
     ) -> Diagnostic {
         let object = self.accessed(later);
+        let plain = object.trim_matches('`');
         let verb = |access: &Access| if access.write { "stores into" } else { "reads" };
-        let message = format!(
-            "`{}` {} {object}, and `{}` {} it too, with no sequence point between the two: \
-             between two sequence points C99 lets an object be modified at most once, and read \
-             only to compute the value stored there",
+        let participle = |access: &Access| if access.write { "stored into" } else { "read" };
+        let (later_text, earlier_text) = (
             Self::node_text(program, nodes, later.node),
-            verb(later),
             Self::node_text(program, nodes, earlier.node),
-            if earlier.write {
-                "stores into"
-            } else {
-                "reads"
-            },
+        );
+        // A bare name says only "x"; say what happens to it instead.
+        let first = if later_text == plain {
+            format!("{object} is {} here", participle(later))
+        } else {
+            format!("`{later_text}` {} {object}", verb(later))
+        };
+        let second = if earlier_text == plain {
+            format!(
+                "it is also {} elsewhere in the expression",
+                participle(earlier)
+            )
+        } else {
+            format!("`{earlier_text}` {} it too", verb(earlier))
+        };
+        let message = format!(
+            "{first}, and {second}, with no sequence point between the two: between two sequence \
+             points C99 lets an object be modified at most once, and read only to compute the \
+             value stored there"
         );
         Diagnostic::ub(
             self.state.source_range,
