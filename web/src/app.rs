@@ -2586,26 +2586,37 @@ fn About() -> impl IntoView {
                          operators, with && and || stopping as soon as they know the result, ?: and the comma \
                          operator; pointers to numbers, chars, structures or other pointers; arrays of numbers, of \
                          chars or of pointers, and string literals; structures, nested or reached through pointers; \
-                         const, casts and sizeof; file-scope and static objects; functions that return a number or a \
-                         structure, called anywhere in an expression; if and else, while and for; printf, puts and \
-                         putchar after #include <stdio.h>; and #define of a name as one number, character or \
+                         const, casts and sizeof; subtracting two pointers into one array and ordering two pointers \
+                         into one object (p - q, p < q); file-scope and static objects; functions that return a \
+                         number or a structure, called anywhere in an expression; assignments, compound \
+                         assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c \
+                         = next()) != 0), except in an initializer list; if and else, while and for; printf, puts \
+                         and putchar after #include <stdio.h>; and #define of a name as one number, character or \
                          string. Outside it are, among others: switch, do, break, continue and goto; typedef, enum, \
                          union and _Bool; void and static functions; pointers to functions; arrays of structures or \
-                         of arrays; subtracting or ordering two pointers (p - q, p < q); an assignment or increment \
-                         used as an operand, such as a = b++ or f(i++) (a statement may still join several with \
-                         commas, as in i++, j--, and a condition may update variables, as in i-- > 0 && n < 5, if a \
-                         sequence point separates each update from every other use of its variable, from *, [] \
-                         and ->, and from any call it is not an argument of); and the other library functions. A program that uses one of them stops before its first step, and \
-                         its note says so. One that needs more of the preprocessor (another header, a function-like \
-                         macro, #if) stops there too, and its note has a button to the compiler's Preprocessor \
-                         stage, which shows what bcc makes of it."
+                         of arrays; and the other library functions. A program that uses one of them stops before \
+                         its first step, and its note says so. One that needs more of the preprocessor (another \
+                         header, a function-like macro, #if) stops there too, and its note has a button to the \
+                         compiler's Preprocessor stage, which shows what bcc makes of it."
+                    </p>
+                    <p>
+                        "C lets an expression store into an object at most once between two sequence points, and \
+                         read it then only to compute the value stored. The engine checks every read and store \
+                         against the object it actually reaches, through *, [] and -> as well: two accesses to one \
+                         object with no sequence point between them, one a store, stop the run there as undefined \
+                         behavior, and where a variable is named twice, as in i = i++, the engine refuses the \
+                         program before its first step. A store that reads the object it stores into to find where \
+                         to store, as a[a[0]] = 1 does when a[0] is 0, also stops: C99's wording does not settle it."
                     </p>
                     <p>
                         "The engine evaluates operands left to right, one of the orders C allows: "
                         <a href=format!("{N1256_URL}#page=79") target="_blank" rel="noopener">
                             "C99 §6.5p3"<span class="sr-only">" (opens the standard in a new tab)"</span>
                         </a>
-                        " leaves the order unspecified, so a compiler may choose another."
+                        " leaves the order unspecified, so a compiler may choose another. A call's body runs before or \
+                         after the other operands as a whole; when the call and another operand use the same object \
+                         and one of them changes it, as in g + f() when f changes g, or two calls both print, the \
+                         order decides the result, so the engine stops there rather than choose."
                     </p>
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
