@@ -275,7 +275,8 @@ with `python3 scripts/generate_clang_builtin_purity.py --llvm DIR`, where
 `DIR` is the new toolchain with Clang's generated `include/clang/Basic`
 headers; `--check` reports a stale file instead. No CI job checks it: the
 distribution `build_support/llvm/tools.rs` installs has no Clang
-development headers.
+development headers. A unit test does check that the file lists every
+builtin bcc knows, so adding a builtin means regenerating it too.
 
 Sparse patterns in [`build_support/rust.sparse`](build_support/rust.sparse)
 retain Rust's LLVM gitlink, submodule metadata, and license files.

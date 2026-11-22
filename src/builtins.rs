@@ -40,6 +40,8 @@ mod type_generic;
 mod vector;
 mod x86;
 
+#[cfg(test)]
+pub(crate) use clang_purity::listed_spellings as test_clang_listed_spellings;
 pub(crate) use clang_purity::{
     ClangPurity,
     clang_purity,
@@ -62,6 +64,8 @@ pub(crate) use library::{
     ordinary,
 };
 pub(crate) use math::computes_without_errno;
+#[cfg(test)]
+pub(crate) use scalar::UNIMPLEMENTED as test_unimplemented;
 pub(crate) use scalar::unimplemented;
 #[cfg(test)]
 pub(crate) use x86::MERGED as test_merged_x86;

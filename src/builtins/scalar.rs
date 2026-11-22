@@ -2494,18 +2494,20 @@ const fn descriptor(
 /// GNU extension: GCC manual, "Constructing Calls" and "Other Builtins".
 /// <https://gcc.gnu.org/onlinedocs/gcc/Constructing-Calls.html>
 pub(crate) fn unimplemented(name: &str) -> Option<&'static str> {
-    [
-        "__builtin_apply",
-        "__builtin_apply_args",
-        "__builtin_call_with_static_chain",
-        "__builtin_powi",
-        "__builtin_powif",
-        "__builtin_powil",
-        "__builtin_return",
-        "__builtin_speculation_safe_value",
-        "__builtin_stack_restore",
-        "__builtin_stack_save",
-    ]
-    .into_iter()
-    .find(|&known| known == name)
+    UNIMPLEMENTED.iter().copied().find(|&known| known == name)
 }
+
+/// The spellings [`unimplemented`] knows. A call of one binds an opaque
+/// intrinsic, so `scripts/generate_clang_builtin_purity.py` reads them too.
+pub(crate) const UNIMPLEMENTED: &[&str] = &[
+    "__builtin_apply",
+    "__builtin_apply_args",
+    "__builtin_call_with_static_chain",
+    "__builtin_powi",
+    "__builtin_powif",
+    "__builtin_powil",
+    "__builtin_return",
+    "__builtin_speculation_safe_value",
+    "__builtin_stack_restore",
+    "__builtin_stack_save",
+];
