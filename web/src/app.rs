@@ -2647,28 +2647,30 @@ fn About() -> impl IntoView {
                     <p>
                         "The engine runs a bounded subset of C, the part the lessons use: the integer types from char \
                          to unsigned long long, written in decimal, octal or hexadecimal, and the three floating \
-                         types, at their x86-64 sizes; the arithmetic, shift, bitwise, comparison and logical \
-                         operators, with && and || stopping as soon as they know the result, ?: and the comma \
-                         operator; pointers to numbers, chars, structures or other pointers; arrays of numbers, of \
-                         chars or of pointers, and string literals; structures, nested or reached through pointers; \
-                         const, casts and sizeof; subtracting two pointers into one array and ordering two pointers \
-                         into one object (p - q, p < q); file-scope and static objects, whose initializers may be \
-                         constant expressions such as 1 << 3, string literals or the names of functions; functions \
-                         that return a number or a structure, called anywhere in an expression; pointers to \
-                         functions, declared directly or with a typedef, kept in variables, tables and parameters, \
-                         called as fp(x) or (*fp)(x), compared and tested for null; assignments, compound \
-                         assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c \
-                         = next()) != 0), except in an initializer list and before a . that selects a member of \
-                         their value; if and else, while and for; printf, puts and putchar after #include \
-                         <stdio.h>; and #define of a name as one number, character or string. Outside it are, among \
-                         others: switch, do, break, continue and goto; enum, union and _Bool, and a typedef of \
-                         anything but a pointer to a function; void and static functions; a function that returns \
-                         a pointer to a function, a structure member that points to one, and a pointer to a library \
-                         function; a static pointer initialized to an object's address; arrays of structures or of \
-                         arrays; and the other library functions. A program that uses one of them stops before \
-                         its first step, and its note says so. One that needs more of the preprocessor (another \
-                         header, a function-like macro, #if) stops there too, and its note has a button to the \
-                         compiler's Preprocessor stage, which shows what bcc makes of it."
+                         types, at their x86-64 sizes; enumerations and their constants, usable wherever C takes a \
+                         constant, such as a case label or an array's size; the arithmetic, shift, bitwise, \
+                         comparison and logical operators, with && and || stopping as soon as they know the result, \
+                         ?: and the comma operator; pointers to numbers, chars, structures or other pointers; arrays \
+                         of numbers, of chars or of pointers, and string literals; structures, nested or reached \
+                         through pointers; const, casts and sizeof; a typedef of any of these types, at file or block \
+                         scope; subtracting two pointers into one array and ordering two pointers into one object (p \
+                         - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
+                         such as 1 << 3, string literals or the names of functions; functions that return a number, \
+                         an enumeration, a structure or a pointer to a function, called anywhere in an expression; \
+                         pointers to functions, kept in variables, tables, parameters and structure members, called \
+                         as fp(x), (*fp)(x), s.f(x) or p->f(x), compared and tested for null; assignments, compound \
+                         assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c = \
+                         next()) != 0), except in an initializer list and before a . that selects a member of their \
+                         value; if and else, while and for, switch with its case and default labels directly in its \
+                         block, and break; printf, puts and putchar after #include <stdio.h>; and #define of a name \
+                         as one number, character or string. Outside it are, among others: do, continue and goto, \
+                         and a case label nested deeper in a switch's body; union and _Bool; void and static \
+                         functions; a function that returns any other pointer, and a pointer to a library function; \
+                         a static pointer initialized to an object's address; arrays of structures or of arrays; and \
+                         the other library functions. A program that uses one of them stops before its first step, \
+                         and its note says so. One that needs more of the preprocessor (another header, a \
+                         function-like macro, #if) stops there too, and its note has a button to the compiler's \
+                         Preprocessor stage, which shows what bcc makes of it."
                     </p>
                     <p>
                         "C lets an expression store into an object at most once between two sequence points, and \

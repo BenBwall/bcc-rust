@@ -10,7 +10,6 @@ use super::{
     finished,
     run,
     step,
-    stepped,
 };
 
 /// The last state of `source`'s run, which must stop with `status`.
@@ -48,8 +47,8 @@ fn an_enumeration_declares_constants_that_take_no_storage() {
         "Declare the constants of `enum color`",
     );
     assert_eq!(declared.step, 1, "the declaration comes before main");
-    assert!(declared.objects.is_empty(), "no object is created");
-    assert!(declared.event.objects.is_empty());
+    assert_eq!(declared.objects.len(), 0, "no object is created");
+    assert_eq!(declared.event.objects, Vec::<usize>::new());
     assert!(
         declared
             .event

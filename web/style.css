@@ -1123,6 +1123,8 @@
   .schematic-gate.is-skipped rect { fill: none; stroke: var(--ink-3); stroke-dasharray: 3 3; }
   .schematic-input.is-skipped text, .schematic-gate.is-skipped text { fill: var(--ink-2); font-weight: 400; }
   .schematic-empty { color: var(--ink-3); font-size: 12px; line-height: 1.6; }
+  .schematic-legend { margin: 8px 0 0; color: var(--ink-3); font-size: 12px; line-height: 1.6; }
+  .schematic-legend code { color: var(--ink-2); }
   /* Before the first step: what Figure 2 and Table 1 will hold, on a card
      in the blank tape's manner (its accent rule and capitals), in the
      figures' own colours. */

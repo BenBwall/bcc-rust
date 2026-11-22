@@ -458,7 +458,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         return_value: state
             .return_value
             .as_ref()
-            .map(|returned| value(returned, false, &objects, program)),
+            .map(|returned| value(returned, Scalars::default(), &objects, program)),
         stdout:       program.writes_output(),
         output:       state.output.clone(),
         written:      state.written,
@@ -530,7 +530,15 @@ fn object(
         parameter: object.parameter,
         literal:   object.literal,
         size:      object.size,
-        value:     value(&object.value, holds_chars(&object.r#type), objects, program),
+        value:     value(
+            &object.value,
+            Scalars {
+                chars:       holds_chars(&object.r#type),
+                enumeration: object.enumeration.map(usize::from),
+            },
+            objects,
+            program,
+        ),
     }
 }
 
@@ -716,11 +724,20 @@ fn character(value: i128) -> String {
     format!("'{text}'")
 }
 
-/// The page's form of an engine value; `chars` when its scalars are chars,
-/// which then carry their character.
+/// What an object's or a member's type says about how its integers read:
+/// a char's carry its character, and an enumeration's the name of the
+/// constant with their value.
+#[derive(Clone, Copy, Default)]
+struct Scalars {
+    chars:       bool,
+    enumeration: Option<usize>,
+}
+
+/// The page's form of an engine value, whose scalars read as `scalars`
+/// says.
 fn value(
     value: &abstract_machine::Value,
-    chars: bool,
+    scalars: Scalars,
     objects: &HashMap<usize, &abstract_machine::Object>,
     program: &Program,
 ) -> Value {
@@ -728,7 +745,12 @@ fn value(
         | abstract_machine::Value::Indeterminate => Value::Indeterminate,
         | abstract_machine::Value::Integer(number) => Value::Integer {
             text:      number.to_string(),
-            character: chars.then(|| character(*number)),
+            character: scalars.chars.then(|| character(*number)),
+            constant:  scalars
+                .enumeration
+                .and_then(|enumeration| program.enumerations().get(enumeration))
+                .and_then(|enumeration| enumeration.constant_named(*number))
+                .map(str::to_owned),
         },
         | abstract_machine::Value::Floating(real) => Value::Floating {
             text:  real.short(),
@@ -744,7 +766,7 @@ fn value(
         | abstract_machine::Value::Array(elements) => Value::Array {
             elements: elements
                 .iter()
-                .map(|element| self::value(element, chars, objects, program))
+                .map(|element| self::value(element, scalars, objects, program))
                 .collect(),
         },
         | &abstract_machine::Value::Function(function) => {
@@ -758,7 +780,7 @@ fn value(
         | abstract_machine::Value::Struct { structure, members } => {
             let layout = program.structures().get(*structure);
             Value::Struct {
-                name:    layout.map_or_else(String::new, |layout| format!("struct {}", layout.name)),
+                name:    layout.map_or_else(String::new, abstract_machine::Structure::spelling),
                 size:    layout.map_or(0, |layout| layout.size),
                 members: members
                     .iter()
@@ -774,7 +796,13 @@ fn value(
                             padding: declared.map_or(0, |member| member.padding),
                             value:   self::value(
                                 member,
-                                declared.is_some_and(|member| holds_chars(&member.r#type)),
+                                Scalars {
+                                    chars:       declared
+                                        .is_some_and(|member| holds_chars(&member.r#type)),
+                                    enumeration: declared
+                                        .and_then(|member| member.enumeration)
+                                        .map(usize::from),
+                                },
                                 objects,
                                 program,
                             ),
@@ -886,9 +914,9 @@ mod tests {
         );
 
         for source in [
-            "int main(void) { switch (0) {} return 0; }\n",
-            "/*\n#define X 1\n*/\nint main(void) { switch (0) {} return 0; }\n",
-            "// a line \\\n#define X 1\nint main(void) { switch (0) {} return 0; }\n",
+            "int main(void) { do {} while (0); return 0; }\n",
+            "/*\n#define X 1\n*/\nint main(void) { do {} while (0); return 0; }\n",
+            "// a line \\\n#define X 1\nint main(void) { do {} while (0); return 0; }\n",
             "int a = 1 & 2; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
             "int a = 1 & 2 /* a\n*/ #define\n;",
         ] {
@@ -1454,7 +1482,7 @@ mod tests {
             Err("Load a program before stepping.".into())
         );
         for source in [
-            "int main(void) { switch (0) {} return 0; }",
+            "int main(void) { do {} while (0); return 0; }",
             "int main(void) { return later(); } int later(void) { return 7; }",
         ] {
             let rejected = machine.load(source.to_owned());
@@ -1479,6 +1507,51 @@ mod tests {
         );
         let oversized = machine.load(" ".repeat(32 * 1024 + 1));
         assert_eq!(oversized.status, "error");
+    }
+
+    // An object of an enumeration reaches the page with the name of the
+    // constant it holds, as a member of one does; a value no constant has
+    // reads as its number alone.
+    #[test]
+    fn an_enumerations_objects_carry_their_constant() {
+        let mut machine = Machine::default();
+        let states = execute(
+            &mut machine,
+            "enum color { RED, GREEN = 5, BLUE };\nstruct pixel { int x; enum color c; };\nint \
+             main(void) {\n    enum color c = BLUE;\n    struct pixel p = {1, GREEN};\n    enum \
+             color odd = 7;\n    return c + p.c + odd;\n}\n",
+        );
+        let last = states.last().expect("a final state");
+        assert_eq!(last.status, "finished");
+        let object = |name: &str| {
+            last.objects
+                .iter()
+                .find(|object| object.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        assert_eq!(object("c").ty, "enum color");
+        assert_eq!(
+            crate::panels::value_text(&object("c").value).as_deref(),
+            Some("6 BLUE")
+        );
+        assert_eq!(
+            crate::panels::value_text(&object("odd").value).as_deref(),
+            Some("7")
+        );
+        let Value::Struct { members, .. } = &object("p").value else {
+            panic!("p is a structure");
+        };
+        assert_eq!(members[1].ty, "enum color");
+        assert_eq!(
+            crate::panels::value_text(&members[1].value).as_deref(),
+            Some("5 GREEN")
+        );
+        let declared = states
+            .iter()
+            .find(|state| state.event.kind == "enumeration")
+            .expect("the enumeration's step");
+        assert_eq!(declared.event.category, "lifetime");
+        assert_eq!(declared.objects, [] as [Object; 0]);
     }
 
     // A pointer to a function reaches the page as the function and where

@@ -55,6 +55,7 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                 | Some(tree) if !tree.nodes.is_empty() => view! {
                     <div class="schematic-scroll">{drawing(tree)}</div>
                     <ol class="sr-only" aria-label="Expression being evaluated">{outline(tree, tree.nodes.len() - 1)}</ol>
+                    {pointer_legend(tree)}
                 }.into_any(),
                 | _ if calling.with(Option::is_some) => {
                     let (waiting, call, called) = calling.get().unwrap_or_default();
@@ -319,4 +320,29 @@ fn outline(tree: &Tree, index: usize) -> AnyView {
         </li>
     }
     .into_any()
+}
+
+/// A line under the drawing when a wire carries a pointer: the wires write
+/// a pointer as `&` would make it, where the tape, the cells and Table 1
+/// draw the same value as an arrow, so the reader can match the two.
+fn pointer_legend(tree: &Tree) -> Option<impl IntoView + use<>> {
+    let pointer = tree.nodes.iter().find(|node| {
+        !node.lvalue
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.starts_with('&'))
+    })?;
+    let written = pointer.value.clone().unwrap_or_default();
+    let name = written.trim_start_matches('&').to_owned();
+    let drawn = if pointer.function {
+        format!("→{name}()")
+    } else {
+        format!("→{name}")
+    };
+    Some(view! {
+        <p class="schematic-legend">
+            "A wire writes a pointer as "<code>"&"</code>" would make it, "<code>{written}</code>"; the tape, the cells and Table 1 draw the same pointer as an arrow, "<code>{drawn}</code>"."
+        </p>
+    })
 }
