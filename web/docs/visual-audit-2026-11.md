@@ -4061,8 +4061,8 @@ stays defined still runs: a sequence point inside the left operand
 (`x += (y++, 2)`, `*p += id(y++)`), a read of the left operand's object
 on the right (`x *= (x, 3)`, `x += id(x)`), and a call that touches the
 object only in its body (`g += bump()`, 11 as GCC, Clang and tcc give;
-see "Left for later"). `++` and `--` are unaffected: their operand is the
-object itself.
+see "Left for later"). (Round 2 makes it stop.) `++` and `--` are
+unaffected: their operand is the object itself.
 
 Of my 270 compound probes, the 80 that update the variable by name are
 refused (70 of them ran before), the 100 that reach it through a pointer,
