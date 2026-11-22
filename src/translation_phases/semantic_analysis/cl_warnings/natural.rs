@@ -1,8 +1,9 @@
 //! The width `cl` takes an integer operand's value to have, which decides
 //! C4244 rather than the width of its type: `c + 1` of a `char` stays as
 //! wide as a `char`, `i & 0xff` and `i >> 24` of an `int` as wide as a byte,
-//! a constant as wide as its magnitude, and a `?:` whose condition is a
-//! constant as wide as the operand it selects. Measured against `cl` 19.44; a
+//! a constant as wide as its magnitude, or its two's complement if negative
+//! (as `cl` reads `~0ull`, -1), and a `?:` whose condition is a constant as
+//! wide as the operand it selects. Measured against `cl` 19.44; a
 //! form not measured has no width, and draws no warning.
 //! C99: §6.3.1.1 paragraph 2, p. 42; PDF p. 54 (the promotions that widen
 //! the operands); §6.5.7, p. 84; PDF p. 96; §6.5.10, p. 87; PDF p. 99;
@@ -34,7 +35,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if info.ice
             && let Some(value) = info.integer.filter(|value| value.wide.is_none())
         {
-            return Some(magnitude_bits(value.value.unsigned_abs()));
+            return Some(constant_bits(cl_signed_reading(value.value)));
         }
         match e.kind {
             | E::Parenthesized { expression } => self.cl_natural_bits(expression),
@@ -130,7 +131,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .integer
                     .filter(|value| divisor.ice && value.wide.is_none())
                 {
-                    | Some(value) => magnitude_bits(value.value.unsigned_abs().saturating_sub(1)),
+                    | Some(value) => remainder_bits(cl_signed_reading(value.value)),
                     | None => self.cl_natural_bits(right_expression)?,
                 };
                 Some(self.cl_natural_bits(left_expression)?.min(right))
@@ -207,7 +208,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// The bits a magnitude needs, without a sign: 8 for 255, 9 for 256.
-fn magnitude_bits(magnitude: u128) -> u32 {
-    magnitude.bit_width()
+/// The value `cl` reads for the integer constant `value`: a 64-bit unsigned
+/// constant of 2^63 or more as the signed one with its bits, so
+/// `0xFFFFFFFFFFFFFF80ull` is -128 and `~0ull` is -1; a narrower unsigned
+/// constant as itself.
+pub(super) const fn cl_signed_reading(value: i128) -> i128 {
+    if value >= 1 << 63 && value < 1 << 64 {
+        value - (1 << 64)
+    } else {
+        value
+    }
+}
+
+/// The bits `cl` takes the constant `value` to need: a non-negative one
+/// its magnitude's, without a sign (8 for 255, 9 for 256), and a negative
+/// one its two's complement's, with the sign (8 for -128, 9 for -129).
+const fn constant_bits(value: i128) -> u32 {
+    if value < 0 {
+        (!value).unsigned_abs().bit_width() + 1
+    } else {
+        value.unsigned_abs().bit_width()
+    }
+}
+
+/// The bits `cl` takes a remainder by the constant `divisor` to need: the
+/// magnitude's of a smaller value for a positive divisor (8 for 256), and
+/// for a negative one its magnitude's and a sign (8 for -127, 9 for -128).
+const fn remainder_bits(divisor: i128) -> u32 {
+    if divisor < 0 {
+        divisor.unsigned_abs().bit_width() + 1
+    } else {
+        divisor.unsigned_abs().saturating_sub(1).bit_width()
+    }
 }

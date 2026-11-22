@@ -746,7 +746,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return true;
         };
         if (1_i128 << 63..1_i128 << 64).contains(&value.value) {
-            return value.value - (1_i128 << 64) >= -(1_i128 << (width - 1));
+            return natural::cl_signed_reading(value.value) >= -(1_i128 << (width - 1));
         }
         let value = value.value;
         if value < 0 {

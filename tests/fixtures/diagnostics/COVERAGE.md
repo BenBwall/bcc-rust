@@ -78,8 +78,12 @@ condition `cl` folds (an integer, null pointer or floating constant, not a
 comma): C4244 measured and reported at the selected operand in each
 context, C4100 for a parameter named only in the other or behind `0 &&`,
 but not under `sizeof`, the parameters last first, and C4127 at the
-selected operand. The four match `cl` 19.44 (`/W4` or `/Wall`,
-`/diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
+selected operand. `sema-cl-signed-constants-msvc` pins how wide C4244 takes
+a constant: a 64-bit unsigned one of 2^63 or more read as negative (`~0ull`
+is -1, so `flag ? ~0ull : 0` narrows silently), a negative one as its two's
+complement (-32768 fits a `short`, -32769 does not), and a remainder by a
+negative constant as its magnitude and a sign. The five match `cl` 19.44
+(`/W4` or `/Wall`, `/diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto
 forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
