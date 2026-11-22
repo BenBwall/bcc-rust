@@ -548,20 +548,10 @@ impl Machine {
                 let left = self.pop_value()?;
                 let result = self.binary_value(operator, ty, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                // An integer 0 compared with a pointer is a null pointer
-                // constant (C99 §6.3.2.3p3); the narration names it as
-                // written.
-                let pointer =
-                    |value: &Value| matches!(value, Value::Pointer { .. } | Value::Function(_));
-                let spelled = self.operand_texts(program, instruction);
-                let constant = match (&left, &right) {
-                    | (value, Value::Integer(0)) if pointer(value) => spelled.get(1),
-                    | (Value::Integer(0), value) if pointer(value) => spelled.first(),
-                    | _ => None,
-                };
+                let constant = self.null_constant_text(program, instruction, (&left, &right));
                 self.binary(
                     range,
-                    (source, constant.map(String::as_str)),
+                    (source, constant.as_deref()),
                     operator,
                     ty,
                     left,
@@ -1292,6 +1282,24 @@ impl Machine {
                     })
                     .collect()
             })
+    }
+
+    /// The spelling of the operand of a binary operator that is an integer
+    /// 0 beside a pointer: a null pointer constant (C99 §6.3.2.3p3), which
+    /// the narration names as written.
+    fn null_constant_text(
+        &self,
+        program: &Program,
+        instruction: &Instruction,
+        (left, right): (&Value, &Value),
+    ) -> Option<String> {
+        let pointer = |value: &Value| matches!(value, Value::Pointer { .. } | Value::Function(_));
+        let at = match (left, right) {
+            | (value, Value::Integer(0)) if pointer(value) => 1,
+            | (Value::Integer(0), value) if pointer(value) => 0,
+            | _ => return None,
+        };
+        self.operand_texts(program, instruction).into_iter().nth(at)
     }
 
     /// Record that operand `child` of the node `instruction` evaluates,

@@ -4485,7 +4485,7 @@ impl Machine {
                 )
             } else if to == Type::VoidPointer {
                 (
-                    format!("Cast to void *: a null pointer, {new}"),
+                    String::from("Cast to void *: a null pointer"),
                     format!(
                         "`{form}` converts the null pointer constant {old} to void *, which gives \
                          a null pointer: it points to no object and no function."
