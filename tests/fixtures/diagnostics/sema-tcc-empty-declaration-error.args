@@ -1,0 +1,1 @@
+--compiler-identity=tcc --diagnostic-format=tcc --driver-name=tcc -std=gnu99 -fms-anonymous-structs -Wno-error=int-conversion -Wno-error=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types

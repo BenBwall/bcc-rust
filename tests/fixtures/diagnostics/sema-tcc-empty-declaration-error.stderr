@@ -1,0 +1,2 @@
+sema-tcc-empty-declaration-error.c:3: warning: unnamed struct/union that defines no instances
+sema-tcc-empty-declaration-error.c:4: error: identifier expected

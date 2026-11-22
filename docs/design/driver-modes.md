@@ -1600,7 +1600,7 @@ and what runs, except where noted:
 | Plain C99 `inline` definition with no external one | a local function (`nm`: `t f`), so the program links | GCC's rule: no external definition, `undefined symbol: f` at link time |
 | Assignment to a `const` object, `return 1;` in a `void` function | warnings (`assignment of read-only location`, `void function returns a value`) | same |
 | Implicit function declaration | `warning: implicit declaration of function 'foo'` | same |
-| Missing `return` in a non-`void` function | `warning: function might return no value: 'f'`, except in `int main` and in an `inline` function nothing calls | same, from bcc's control-flow analysis; see [warnings](#tccs-warnings) |
+| Missing `return` in a non-`void` function | `warning: function might return no value: 'f'`, except in `int main` and in an `inline` function nothing calls, which waits for the end of the unit | same, from bcc's control-flow analysis; see [warnings](#tccs-warnings) |
 
 Errors keep bcc's wording. The common ones read:
 
@@ -1629,9 +1629,44 @@ condition:
 | `assignment makes pointer from integer without a cast`, `... integer from pointer ...`, `assignment from incompatible pointer type`, `assignment discards qualifiers from pointer target type` | any assignment-like conversion |
 | `pointer/integer mismatch in comparison`, `... in conditional expression` | a pointer against an integer |
 | `pointer type mismatch in comparison('int *' and 'char *')`, `... in conditional expression ('int *' and 'char *')` | incompatible pointers, with bcc's spelling of the types |
-| `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than an `inline` function or a `main` returning TCC's `VT_INT`: `int`, `unsigned int`, an enumeration TCC represents as one of those, or a 32-bit `long` |
+| `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than a `main` returning TCC's `VT_INT`: `int`, `unsigned int`, an enumeration TCC represents as one of those, or a 32-bit `long` (below) |
 | `unnamed struct/union that defines no instances` | a structure or union with no tag and no declarator, a `typedef` among them, at the line of its `;` |
+| `static storage ignored for redefinition of 'f'` | a `static` declaration of a function after one with external linkage, neither of them `inline`; the function stays external |
+| `storage mismatch for redefinition of 'x'` | a declaration of an object whose `static` differs from its first declaration's, `extern` after `static` among them; the object keeps the first declaration's linkage |
+| `__mode__(X) not supported`, then an empty line | a `__mode__` other than `__QI__`, `__HI__`, `__SI__`, `__DI__` and `__word__`, which leaves the type alone |
+| `integer constant overflow` | an integer constant whose digits overflow 64 bits, or a decimal one without `u` of 2<sup>63</sup> or more, which keeps its wrapped value (typed `unsigned long` unless it says `ll`) |
+| `deprecated use of label at end of compound statement` | a label, `case` or `default` before a `}`, at the `}` |
+| `multi-character character constant` | a character constant of more than one byte, wide ones and those in `#if` included |
+| `A redefined`, `Ignoring unknown preprocessing directive #foo`, `unknown escape sequence: '\q'` (`'\x1'` for a byte that is not printable ASCII) | `tccpp.c`'s words for what bcc reports |
 | `assignment of read-only location`, `void function returns a value`, `'return' with no value`, `implicit declaration of function 'f'`, `empty case range`, `initializer-string for array is too long` | as worded |
+
+TCC refuses a declaration of no declarator whose type is not a structure,
+union or enumeration (`int;`, `typedef int;`, `const;`) with `identifier
+expected`, and accepts the others silently. It ignores a `section`
+attribute on anything but a function or a static object, a `typedef`
+among them, and the `__mode__` attribute after a declarator or spelled
+`mode`; it applies `__word__` as `int`. A wide character constant of
+several characters takes the last, and a narrow one packs its bytes as
+signed `char`s, as `'\xff\x01'` is `0xffffff01`.
+
+What `function might return no value` sees is TCC's: the C library's
+declarations lose their attributes, as glibc's `<sys/cdefs.h>` defines
+`__attribute__` away without `__GNUC__`, so a call of `exit`, `abort` or
+`longjmp` ends no path unless a declaration says `_Noreturn` or
+`noreturn` itself, and a statement expression ends none, a `return` inside
+it included. TCC keeps an `inline` definition that neither it nor an
+earlier declaration says `extern`, and that every earlier declaration also
+says `inline` or one of them `static`, as tokens, and compiles it after
+the rest of the unit only if code it compiles uses it (or a later
+declaration drops the `inline`), in passes over them in order
+(`gen_inline_functions`). Its warning comes then, after all the others,
+and 0.9.27 names the line before the closing brace (`inline.h:0` for a
+function on a header's first line), as it replays the tokens.
+When several warnings fall on one line and semantic analysis reports all
+of them, they come in the order it reports them, which is TCC's order of
+compilation (`return c ? p : q;` reports the conditional's mismatch before
+the conversion the `return` makes); otherwise in the order of their
+places.
 
 TCC's cast warning (`gen_cast`) differs from GCC's: it counts an
 enumeration as its integer type (`(enum E)p`) and a `_Bool` source as a
@@ -1646,29 +1681,21 @@ warning.
 
 These still differ from TCC 0.9.27:
 
-- Linkage conflicts (`int f(void); static int f(void) {...}`, `int x;
-  static int x;`) are errors, where TCC warns `static storage ignored for
-  redefinition of 'f'` or `storage mismatch for redefinition of 'x'`; an
-  unsupported `__mode__`, a too large integer constant and a `section`
-  attribute on a `typedef` are errors too, where TCC warns or says nothing.
-- `typedef struct { int a; };` is a syntax error and `int;` passes
-  silently, where TCC warns and refuses respectively.
-- bcc knows that `exit`, `abort` and `longjmp` do not return, so a function
-  ending in a call of one draws no `function might return no value`; TCC
-  sees glibc's declarations with their attributes removed and warns. TCC
-  also warns of an `inline` function that a call makes it compile, after
-  the rest of the unit (0.9.27 names line 0), and of a `return` only
-  inside a statement expression; bcc does not.
-- 0.9.27 warns `deprecated use of label at end of compound statement`
-  (`mob` does not); bcc accepts the label silently, as C23 does.
-- When several warnings fall on one line, bcc may print them in another
-  order (`return c ? p : q;` in a function returning `int`).
-- `tccpp.c`'s warnings keep bcc's words: `macro `A` redefined
-  differently` for `A redefined`, ``unknown escape sequence `\q` `` for
-  `unknown escape sequence: '\q'`, ``unknown preprocessing directive
-  `#foo` `` for `Ignoring unknown preprocessing directive #foo`; 0.9.27's
-  `multi-character character constant` has no counterpart (`mob` dropped
-  it too).
+- TCC defers every diagnostic of a deferred `inline` function's body, and
+  says nothing of one nothing uses; bcc defers only `function might return
+  no value` and reports the rest where they stand.
+- `int f(void); static inline int f(void) {...}` is silent in both, but TCC
+  compiles a local function and bcc keeps it external.
+- A label before the `}` that ends an `if` or loop body that is no block
+  (`if (x) l: }`) is an error, where TCC warns and closes the enclosing
+  block.
+- A constant in a macro's replacement list draws `unknown escape sequence`
+  and, in `#if`, `multi-character character constant` at the `#define`'s
+  line, where TCC names the line of each use.
+- A line with a warning from preprocessing or parsing as well as those of
+  semantic analysis orders them all by place, so in `char *s = "\q"; int
+  f(int c, int *p, char *q) { return c ? p : q; }` the conversion comes
+  before the conditional's mismatch.
 
 Of the repository's `tests/fixtures/programs`, those both TCCs compile
 (the `long double`, `<math.h>`, `scanf`, `stdio`, wide-stream, POSIX

@@ -248,3 +248,6 @@ pp	DeprecatedMacro	sema-atomic-deprecated.c	rendered
 pp	DirectiveExtension	pp-c23-directives-gcc.c	rendered
 pp	C23DirectiveExtension	pp-c23-directives-clang.c	rendered
 pp	ConditionalArmAfterElse	pp-conditional-arms-clang.c	rendered
+pp	TccIntegerOverflow	pp-tcc-integer-overflow.c	rendered
+pp	TccMulticharacterConstant	pp-tcc-wording.c	rendered
+parser	TccLabelAtBlockEnd	parser-tcc-label-at-block-end.c	rendered

@@ -1,0 +1,11 @@
+pp-tcc-wording.c:3: warning: A redefined
+pp-tcc-wording.c:4: warning: Ignoring unknown preprocessing directive #foo
+pp-tcc-wording.c:5: warning: unknown escape sequence: '\q'
+pp-tcc-wording.c:5: warning: unknown escape sequence: '\x1'
+pp-tcc-wording.c:5: warning: unknown escape sequence: '\xc3'
+pp-tcc-wording.c:6: warning: multi-character character constant
+pp-tcc-wording.c:7: warning: multi-character character constant
+pp-tcc-wording.c:8: warning: multi-character character constant
+pp-tcc-wording.c:9: warning: multi-character character constant
+pp-tcc-wording.c:10: warning: multi-character character constant
+pp-tcc-wording.c:10: warning: multi-character character constant

@@ -1,0 +1,9 @@
+pp-tcc-integer-overflow.c:3: warning: integer constant overflow
+pp-tcc-integer-overflow.c:4: warning: integer constant overflow
+pp-tcc-integer-overflow.c:5: warning: integer constant overflow
+pp-tcc-integer-overflow.c:6: warning: integer constant overflow
+pp-tcc-integer-overflow.c:7: warning: integer constant overflow
+pp-tcc-integer-overflow.c:10: warning: integer constant overflow
+pp-tcc-integer-overflow.c:11: warning: integer constant overflow
+pp-tcc-integer-overflow.c:12: warning: integer constant overflow
+pp-tcc-integer-overflow.c:13: warning: integer constant overflow

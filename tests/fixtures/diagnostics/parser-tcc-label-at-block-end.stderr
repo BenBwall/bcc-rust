@@ -1,0 +1,4 @@
+parser-tcc-label-at-block-end.c:6: warning: deprecated use of label at end of compound statement
+parser-tcc-label-at-block-end.c:7: warning: deprecated use of label at end of compound statement
+parser-tcc-label-at-block-end.c:9: warning: deprecated use of label at end of compound statement
+parser-tcc-label-at-block-end.c:14: warning: deprecated use of label at end of compound statement

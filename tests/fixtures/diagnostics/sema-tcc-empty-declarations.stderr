@@ -1,0 +1,3 @@
+sema-tcc-empty-declarations.c:3: warning: unnamed struct/union that defines no instances
+sema-tcc-empty-declarations.c:4: warning: unnamed struct/union that defines no instances
+sema-tcc-empty-declarations.c:5: warning: unnamed struct/union that defines no instances

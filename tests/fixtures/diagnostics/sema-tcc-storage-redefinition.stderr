@@ -1,0 +1,7 @@
+sema-tcc-storage-redefinition.c:4: warning: static storage ignored for redefinition of 'f'
+sema-tcc-storage-redefinition.c:6: warning: static storage ignored for redefinition of 'k'
+sema-tcc-storage-redefinition.c:10: warning: storage mismatch for redefinition of 'x'
+sema-tcc-storage-redefinition.c:12: warning: storage mismatch for redefinition of 'z'
+sema-tcc-storage-redefinition.c:14: warning: storage mismatch for redefinition of 'y'
+sema-tcc-storage-redefinition.c:16: warning: storage mismatch for redefinition of 'v'
+sema-tcc-storage-redefinition.c:18: warning: storage mismatch for redefinition of 's'
