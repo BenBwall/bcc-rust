@@ -1425,10 +1425,19 @@ impl Machine {
                 integer.spelling(),
                 width_text(integer)
             ),
+            // C promises an enumerated type only the range of its constants
+            // (C99 §6.7.2.2p4), not its compatible type's minimum range.
             | Type::Integer(integer) if let Some(enumeration) = &enumeration => format!(
-                "{} object ({}). Its value is",
+                "{} object ({} byte{} on x86-64, {} to {}; {}). Its value is",
                 article(enumeration),
-                width_text(integer)
+                integer.bytes(),
+                if integer.bytes() == 1 { "" } else { "s" },
+                integer.min(),
+                integer.max(),
+                named
+                    .enumeration
+                    .and_then(|index| self.enumerations.get(index))
+                    .map_or_else(String::new, enumerations::promised_range)
             ),
             | Type::Array(element, count) if let Some(enumeration) = &enumeration => format!(
                 "an array of {count} {enumeration} objects, {} bytes each ({} bytes on x86-64). \
@@ -1655,8 +1664,6 @@ impl Machine {
         event
     }
 
-    /// Before `main`: static object `index` of the program, now object
-    /// `id`, exists with its initial value.
     /// The name of the enumeration a declaration's type is, or is an array
     /// of or a pointer to, when `named` says it is one.
     fn enumeration_name(&self, named: Named) -> Option<String> {
@@ -1683,10 +1690,17 @@ impl Machine {
                 .iter()
                 .map(|constant| constant.name.clone())
                 .collect();
+            // An array of an enumeration's objects: each element is one.
+            let (whose, holder) = if self.object_type(id).is_some_and(Type::is_array) {
+                ("Its element type", "each element")
+            } else {
+                ("Its type", "it")
+            };
             let _ = write!(
                 text,
-                " Its type is an enumeration: {}. So it may hold any value of that type; C does \
-                 not check that it holds one of {}.",
+                " {whose}, {}, is an enumeration, {}. So {holder} may hold any value of that \
+                 type; C does not check that it holds one of {}.",
+                enumeration.name,
                 enumerations::compatible_text(enumeration),
                 if constants.len() == 1 {
                     format!("its constant, {}", constants[0])
@@ -1709,6 +1723,8 @@ impl Machine {
         (text, cited)
     }
 
+    /// Before `main`: static object `index` of the program, now object
+    /// `id`, exists with its initial value.
     pub(super) fn static_storage(&self, program: &Program, index: usize, id: usize) -> Event {
         let declared = &program.statics[index];
         let object = &self.state.objects[id - 1];
@@ -5640,6 +5656,15 @@ impl Machine {
         // assignment (C99 §6.5.2.2p7).
         for ((argument, ty), id) in arguments.iter().zip(types).zip(&parameters) {
             let object = &self.state.objects[id - 1];
+            // A parameter of an enumerated type is named as declared, with
+            // the integer type it is compatible with (C99 §6.7.2.2p4).
+            let parameter_type = |to: &str| {
+                if object.enumeration.is_some() {
+                    format!("{} (compatible with {to})", object.r#type)
+                } else {
+                    String::from(to)
+                }
+            };
             if let (Some(from), Some(to)) = (
                 ty.arithmetic(),
                 self.object_type(*id).and_then(Type::arithmetic),
@@ -5651,7 +5676,7 @@ impl Machine {
                     " The argument for `{}` converts to the parameter's type, {}, as if by \
                      assignment: {words}.",
                     object.name,
-                    to.spelling()
+                    parameter_type(to.spelling())
                 );
                 cited.push(clauses::VARIADIC_ARGUMENTS);
                 cited.extend(clauses_used);
@@ -5669,7 +5694,7 @@ impl Machine {
                     " The argument for `{}` converts to the parameter's type, {}, as if by \
                      assignment: {words}.",
                     object.name,
-                    to.spelling()
+                    parameter_type(to.spelling())
                 );
                 cited.extend([clauses::VARIADIC_ARGUMENTS, clause]);
             }

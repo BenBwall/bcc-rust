@@ -53,21 +53,33 @@ fn count(number: usize) -> String {
         .map_or_else(|| format!("{number}"), |word| String::from(*word))
 }
 
-/// How `enumeration`'s compatible integer type was chosen, in GCC's words.
+/// Which integer type `enumeration` is compatible with, and how GCC chose
+/// it: "compatible with unsigned int: C lets …".
 pub(super) fn compatible_text(enumeration: &Enumeration) -> String {
     let negative = enumeration.integer == Integer::Int;
     format!(
-        "{} itself is compatible with {}: C lets each implementation choose an integer type that \
-         holds every constant, and GCC chooses unsigned int unless a constant is negative, as {}, \
-         and int otherwise",
-        enumeration.name,
+        "compatible with {}: C lets each implementation choose an integer type that holds every \
+         constant, and GCC chooses int when a constant is negative{}",
         enumeration.integer.spelling(),
         if negative {
-            "one is here"
+            ", as one is here, and unsigned int otherwise"
         } else {
-            "none is here"
+            " and unsigned int otherwise, as here, where none is"
         },
     )
+}
+
+/// What C promises of the range of `enumeration`'s type: only that it
+/// holds the values of its constants, "0 to 6" (C99 §6.7.2.2p4).
+pub(super) fn promised_range(enumeration: &Enumeration) -> String {
+    let values = enumeration.constants.iter().map(|constant| constant.value);
+    match (values.clone().min(), values.max()) {
+        | (Some(low), Some(high)) if low == high =>
+            format!("C promises only that it holds the value of its constant, {low}"),
+        | (Some(low), Some(high)) =>
+            format!("C promises only that it holds the values of its constants, {low} to {high}"),
+        | _ => String::from("C promises only that it holds the values of its constants"),
+    }
 }
 
 /// How the constant `index` of `enumeration` got its value.
@@ -160,7 +172,8 @@ impl Machine {
         }
         let _ = write!(
             text,
-            "The type {}, so an object of it holds {} bytes.",
+            "The type {} itself is {}, so an object of it holds {} bytes.",
+            enumeration.name,
             compatible_text(enumeration),
             enumeration.integer.bytes()
         );

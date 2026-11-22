@@ -107,7 +107,7 @@ fn an_enumeration_declares_constants_that_take_no_storage() {
         declare
             .event
             .explanation
-            .contains("Its type is an enumeration"),
+            .contains("Its type, enum color, is an enumeration"),
         "{}",
         declare.event.explanation
     );
@@ -623,5 +623,86 @@ fn break_and_fall_through_say_what_the_body_holds() {
             .iter()
             .all(|state| !state.event.title.starts_with("Run on past")),
         "the switch's jump to `case 2:` passes no label"
+    );
+}
+
+// C99 §6.7.2.2p4: an enumerated type promises only the range of its
+// constants, whatever its compatible type holds.
+#[test]
+fn an_enumerations_object_promises_only_its_constants_range() {
+    let declared = |source: &str, title: &str| {
+        let states = finished(source, 0);
+        step(&states, EventKind::Declare, title)
+            .event
+            .explanation
+            .clone()
+    };
+    let color = declared(
+        "enum color { RED, GREEN = 5, BLUE };\nint main(void) {\n    enum color c = BLUE;\n    \
+         return c - BLUE;\n}\n",
+        "Declare `c` (enum color)",
+    );
+    assert!(
+        color.contains(
+            "an enum color object (4 bytes on x86-64, 0 to 4294967295; C promises only that it \
+             holds the values of its constants, 0 to 6)"
+        ),
+        "{color}"
+    );
+    assert!(!color.contains("65535"), "{color}");
+    assert!(
+        color.contains(
+            "Its type, enum color, is an enumeration, compatible with unsigned int: C lets each \
+             implementation choose"
+        ),
+        "{color}"
+    );
+    let signed = declared(
+        "enum level { LOW = -3, HIGH = 11 };\nint main(void) {\n    enum level l = LOW;\n    \
+         return l + 3;\n}\n",
+        "Declare `l` (enum level)",
+    );
+    assert!(
+        signed.contains("-2147483648 to 2147483647; C promises only"),
+        "{signed}"
+    );
+    assert!(signed.contains("its constants, -3 to 11"), "{signed}");
+    assert!(
+        signed.contains("GCC chooses int when a constant is negative, as one is here"),
+        "{signed}"
+    );
+    let elements = declared(
+        "enum color { RED, GREEN };\nint main(void) {\n    enum color a[2] = { GREEN, RED };\n    \
+         return a[1];\n}\n",
+        "Declare `a`",
+    );
+    assert!(
+        elements.contains(
+            "Its element type, enum color, is an enumeration, compatible with unsigned int"
+        ) && elements.contains("So each element may hold any value of that type"),
+        "{elements}"
+    );
+    let single = declared(
+        "enum one { ONLY = 4 };\nint main(void) {\n    enum one o = ONLY;\n    return o - 4;\n}\n",
+        "Declare `o` (enum one)",
+    );
+    assert!(single.contains("the value of its constant, 4)"), "{single}");
+    // A parameter of an enumerated type is named as declared.
+    let states = finished(
+        "enum color { RED, GREEN };\nint is_green(enum color c) { return c == GREEN; }\nint \
+         main(void) { return is_green(-1); }\n",
+        0,
+    );
+    let call = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Call)
+        .expect("the call");
+    assert!(
+        call.event.explanation.contains(
+            "The argument for `c` converts to the parameter's type, enum color (compatible with \
+             unsigned int)"
+        ),
+        "{}",
+        call.event.explanation
     );
 }
