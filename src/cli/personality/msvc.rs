@@ -276,7 +276,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         } else if clang_cl
             && text.starts_with('-')
             && known.is_none()
-            && let Some(unknown) = known::cl_unknown_option(text, intel.is_some())
+            && let Some(unknown) = known::cl_unknown_option(text, intel.is_some()).or_else(|| {
+                // icx-cl's wrapper drops an option of Intel's classic table
+                // with its own warning (#10430), which bcc does not give,
+                // before clang-cl's driver could ignore it.
+                (intel.is_some() && icx::is_classic_option(text))
+                    .then(|| known::cl_unknown_option(text, false))
+                    .flatten()
+            })
         {
             // A GCC or Clang option clang-cl's driver does not take, which
             // it ignores (`-fsigned-char`, `-ffreestanding`, `-std=c11`);

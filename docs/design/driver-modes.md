@@ -1469,7 +1469,8 @@ warning (`Driver::ParseArgStrings`). That covers GCC's and Clang's
 `personality/options/clang-cl-unknown.list` lists them, frozen by
 `scripts/update_driver_options.py --clang-cl-unknown`, which asks the pinned
 Clang's clang-cl about every option the GCC and Clang lists, GCC's
-`--help` and Clang's `--autocomplete=-` name. A flag is ignored as
+`--help` and Clang's `--autocomplete=-` name, each `-f` and `-m` flag in
+both forms (`-fno-strict-volatile-bitfields`). A flag is ignored as
 spelled, an option with a value with any value (`-std=c11`, `-lm`,
 `-isystem/usr/include`), and an ignored option takes no argument, so in
 `-isystem dir` the directory is an input, as in clang-cl. bcc's own

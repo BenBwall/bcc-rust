@@ -254,7 +254,7 @@ def unknown_option_candidates(gcc):
     """Every option name GCC or the pinned Clang lists, a value cut off at
     its `=`: the frozen `-f` and `-m` lists, GCC's other options from its
     `--help` (which vary little between its versions) and Clang's
-    `--autocomplete`."""
+    `--autocomplete`, and each `-f` and `-m` flag's other form."""
     names = set()
     for kind in ("flags", "machine"):
         for compiler in ("gcc", "clang"):
@@ -274,6 +274,13 @@ def unknown_option_candidates(gcc):
         name = name.split("=", 1)[0] + "=" if "=" in name else name
         if name.startswith("-") and len(name) > 1 and name != "--driver-mode=":
             cut.add(name)
+    # GCC lists most of its `-f` and `-m` flags in one form only; the other
+    # is as much an option (`-fno-strict-volatile-bitfields`).
+    for name in list(cut):
+        prefix = name[:2]
+        if prefix in ("-f", "-m") and not name.endswith(("=", "-")):
+            rest = name[2:]
+            cut.add(prefix + (rest[3:] if rest.startswith("no-") else "no-" + rest))
     return cut
 
 
