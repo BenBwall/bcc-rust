@@ -1327,16 +1327,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         }
         // `cl` has no such builtin; its C runtime has `pow`.
         let gcc = configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc;
-        let (name, exponent) = if !gcc {
+        let (name, exponent) = if gcc {
+            let (name, _) = intrinsic.powi_routine().expect("a powi intrinsic");
+            (name, exponent)
+        } else {
             let name = match ty {
                 | Type::F32 => "powf",
                 | Type::F64 => "pow",
                 | _ => "powl",
             };
             (name, self.convert(Opcode::Sitofp, ty, exponent))
-        } else {
-            let (name, _) = intrinsic.powi_routine().expect("a powi intrinsic");
-            (name, exponent)
         };
         let params = self
             .scratch

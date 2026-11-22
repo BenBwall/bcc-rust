@@ -148,7 +148,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         super::print(&icx::cl_logo(), true);
     }
     // clang-cl reads its warning options before it parses the others.
-    let unknown_argument = clang_cl.then(|| unknown_argument_severity(&expanded));
+    let unknown_argument = unknown_argument_severity(&expanded);
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -258,11 +258,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.verbose |= clang_cl && matches!(text, "-v" | "-###");
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
             // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
-            if clang.starts_with("-W") || clang == "--no-warnings" {
-                clang_options.extend(clang_warning_option(clang));
-            } else {
-                clang_options.push(clang.into());
-            }
+            clang_options.extend(front_end_option(clang));
             continue;
         }
         let remaining = arguments.len();
@@ -276,20 +272,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         } else if clang_cl
             && text.starts_with('-')
             && known.is_none()
-            && let Some(unknown) = known::cl_unknown_option(text, intel.is_some()).or_else(|| {
-                // icx-cl's wrapper drops an option of Intel's classic table
-                // with its own warning (#10430), which bcc does not give,
-                // before clang-cl's driver could ignore it.
-                (intel.is_some() && icx::is_classic_option(text))
-                    .then(|| known::cl_unknown_option(text, false))
-                    .flatten()
-            })
+            && let Some(unknown) = ignored_option(text, intel.is_some())
         {
-            // A GCC or Clang option clang-cl's driver does not take, which
-            // it ignores (`-fsigned-char`, `-ffreestanding`, `-std=c11`);
-            // the Clang options it takes only after `/clang:`.
-            let severity = unknown_argument.unwrap_or(DriverSeverity::Warning);
-            if state.unknown_argument(invocation, severity, text, unknown.nearest.as_deref()) {
+            // An option clang-cl's driver ignores (`-ffreestanding`), which
+            // `/clang:` gives its front end.
+            if state.unknown_argument(invocation, unknown_argument, text, &unknown) {
                 return Err(MainError::Reported(1));
             }
         } else if clang_cl && text.starts_with('-') {
@@ -318,10 +305,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         format_args!("'{text}' is not supported: {why}"),
                     ),
                 }
-            } else if text.starts_with("-W") || text == "--no-warnings" {
-                state.bcc.extend(clang_warning_option(text));
             } else {
-                state.bcc.push(argument.into());
+                state.bcc.extend(front_end_option(text));
             }
         } else {
             // An option clang-cl knows takes its value from the next
@@ -718,22 +703,36 @@ fn clang_cl_query(invocation: &Invocation, text: &str) -> Option<Plan> {
     }
 }
 
-/// What bcc reads for a warning option clang-cl hands its front end, bare
-/// or after `/clang:`: Clang's front end warns about the ones it does not
-/// take, `-Wl,`, `-Wa,` and `-Wp,` among them, which clang-cl's driver does
-/// not have; it takes the others, of which bcc reads those it implements.
-/// The groups of the driver's own warnings (`-Wno-unknown-argument`) are
-/// taken and have no effect there. `--no-warnings` is `-w`.
-fn clang_warning_option(text: &str) -> Option<OsString> {
+/// What bcc reads for a Clang option clang-cl hands its front end, bare or
+/// after `/clang:`: most as they are. Clang's front end warns about the
+/// warning options it does not take, `-Wl,`, `-Wa,` and `-Wp,` among them,
+/// which clang-cl's driver does not have; it takes the others, of which bcc
+/// reads those it implements. The groups of the driver's own warnings
+/// (`-Wno-unknown-argument`) are taken and have no effect there.
+/// `--no-warnings` is `-w`.
+fn front_end_option(text: &str) -> Option<OsString> {
     if text == "--no-warnings" {
         Some("-w".into())
+    } else if !text.starts_with("-W") {
+        Some(text.into())
     } else if !warning_options::clang_takes(text) {
         Some(format!("--unknown-warning-option={text}").into())
-    } else if implements_language_option(text) {
-        Some(text.into())
     } else {
-        None
+        implements_language_option(text).then(|| text.into())
     }
+}
+
+/// The GCC or Clang option `text` that clang-cl's driver, or icx-cl's with
+/// `intel`, ignores as unknown ([`known::cl_unknown_option`]). icx-cl's
+/// wrapper drops an option of Intel's classic table with its own warning
+/// (#10430), which bcc does not give, before clang-cl's driver could ignore
+/// it; such an option clang-cl ignores stays ignored.
+fn ignored_option(text: &str, intel: bool) -> Option<known::ClUnknown> {
+    known::cl_unknown_option(text, intel).or_else(|| {
+        (intel && icx::is_classic_option(text))
+            .then(|| known::cl_unknown_option(text, false))
+            .flatten()
+    })
 }
 
 /// How a warning of Clang's driver that is on by default comes out.
@@ -1664,9 +1663,9 @@ impl State {
         invocation: &Invocation,
         severity: DriverSeverity,
         argument: &str,
-        nearest: Option<&str>,
+        unknown: &known::ClUnknown,
     ) -> bool {
-        let message = match nearest {
+        let message = match &unknown.nearest {
             | Some(nearest) => format!(
                 "unknown argument ignored in clang-cl '{argument}'; did you mean '{nearest}'?"
             ),
