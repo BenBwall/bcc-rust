@@ -514,6 +514,36 @@ pub static TERMS: [Term; 57] = [
         page:       47,
     },
     Term {
+        id:         "enumeration-constant",
+        name:       "Enumeration constant",
+        phrases:    &["enumeration constant", "enumeration constants"],
+        definition: "A name an enumeration declares for an int value, such as RED in enum color \
+                     { RED, GREEN }. It is a constant, not an object: it takes no storage, and \
+                     the compiler puts its value wherever the name appears.",
+        clause:     "6.4.4.3p2",
+        page:       71,
+    },
+    Term {
+        id:         "typedef-name",
+        name:       "Typedef name",
+        phrases:    &["typedef name", "typedef names"],
+        definition: "A second name for a type, declared with typedef, such as celsius in typedef \
+                     double celsius;. It makes no new type and no object: a declaration written \
+                     with it means exactly what one written with the type would.",
+        clause:     "6.7.7p3",
+        page:       135,
+    },
+    Term {
+        id:         "case-label",
+        name:       "Case label",
+        phrases:    &["case label", "case labels"],
+        definition: "A place in a switch's body, case 3: or default:, that the switch can jump to. \
+                     The switch jumps to the label whose constant equals its value, and execution \
+                     then runs on past later labels until a break.",
+        clause:     "6.8.4.2p5",
+        page:       146,
+    },
+    Term {
         id:         "pointer-arithmetic",
         name:       "Pointer arithmetic",
         phrases:    &["pointer arithmetic"],
