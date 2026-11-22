@@ -276,9 +276,14 @@ clauses! {
     SEQUENCE_POINTS = "Cp1", "p. 439; PDF p. 451", "Sequence points (Annex C)",
         "The sequence points: each call, after its arguments; the end of the first operand of &&, \
          ||, ?: and the comma operator; the end of each full declarator and of each full \
-         expression; and in the library, just before a function returns, after the actions of \
-         each printf or scanf conversion, and around each call to a qsort or bsearch comparison \
-         function.";
+         expression; and in the library, just before a function returns; after the actions of \
+         each conversion specifier of a formatted input/output function, which are fprintf, \
+         fscanf, printf, scanf, snprintf, sprintf, sscanf, vfprintf, vfscanf, vprintf, vscanf, \
+         vsnprintf, vsprintf and vsscanf, and their wide versions fwprintf, fwscanf, swprintf, \
+         swscanf, vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf and \
+         wscanf; and just before and just after each call qsort or bsearch makes to its \
+         comparison function, and between that call and any movement of the objects passed to \
+         it.";
     /// C99: §6.5.2.1 paragraph 1, p. 70; PDF p. 82.
     SUBSCRIPT_OPERANDS = "6.5.2.1p1", "p. 70; PDF p. 82", "Array subscripting",
         "One operand of [] must be a pointer to an object and the other an integer, in either \
