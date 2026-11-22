@@ -1152,6 +1152,14 @@ impl Parser<'_> {
                 "a member of a call's result is outside this subset; store the result first",
             ));
         }
+        // C99 §6.5.2.3p3: `(s = t).a` reads a member of the value the
+        // assignment yields, which is no lvalue.
+        if matches!(operand.kind, ExprKind::Assign { .. }) {
+            return Err(self.error(
+                "a member of an assignment's value, as in (s = t).a, is outside this subset; \
+                 assign first, then read the member of the structure assigned to",
+            ));
+        }
         let id = match (arrow, operand.ty) {
             | (false, Type::Struct(id)) => id,
             | (true, Type::StructPointer(id)) => {

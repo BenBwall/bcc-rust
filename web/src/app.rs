@@ -2600,9 +2600,10 @@ fn About() -> impl IntoView {
                          into one object (p - q, p < q); file-scope and static objects; functions that return a \
                          number or a structure, called anywhere in an expression; assignments, compound \
                          assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c \
-                         = next()) != 0), except in an initializer list; if and else, while and for; printf, puts \
-                         and putchar after #include <stdio.h>; and #define of a name as one number, character or \
-                         string. Outside it are, among others: switch, do, break, continue and goto; typedef, enum, \
+                         = next()) != 0), except in an initializer list and before a . that selects a member of \
+                         their value; if and else, while and for; printf, puts and putchar after #include \
+                         <stdio.h>; and #define of a name as one number, character or string. Outside it are, among \
+                         others: switch, do, break, continue and goto; typedef, enum, \
                          union and _Bool; void and static functions; pointers to functions; arrays of structures or \
                          of arrays; and the other library functions. A program that uses one of them stops before \
                          its first step, and its note says so. One that needs more of the preprocessor (another \
