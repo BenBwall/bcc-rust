@@ -82,8 +82,9 @@ impl ClConversion {
     }
 }
 
-/// A conversion warning `cl` gives: C4305 when `truncation`, else C4244 or
-/// C4242 by its group, from and to the types as `cl` names them, at `site`.
+/// A conversion warning `cl` gives: C4305 when `truncation`, else C4244,
+/// C4242 or C4245 by its group, from and to the types as `cl` names them, at
+/// `site`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ClFinding<'s> {
     group:      G,
@@ -157,6 +158,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !self.cl_conversions_checked(site) || self.cl_unknown_constant(source) {
             return None;
         }
+        // `cl` reports a conversion where the value is: at the operator of
+        // the expression that computes it, or where it begins.
+        let site = {
+            let mut value = source.expression;
+            while let E::Parenthesized { expression } = value.kind {
+                value = expression;
+            }
+            match value.kind {
+                | E::Binary { .. } => value.operator_source_vectors.unwrap_or(value.source_vectors),
+                | _ => value.source_vectors,
+            }
+        };
         let constant = self.cl_constant(source);
         let (mut group, truncation) = match (from, to) {
             | (Arithmetic::Floating(_), Arithmetic::Bool)
@@ -189,6 +202,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } else {
                     return None;
                 },
+            // C4245, a negative constant made unsigned, whatever the widths.
+            | (Arithmetic::Integer { .. }, Arithmetic::Integer { signed: false, .. })
+                if constant
+                    && source
+                        .integer
+                        .is_some_and(|value| value.signed && value.value < 0) =>
+                (G::ClSignedConversion, false),
             | (
                 Arithmetic::Integer { bits, int, .. },
                 Arithmetic::Integer {
@@ -485,6 +505,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         } = finding;
         let text = if truncation {
             format_in!(self.scratch, "'{words}': truncation from '{from}' to '{to}'")
+        } else if group == G::ClSignedConversion {
+            format_in!(
+                self.scratch,
+                "'{words}': conversion from '{from}' to '{to}', signed/unsigned mismatch"
+            )
         } else {
             format_in!(
                 self.scratch,

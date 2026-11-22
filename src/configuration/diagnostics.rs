@@ -1351,6 +1351,8 @@ diagnostic_groups! {
     /// narrowings C4244 reports otherwise of a value `cl` has not computed
     /// at `int`, and of a 64-bit one.
     ClNarrowingConversion => None, Ignored, false;
+    /// bcc's: `cl`'s C4245, a negative constant made unsigned, at level 4.
+    ClSignedConversion => None, Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
     /// GCC's words for a function returning its own automatic object's

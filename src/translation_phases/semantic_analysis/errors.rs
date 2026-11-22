@@ -1678,6 +1678,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ClIntConversion
                     | crate::configuration::DiagnosticGroup::ClTruncation
                     | crate::configuration::DiagnosticGroup::ClNarrowingConversion
+                    | crate::configuration::DiagnosticGroup::ClSignedConversion
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
@@ -3282,6 +3283,7 @@ impl SemanticErrorKind {
             ) => 4244,
             | Self::ValueWarning(G::ClTruncation) => 4305,
             | Self::ValueWarning(G::ClNarrowingConversion) => 4242,
+            | Self::ValueWarning(G::ClSignedConversion) => 4245,
             | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
             | Self::VoidReturnMismatch => 4098,
             | Self::ReturnMismatch => 4033,
@@ -3569,6 +3571,8 @@ impl SemanticError {
             | SemanticErrorKind::ValueWarning(G::ClTruncation) => ("C4305", arena.alloc_str(name)),
             | SemanticErrorKind::ValueWarning(G::ClNarrowingConversion) =>
                 ("C4242", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClSignedConversion) =>
+                ("C4245", arena.alloc_str(name)),
             | SemanticErrorKind::UndeclaredIdentifier
             | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",

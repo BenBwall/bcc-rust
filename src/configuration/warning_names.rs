@@ -86,7 +86,7 @@ const fn off(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
 /// Learn: "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd,
 /// /we, /wo, /Wv, /WX (Warning level)" and each warning's page, as for C4090,
 /// C4113 and C4532.
-pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 25] = [
+pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 26] = [
     coded(4013, 3, &[G::ImplicitFunctionDeclaration]),
     // One group holds both, so `/wd` and `/we` of either set both.
     coded(4033, 1, &[G::ReturnMismatch]),
@@ -116,6 +116,7 @@ pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 25] = [
     enabled(4244, 3, &[G::ClWideConversion]),
     enabled(4244, 4, &[G::ClIntConversion]),
     enabled(4305, 2, &[G::ClTruncation]),
+    enabled(4245, 4, &[G::ClSignedConversion]),
     // Off by default: what `cl` reports in place of some of C4244's
     // narrowings when it is shown.
     off(4242, 4, &[G::ClNarrowingConversion]),

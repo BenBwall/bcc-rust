@@ -11,6 +11,9 @@
 use crate::{
     translation_phases::{
         parsing::{
+            AttributeSyntax,
+            SpecifierExtension,
+            SpecifierExtensionKind,
             declaration_syntax::{
                 DeclarationSpecifiers,
                 Declarator,
@@ -102,7 +105,7 @@ impl<'tu> Written<'tu> {
         specifiers: &DeclarationSpecifiers<'tu>,
         declarator: Option<Declarator<'tu>>,
     ) -> Self {
-        let base = if specifiers.extensions.is_some() {
+        let base = if Self::retyping(specifiers.extensions) {
             Base::Unknown
         } else {
             Self::base(specifiers.type_specifiers)
@@ -119,7 +122,7 @@ impl<'tu> Written<'tu> {
         member: &StructDeclaration<'tu>,
         declarator: Option<Declarator<'tu>>,
     ) -> Self {
-        let base = if member.extensions.is_some() {
+        let base = if Self::retyping(member.extensions) {
             Base::Unknown
         } else {
             Self::base(member.type_specifiers)
@@ -129,6 +132,22 @@ impl<'tu> Written<'tu> {
             qualifiers: member.type_qualifiers,
             declarator,
         }
+    }
+
+    /// Whether the specifiers' `extensions` may change the type they name,
+    /// as a GNU or standard attribute (`mode`, `vector_size`) may; a
+    /// `__declspec`, a calling convention and the storage-class and
+    /// alignment extensions do not.
+    fn retyping(mut extensions: Option<&'tu SpecifierExtension<'tu>>) -> bool {
+        while let Some(extension) = extensions {
+            if let SpecifierExtensionKind::Attributes(attributes) = extension.kind
+                && attributes.syntax != AttributeSyntax::Msvc
+            {
+                return true;
+            }
+            extensions = extension.next;
+        }
+        false
     }
 
     const fn base(specifiers: TypeSpecifiers<'tu>) -> Base {
@@ -276,10 +295,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut spelling = None;
         let mut typed = false;
         for &operand in operands {
-            let operand_ty = self
-                .types
-                .non_atomic(self.expression_info(operand).ty)
-                .unqualified();
+            let info = self.expression_info(operand);
+            // `cl` keeps an unsigned bit-field unsigned where C promotes it
+            // to `int`, so the operation's type is not bcc's.
+            if info.bit_field.is_some_and(|width| width < 32)
+                && self.integer_type(info.ty).is_some_and(|(_, signed)| !signed)
+            {
+                return None;
+            }
+            let operand_ty = self.types.non_atomic(info.ty).unqualified();
             if operand_ty != ty {
                 continue;
             }
@@ -378,8 +402,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let TypeKind::Tag(tag) = self.types.nodes[self.types.non_atomic(ty).index] else {
                     return None;
                 };
-                let tag = self.declaring_tag(tag, member.name)?;
-                Some((*self.cl_written_fields.get(&(tag, member.name))?, 0))
+                let declaring = self.declaring_tag(tag, member.name)?;
+                let mut written = *self.cl_written_fields.get(&(declaring, member.name))?;
+                // The member of a qualified object has its qualifiers, and
+                // so do the elements of an array member.
+                let mut derivations = ArenaVec::new_in(self.scratch);
+                if !Self::derivations(written.declarator, &mut derivations) {
+                    return None;
+                }
+                if derivations
+                    .iter()
+                    .all(|derivation| matches!(derivation, Derivation::Array))
+                {
+                    written.qualifiers |= ty.qualifiers
+                        & (TypeQualifiers::CONST | TypeQualifiers::VOLATILE);
+                }
+                Some((written, 0))
             },
             | E::Unary {
                 operator: U::Indirection,
