@@ -186,6 +186,24 @@ impl Machine {
         }
     }
 
+    /// Where two accesses to one object meet, as the source names it: the
+    /// first scalar both reach, so a call that stores a whole structure
+    /// and an operand that reads one member name that member, or the whole
+    /// object when both reach all of it.
+    fn overlap(&self, first: &Access, second: &Access) -> String {
+        if first.target == STANDARD_OUTPUT || first.target != second.target {
+            return self.accessed(first);
+        }
+        let start = first.start.max(second.start);
+        let end = (first.start + first.count).min(second.start + second.count);
+        let whole = self.object_type(first.target).map(|ty| self.leaf_count(ty));
+        if start == 0 && end > 1 && whole == Some(end) {
+            let name = &self.state.objects[first.target - 1].name;
+            return format!("`{name}`");
+        }
+        self.location(first.target, start)
+    }
+
     /// Two unsequenced accesses to one object, one a store: undefined.
     fn unsequenced(
         &self,
@@ -244,7 +262,7 @@ impl Machine {
         } else {
             (earlier, later)
         };
-        let object = self.accessed(call);
+        let object = self.overlap(call, other);
         let verb = |access: &Access| match (access.write, access.target == STANDARD_OUTPUT) {
             | (true, true) => "writes to",
             | (true, false) => "stores into",
