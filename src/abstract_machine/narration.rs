@@ -8,7 +8,10 @@
 mod floating;
 mod upcoming;
 
-use std::fmt::Write;
+use std::{
+    borrow::Cow,
+    fmt::Write,
+};
 
 use floating::{
     conversion_words,
@@ -1156,13 +1159,55 @@ impl Machine {
     }
 
     /// Execution entered a block, which created the objects `begun`;
-    /// `iteration` when the block is a loop body.
+    /// `iteration` when the block is a loop body. `written` is the source
+    /// at the block's start: `{` for a compound statement, and otherwise
+    /// `for` or the first token of a substatement without braces, which C
+    /// makes a block all the same (C99 §6.8.4p3, §6.8.5p5).
     pub(super) fn enter_block(
         &self,
         range: SourceRange,
+        written: &str,
         begun: Vec<usize>,
         iteration: bool,
     ) -> Event {
+        let braced = written == "{";
+        if begun.is_empty() && !braced {
+            let (what, scope, clause) = if written == "for" {
+                (
+                    "a for statement",
+                    "so a name declared in its first clause can be used only in the loop",
+                    clauses::LOOP_BODY,
+                )
+            } else if iteration {
+                (
+                    "a loop body",
+                    "even without braces, so a name declared in it can be used only inside it",
+                    clauses::LOOP_BODY,
+                )
+            } else {
+                (
+                    "each branch of an if statement",
+                    "even without braces, so a name declared in it can be used only inside it",
+                    clauses::SELECTION_BLOCK,
+                )
+            };
+            return noted(
+                explained(
+                    Event::new(EventKind::EnterBlock, range, String::from("Enter a block")),
+                    &format!(
+                        "Execution enters a block with no braces: {what} is a block of its own, a \
+                         new scope."
+                    ),
+                    &format!(
+                        "{} is a block of its own, inside the block around it, {scope}. This \
+                         block declares no objects of its own, so no lifetimes begin here.",
+                        sentence_case(what)
+                    ),
+                    &[clause, clauses::BLOCK_SCOPE],
+                ),
+                Topic::Scope,
+            );
+        }
         if begun.is_empty() {
             return noted(
                 explained(
@@ -1205,19 +1250,28 @@ impl Machine {
                  until something is stored."
             )
         };
+        let at = if braced {
+            "at this brace"
+        } else {
+            "as the for statement begins"
+        };
         let mut text = format!(
             "An automatic object (a local that is not static, and not a variable-length array, \
              which this machine leaves out) lives from entry into its block until the block's \
-             execution ends. So {names} {verb} {them} lifetime at this brace, before the \
-             declaration is reached, and {each} holds an indeterminate value. The name cannot be \
-             used yet: a name's scope begins just after its declarator. Entering a nested block \
-             or calling a function suspends this block without ending it."
+             execution ends. So {names} {verb} {them} lifetime {at}, before the declaration is \
+             reached, and {each} holds an indeterminate value. The name cannot be used yet: a \
+             name's scope begins just after its declarator. Entering a nested block or calling a \
+             function suspends this block without ending it."
         );
         let mut cited = vec![
             clauses::AUTOMATIC_LIFETIME,
             clauses::SCOPE_START,
             clauses::INDETERMINATE,
-            clauses::COMPOUND_STATEMENT,
+            if braced {
+                clauses::COMPOUND_STATEMENT
+            } else {
+                clauses::LOOP_BODY
+            },
         ];
         if iteration {
             text.push_str(
@@ -2719,7 +2773,7 @@ impl Machine {
         let location = self.location_of(target, offset, structure);
         // Only the outer `*`: `**pp`'s operand is `*pp`.
         let written = snippet(source, range);
-        let operand = written.strip_prefix('*').unwrap_or(written).trim_start();
+        let operand = written.strip_prefix('*').unwrap_or(&written).trim_start();
         // `*p++` is `*(p++)`: the `*` follows the value `p++` yields, the
         // old one (C99 §6.5.2.4p2).
         let updated = ["++", "--"].into_iter().find_map(|update| {
@@ -4663,7 +4717,7 @@ impl Machine {
                 range,
                 String::from("Discard the result"),
             ),
-            &match called(snippet(source, range)) {
+            &match called(&snippet(source, range)) {
                 | Some(function) => format!(
                     "The value `{function}` returned, {}, is not used: the statement called it \
                      only for what it does.",
@@ -6192,8 +6246,20 @@ fn count_word(count: usize) -> String {
     }
 }
 
-fn snippet(source: &str, range: SourceRange) -> &str {
-    source.get(range.start..range.end).unwrap_or("")
+/// The source `range` covers, on one line: a line break and the
+/// indentation after it become one space, as in the "what comes next" text.
+fn snippet(source: &str, range: SourceRange) -> Cow<'_, str> {
+    let text = source.get(range.start..range.end).unwrap_or("");
+    if !text.contains('\n') {
+        return Cow::Borrowed(text);
+    }
+    let mut lines = text.lines();
+    let mut output = String::from(lines.next().unwrap_or("").trim_end());
+    for line in lines {
+        output.push(' ');
+        output.push_str(line.trim());
+    }
+    Cow::Owned(output)
 }
 
 /// `text` with its first letter capitalized.

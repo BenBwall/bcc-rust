@@ -535,6 +535,10 @@ clauses! {
     /// C99: §6.8.3 paragraph 2, p. 132; PDF p. 144.
     EXPRESSION_STATEMENT = "6.8.3p2", "p. 132; PDF p. 144", "Expression and null statements",
         "An expression statement is evaluated only for its side effects; its value is discarded.";
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+    SELECTION_BLOCK = "6.8.4p3", "p. 133; PDF p. 145", "Selection statements",
+        "An if statement is a block, and each of its branches is a block inside it, with or \
+         without braces.";
     /// C99: §6.8.4.1 paragraph 2, pp. 133-134; PDF pp. 145-146.
     IF_STATEMENT = "6.8.4.1p2", "pp. 133-134; PDF pp. 145-146", "The if statement",
         "The first branch runs if the condition is nonzero; the else branch runs if it is zero.";

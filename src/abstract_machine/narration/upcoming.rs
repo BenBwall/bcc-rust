@@ -41,7 +41,7 @@ impl Machine {
         next: &Instruction,
     ) -> Upcoming {
         let source = &program.source;
-        let code = || code(snippet(source, next.range));
+        let code = || code(&snippet(source, next.range));
         // The spellings of the operands of the node `next` evaluates, in
         // source order: `i` and `1` for `i + 1`.
         let operands = || self.operand_spellings(program, next);
@@ -722,7 +722,7 @@ impl Machine {
                 node.children
                     .iter()
                     .filter_map(|&child| nodes.get(child))
-                    .map(|child| code(snippet(&program.source, child.range)))
+                    .map(|child| code(&snippet(&program.source, child.range)))
                     .collect()
             })
     }

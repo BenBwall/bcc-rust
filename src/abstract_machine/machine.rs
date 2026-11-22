@@ -177,7 +177,8 @@ impl Machine {
                     self.state.objects[id - 1].declared = false;
                     begun.push(id);
                 }
-                self.enter_block(range, begun, *iteration)
+                let written = source.get(range.start..range.end).unwrap_or("");
+                self.enter_block(range, written, begun, *iteration)
             },
             | Op::Leave => {
                 let frame = &self.activations[top];
