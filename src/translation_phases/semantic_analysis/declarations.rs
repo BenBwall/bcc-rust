@@ -966,15 +966,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             linkage
         };
-        if kind == BindingKind::Function && tcc {
-            if self.note_tcc_inline(
+        if kind == BindingKind::Function
+            && tcc
+            && self.note_tcc_inline(
                 name.name,
                 spec.function_specifiers.is_inline,
                 spec.storage_class,
                 definition,
-            ) {
-                self.unused.tcc_deferred.push((self.bindings.len(), None));
-            }
+            )
+        {
+            self.unused.tcc_deferred.push((self.bindings.len(), None));
         }
         self.check_main_declaration(name, declarator, spec, ty, kind, linkage);
         if self.unused.tracking {
