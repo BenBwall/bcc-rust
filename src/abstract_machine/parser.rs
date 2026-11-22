@@ -104,7 +104,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             continue;
         }
         if parser.at("struct") && (parser.peek(1) == "{" || parser.peek(2) == "{") {
-            parser.structure_definition(None)?;
+            parser.structure_definition()?;
             continue;
         }
         if parser.at("enum") && (parser.peek(1) == "{" || parser.peek(2) == "{") {
@@ -180,7 +180,7 @@ impl<'a> Parser<'a> {
         total_code: &mut usize,
         name: Token<'a>,
         returns: Type,
-        header: Vec<(Option<Token<'a>>, Type, Option<usize>)>,
+        header: Vec<Parameter<'a>>,
     ) -> Result<(), Diagnostic> {
         let parser = self;
         if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
@@ -2945,7 +2945,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `struct tag { members };` at file scope, on its own.
-    fn structure_definition(&mut self, _typedef: Option<&str>) -> Result<(), Diagnostic> {
+    fn structure_definition(&mut self) -> Result<(), Diagnostic> {
         let start = self.current();
         let id = self.structure_body()?;
         if !self.structures[id].tagged {
