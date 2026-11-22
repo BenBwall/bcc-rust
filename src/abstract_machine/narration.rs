@@ -799,23 +799,42 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             ),
             Some(Topic::IndeterminateRead),
         ),
-        | "unsupported" if diagnostic.clause == Some(&clauses::EVALUATION_ORDER) => (
-            "Stopped: the result depends on an open order",
-            String::from(
-                "A compiler may run the call before or after the other operand, and the two \
-                 orders give different results here, so the machine stops rather than pick one.",
-            ),
-            String::from(
-                "C leaves the order of most operands unspecified, and a call's body runs as a \
-                 whole, before or after the others. When the call and another operand use the \
-                 same object and one of them changes it, each order gives a different result, and \
-                 a compiler may pick either, so the same program can print different things under \
-                 different compilers. This machine always evaluates left to right, so rather than \
-                 show one answer as if it were C's, it stops. Store the call's result in a \
-                 variable first, so that a sequence point orders the two.",
-            ),
-            Some(Topic::SequencePoint),
-        ),
+        | "unsupported"
+            if diagnostic.clause == Some(&clauses::EVALUATION_ORDER)
+                || diagnostic.clause == Some(&clauses::LIST_SIDE_EFFECTS) =>
+        {
+            let (other, others) = if diagnostic.clause == Some(&clauses::LIST_SIDE_EFFECTS) {
+                (
+                    "another initializer in the list",
+                    "C leaves unspecified the order in which an initializer list's expressions \
+                     have their side effects",
+                )
+            } else {
+                (
+                    "the other operand",
+                    "C leaves the order of most operands unspecified",
+                )
+            };
+            (
+                "Stopped: the result can depend on an open order",
+                format!(
+                    "A compiler may run the call before or after {other}, and the result can \
+                     depend on which runs first, so the machine stops rather than pick one."
+                ),
+                format!(
+                    "{others}, and a call's body runs as a whole, before or after the others. \
+                     When the call and another expression use the same object and one of them \
+                     changes it, the result can depend on which runs first, and a compiler may \
+                     pick either, so the same program can print different things under different \
+                     compilers. This machine evaluates left to right and cannot tell whether the \
+                     two orders would agree, so rather than show one answer as if it were C's, it \
+                     stops. It finds the clash only once both have run, so what the first of them \
+                     did, such as printing, has already happened here. Store the call's result in \
+                     a variable first, so that a sequence point orders the two."
+                ),
+                Some(Topic::SequencePoint),
+            )
+        },
         | "unsupported" if diagnostic.clause == Some(&clauses::UNSEQUENCED) => (
             "Stopped: a store that reads where it stores",
             String::from(

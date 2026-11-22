@@ -6199,14 +6199,15 @@ fn an_order_c_leaves_open_stops_the_run() {
         let session = run(source);
         let state = session.state();
         assert_eq!(state.status, "error", "{source}");
+        let listed = source.contains("int a[2] =");
         assert_eq!(
             state.diagnostics[0].clause.map(|clause| clause.id),
-            Some("6.5p3"),
+            Some(if listed { "6.7.8p23" } else { "6.5p3" }),
             "{source}"
         );
         assert_eq!(
             state.event.title,
-            "Stopped: the result depends on an open order"
+            "Stopped: the result can depend on an open order"
         );
         assert!(
             state.diagnostics[0]
@@ -6216,6 +6217,57 @@ fn an_order_c_leaves_open_stops_the_run() {
             state.diagnostics[0].message
         );
     }
+    // The order can decide the result, not must: `inc() + inc()` is 3
+    // either way, and the stop says only that it can depend on the order.
+    // Of an initializer list's elements, C99 §6.7.8p23 leaves the order
+    // open.
+    let session =
+        run("int g = 0; int inc(void) { return ++g; } int main(void) { return inc() + inc(); }");
+    let state = session.state();
+    assert_eq!(state.status, "error");
+    assert!(
+        state.diagnostics[0]
+            .message
+            .contains("the result can depend on it"),
+        "{}",
+        state.diagnostics[0].message
+    );
+    assert!(
+        state
+            .event
+            .summary
+            .contains("the result can depend on which runs first"),
+        "{}",
+        state.event.summary
+    );
+    for text in [&state.event.summary, &state.event.explanation] {
+        assert!(!text.contains("different result"), "{text}");
+    }
+    let session = run(
+        "int g = 0; int inc(void) { return ++g; } int main(void) { int a[2] = {inc(), g}; return \
+         a[0]; }",
+    );
+    let state = session.state();
+    assert_eq!(state.status, "error");
+    assert_eq!(
+        state.diagnostics[0].clause.map(|clause| clause.id),
+        Some("6.7.8p23")
+    );
+    assert!(
+        state.diagnostics[0]
+            .message
+            .contains("another initializer, `g`, reads it"),
+        "{}",
+        state.diagnostics[0].message
+    );
+    assert!(
+        state
+            .event
+            .summary
+            .contains("another initializer in the list"),
+        "{}",
+        state.event.summary
+    );
     // Calls that only read, a call's store before the assignment that uses
     // its value, and calls on different objects run.
     returned(

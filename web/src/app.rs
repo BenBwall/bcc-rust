@@ -2626,7 +2626,8 @@ fn About() -> impl IntoView {
                         " leaves the order unspecified, so a compiler may choose another. A call's body runs before or \
                          after the other operands as a whole; when the call and another operand use the same object \
                          and one of them changes it, as in g + f() when f changes g, or two calls both print, the \
-                         order decides the result, so the engine stops there rather than choose."
+                         order can decide the result, so the engine stops wherever that could happen rather \
+                         than choose."
                     </p>
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \

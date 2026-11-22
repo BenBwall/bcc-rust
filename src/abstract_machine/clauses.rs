@@ -516,6 +516,10 @@ clauses! {
     /// C99: §6.7.8 paragraph 21, p. 127; PDF p. 139.
     PARTIAL_INITIALIZER = "6.7.8p21", "p. 127; PDF p. 139", "Initialization",
         "Array elements without an initializer of their own are initialized to zero.";
+    /// C99: §6.7.8 paragraph 23, p. 128; PDF p. 140.
+    LIST_SIDE_EFFECTS = "6.7.8p23", "p. 128; PDF p. 140", "Initialization",
+        "C leaves unspecified the order in which the side effects of an initializer list's \
+         expressions happen.";
     /// C99: §6.8 paragraph 4, p. 131; PDF p. 143.
     FULL_EXPRESSION = "6.8p4", "p. 131; PDF p. 143", "Statements and blocks",
         "The end of a full expression (an initializer, an expression statement, a condition, a \

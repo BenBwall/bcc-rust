@@ -32,8 +32,8 @@ l03_and_value.c	finished	25 steps	returns Some(Integer(0))	""
 l04_null_guard.c	finished	18 steps	returns Some(Integer(0))	""
 l05_while_and.c	finished	76 steps	returns Some(Integer(2))	""
 l06_not_and.c	finished	17 steps	returns Some(Integer(1))	""
-o01_printf_arguments.c	error	15 steps	the call `next()` stores into `counter`, and the other call `next()` stores into it too; C99 leaves unspecified which of the two is evaluated first, and the result depends on it, so compilers may differ: this machine stops rather than choose an order for you
-o02_global_and_call.c	error	15 steps	the call `bump()` stores into `g`, and another operand, `g`, reads it; C99 leaves unspecified which of the two is evaluated first, and the result depends on it, so compilers may differ: this machine stops rather than choose an order for you
+o01_printf_arguments.c	error	15 steps	the call `next()` stores into `counter`, and the other call `next()` stores into it too; C99 leaves unspecified which of the two is evaluated first, and the result can depend on it, so compilers may differ: this machine stops rather than choose an order for you
+o02_global_and_call.c	error	15 steps	the call `bump()` stores into `g`, and another operand, `g`, reads it; C99 leaves unspecified which of the two is evaluated first, and the result can depend on it, so compilers may differ: this machine stops rather than choose an order for you
 p01_pointer_to_pointer.c	finished	25 steps	returns Some(Integer(5))	""
 p02_out_parameter.c	finished	29 steps	returns Some(Integer(3))	""
 p03_array_of_pointers.c	finished	36 steps	returns Some(Integer(20))	""

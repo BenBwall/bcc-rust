@@ -24,9 +24,10 @@
 //! A call's body is separated from the expression that calls it, but C
 //! leaves the order of a call and the other operands unspecified (C99
 //! §6.5p3): when the call reads or writes an object that another operand
-//! also accesses, and one of them writes it, the result depends on an order
-//! the machine would have to choose, so it stops instead. Library calls
-//! count as writes of standard output and reads of the strings they take.
+//! also accesses, and one of them writes it, the result can depend on an
+//! order the machine would have to choose, so it stops instead. Library
+//! calls count as writes of standard output and reads of the strings they
+//! take.
 //!
 //! C99: §6.5 paragraphs 2-3, p. 67; PDF p. 79.
 //! C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
@@ -251,22 +252,29 @@ impl Machine {
         };
         let call_text = Self::node_text(program, nodes, call.node);
         let other_text = Self::node_text(program, nodes, other.node);
+        // Two elements of one initializer list share no operator.
+        let listed = common_ancestor(nodes, call.node, other.node).is_none();
+        let (sibling, clause) = if listed {
+            ("initializer", &clauses::LIST_SIDE_EFFECTS)
+        } else {
+            ("operand", &clauses::EVALUATION_ORDER)
+        };
         let second = if other.call && other_text == call_text {
             format!("the other call `{other_text}` {} it too", verb(other))
         } else if other.call {
             format!("the call `{other_text}` {} it too", verb(other))
         } else {
-            format!("another operand, `{other_text}`, {} it", verb(other))
+            format!("another {sibling}, `{other_text}`, {} it", verb(other))
         };
         let message = format!(
             "the call `{call_text}` {} {object}, and {second}; C99 leaves unspecified which of \
-             the two is evaluated first, and the result depends on it, so compilers may differ: \
-             this machine stops rather than choose an order for you",
+             the two is evaluated first, and the result can depend on it, so compilers may \
+             differ: this machine stops rather than choose an order for you",
             verb(call),
         );
         Diagnostic {
-            citation: Some(clauses::EVALUATION_ORDER.citation),
-            clause: Some(&clauses::EVALUATION_ORDER),
+            citation: Some(clause.citation),
+            clause: Some(clause),
             ..Diagnostic::new(
                 "unsupported",
                 Self::node_range(nodes, later.node, self.state.source_range),
@@ -348,6 +356,15 @@ fn ancestors(nodes: &[ExpressionNode], node: usize) -> Vec<usize> {
     chain
 }
 
+/// The innermost node that has both `a` and `b` among itself and its
+/// descendants, if they are in one expression tree.
+fn common_ancestor(nodes: &[ExpressionNode], a: usize, b: usize) -> Option<usize> {
+    let above_b = ancestors(nodes, b);
+    ancestors(nodes, a)
+        .into_iter()
+        .find(|node| above_b.contains(node))
+}
+
 /// Whether `node` is an operator whose first operand a sequence point ends:
 /// `&&`, `||`, `?:` or a comma (C99 Annex C).
 fn sequences_first(node: &ExpressionNode) -> bool {
@@ -385,7 +402,7 @@ fn order(nodes: &[ExpressionNode], a: &Access, b: &Access) -> Order {
     let above_b = ancestors(nodes, b.node);
     // Two elements of one initializer list: C leaves the order of their
     // side effects unspecified (C99 §6.7.8p23).
-    let Some(&common) = above_a.iter().find(|node| above_b.contains(node)) else {
+    let Some(common) = common_ancestor(nodes, a.node, b.node) else {
         return Order::Unsequenced;
     };
     let operator = &nodes[common];
