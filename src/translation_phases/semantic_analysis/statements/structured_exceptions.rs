@@ -213,8 +213,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang's `-Wjump-seh-finally` and `cl`'s C4532 for a `break`,
     /// `continue` or `return` that leaves a `__finally` block: Clang warns
     /// of each at its keyword (`CheckJumpOutOfSEHFinally`), and `cl` of
-    /// `break` and `continue` only, naming the keyword. Microsoft Learn:
-    /// "try-finally statement", "Compiler Warning (level 1) C4532".
+    /// `break` and `continue` only, naming the keyword, or `'identifier'`
+    /// when the statement it ends or continues is a do-while loop (`cl`
+    /// 19.44). Microsoft Learn: "try-finally statement", "Compiler Warning
+    /// (level 1) C4532".
     pub(in crate::translation_phases::semantic_analysis) fn check_finally_exit(
         &mut self,
         statement: &'tu Statement<'tu>,
@@ -223,9 +225,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(point) = self.control.point() {
             let cl = self.context.configuration.compiler_identity()
                 == crate::configuration::CompilerIdentity::Msvc;
-            let target = match exit {
+            let (target, do_while) = match exit {
                 | FinallyExit::Return if cl => return,
-                | FinallyExit::Return => None,
+                | FinallyExit::Return => (None, false),
                 | FinallyExit::Break | FinallyExit::Continue => {
                     let Some(&(owner, nearest_loop)) = self.control.targets.last() else {
                         return;
@@ -236,13 +238,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | (FinallyExit::Continue, None) => return,
                         | _ => owner,
                     };
-                    Some(self.control.statements[owner.0].entry.region)
+                    let owner = &self.control.statements[owner.0];
+                    (
+                        Some(owner.entry.region),
+                        matches!(owner.syntax.kind, StatementType::DoWhile { .. }),
+                    )
                 },
             };
             if self.leaves_finally(point.region, target) {
                 // Only `cl`'s words name the statement.
                 let name = self.context.configuration.msvc_wording().then(|| {
                     self.context.string_cache.intern(match exit {
+                        | FinallyExit::Break | FinallyExit::Continue if do_while => "identifier",
                         | FinallyExit::Break => "break",
                         | FinallyExit::Continue => "continue",
                         | FinallyExit::Return => "return",

@@ -219,3 +219,36 @@ int depths(int p) {
     return 0;
 }
 
+// cl names a break or continue whose loop is a do-while 'identifier'.
+int do_while(int p) {
+    do {
+        __try {
+            work(p);
+        } __finally {
+            if (p == 1)
+                break;
+            if (p == 2)
+                continue;
+        }
+    } while (p--);
+    do {
+        switch (p) {
+        case 1:
+            __try {
+                work(p);
+            } __finally {
+                if (p)
+                    break;
+            }
+        }
+        for (; p; p--) {
+            __try {
+                work(p);
+            } __finally {
+                if (p)
+                    continue;
+            }
+        }
+    } while (p--);
+    return 0;
+}

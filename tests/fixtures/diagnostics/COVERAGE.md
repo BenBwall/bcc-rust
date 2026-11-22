@@ -24,8 +24,8 @@ line, a `suppress` on a line another reaches extends both) and `once`.
 `sema-seh-jumps-msvc` pins C2705 for a `goto` or `case` label into a `__try`,
 `__except` or `__finally` block (once per label, the innermost block, `'null'`
 for a `case`), C2703 for a `__leave` outside every `__try` block, and C4532
-at a label a `goto` leaves a `__finally` block for, at `break` and `continue`,
-and not at `return`, with no
+at a label a `goto` leaves a `__finally` block for, at `break` and `continue`
+(`'identifier'` when its loop is a do-while), and not at `return`, with no
 C2705 for a jump to a label shallower in SEH blocks (a handler one level
 inside its `__try` block), wherever it lands, and C2705 for one to a label as
 deep in another innermost block, and no C4532 for a `goto` from a `__try`

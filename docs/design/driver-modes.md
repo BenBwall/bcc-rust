@@ -1048,7 +1048,7 @@ words, and drop bcc's notes:
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
 | warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | bcc's own, unnamed: only its number reaches it |
-| warning C4532 | `'out': jump out of __finally block has undefined behavior during termination handling`, at a `goto`'s label (once) or at `break` or `continue` | 1 | `jump-seh-finally` |
+| warning C4532 | `'out': jump out of __finally block has undefined behavior during termination handling`, at a `goto`'s label (once) or at `break` or `continue` (`'identifier'` when its loop is a do-while) | 1 | `jump-seh-finally` |
 | warning C4706 | `assignment used as a condition`, and `cl`'s note | 4 | `parentheses` |
 | warning C4715 | `'g': not all control paths return a value` | 1 | |
 | warning C4716 | `'h': must return a value` | 1 | |
