@@ -279,3 +279,22 @@ fn the_listing_marks_the_functions_pointers_lead_to() {
             .all(|mark| mark.inline_class.as_deref() == Some("fn-target"))
     );
 }
+
+// A structure member that points to a function leads into the listing too,
+// named as the source names it.
+#[cfg(feature = "worker")]
+#[test]
+fn the_listing_marks_a_function_a_member_points_to() {
+    use crate::machine::Machine;
+    let mut machine = Machine::default();
+    let mut snapshot =
+        machine.load(include_str!("../../docs/corpus/v01_struct_member.c").to_owned());
+    while !snapshot.event.title.starts_with("Call twice through") {
+        snapshot = machine.step().expect("the run reaches the call");
+    }
+    let marks: Vec<(usize, Option<String>)> = function_marks(&snapshot)
+        .into_iter()
+        .map(|mark| (mark.start_line, mark.before))
+        .collect();
+    assert_eq!(marks, [(1, Some(String::from("s.apply →")))]);
+}

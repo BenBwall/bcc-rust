@@ -57,9 +57,11 @@
 
 // Compilation
 mod constant;
+mod enumerations;
 mod expressions;
 mod lexer;
 mod parser;
+mod switch;
 
 // Execution and observations
 mod decimal;
@@ -86,6 +88,8 @@ pub use floating::{
 use machine::Machine;
 pub use model::{
     Diagnostic,
+    Enumeration,
+    Enumerator,
     Evaluation,
     Event,
     EventKind,
@@ -173,7 +177,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 10.
+    /// Encodes the current observation using schema version 11.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -236,6 +240,14 @@ impl Program {
         self.directives
             .iter()
             .any(|directive| directive.kind == model::DirectiveKind::Include)
+    }
+
+    /// The program's enumerations, at file and block scope, in source
+    /// order: [`Object::enumeration`] and [`Member::enumeration`] refer to
+    /// them by index.
+    #[must_use]
+    pub fn enumerations(&self) -> &[Enumeration] {
+        &self.enumerations
     }
 
     /// The name of function `function`, in definition order.

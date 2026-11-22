@@ -306,6 +306,11 @@ pub enum Value {
         /// `'\n'`); `None` for an int.
         #[serde(default)]
         character: Option<String>,
+        /// The name of the enumeration constant whose value an object of
+        /// an enumeration type holds (`BLUE`); `None` for other integers,
+        /// and for a value no constant has.
+        #[serde(default)]
+        constant:  Option<String>,
     },
     /// A value of a floating type.
     Floating {

@@ -64,7 +64,11 @@ impl Type {
     /// point`, `int (*)(int, int)`. `signatures` are the program's function
     /// types.
     pub(super) fn spelling(self, structures: &[Structure], signatures: &[Signature]) -> String {
-        let tag = |id: usize| structures.get(id).map_or("?", |structure| &structure.name);
+        let named = |id: usize| {
+            structures
+                .get(id)
+                .map_or_else(|| String::from("struct ?"), Structure::spelling)
+        };
         // A pointer to a function puts its `*`s, and a table's length, in
         // parentheses between the return type and the parameters (C99
         // §6.7.6p2).
@@ -93,8 +97,8 @@ impl Type {
             | Self::Pointer(element, false) => format!("{} *", element.spelling()),
             | Self::Pointer(element, true) => format!("const {} *", element.spelling()),
             | Self::Array(element, count) => format!("{}[{count}]", element.spelling()),
-            | Self::Struct(id) => format!("struct {}", tag(id)),
-            | Self::StructPointer(id) => format!("struct {} *", tag(id)),
+            | Self::Struct(id) => named(id),
+            | Self::StructPointer(id) => format!("{} *", named(id)),
             | Self::VoidPointer => String::from("void *"),
             | Self::Indirect(target, depth) => {
                 let mut text = target.pointer(1).spelling(structures, signatures);
@@ -210,6 +214,7 @@ pub(super) fn structure(
     name: &str,
     members: &[(String, Type)],
     structures: &[Structure],
+    signatures: &[Signature],
 ) -> Structure {
     let mut laid: Vec<Member> = Vec::new();
     let (mut end, mut align, mut first): (usize, usize, usize) = (0, 1, 0);
@@ -221,11 +226,12 @@ pub(super) fn structure(
         }
         laid.push(Member {
             name: member_name.clone(),
-            r#type: ty.spelling(structures, &[]),
+            r#type: ty.spelling(structures, signatures),
             offset,
             size,
             padding: 0,
             first,
+            enumeration: None,
             ty: *ty,
         });
         first += ty.leaves(structures);
@@ -238,6 +244,7 @@ pub(super) fn structure(
     }
     Structure {
         name: String::from(name),
+        tagged: true,
         size,
         align,
         members: laid,

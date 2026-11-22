@@ -121,11 +121,13 @@ pub(super) fn flow(
             Some(part("value", "?")),
         ],
         | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, to.unwrap_or("int")))],
+        | EventKind::Branch if operator == Some("switch") => switched(event, operand(first)),
         | EventKind::Branch => chips.branch(first),
         | EventKind::Logical | EventKind::Conditional | EventKind::Comma => chips.sequenced(event),
         | EventKind::Call => chips.call(event),
         | EventKind::LibraryCall => chips.library_call(event, written),
         | EventKind::Directive => directive(event, program),
+        | EventKind::Enumeration => enumeration(event, program),
         | EventKind::Return => vec![
             operand(first),
             Some(arrow(if exited { "exit status" } else { "returned" })),
@@ -165,6 +167,30 @@ fn directive(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
             Some(part("value", "printf, puts, putchar")),
         ],
     }
+}
+
+/// An enumeration's declaration: the type, and the constants it declares
+/// with their values. The step's range is the declaration's, which tells
+/// two enumerations with one name apart, as in sibling blocks; one without
+/// a tag or a typedef name has no name to draw.
+fn enumeration(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
+    let Some(declared) = program
+        .enumerations()
+        .iter()
+        .find(|known| known.range == event.range && !known.name.is_empty())
+    else {
+        return Vec::new();
+    };
+    let constants: Vec<String> = declared
+        .constants
+        .iter()
+        .map(|constant| format!("{} = {}", constant.name, constant.value))
+        .collect();
+    vec![
+        Some(part("label", &declared.name)),
+        Some(arrow("declares")),
+        Some(part("value", &constants.join(", "))),
+    ]
 }
 
 /// How `event` used each object it touched.
@@ -533,6 +559,18 @@ fn truth(condition: Option<&Operand>) -> bool {
         | Operand::Value(abstract_machine::Value::Function(_)) => true,
         | _ => false,
     })
+}
+
+/// A switch's step: its value, and where it sent control. A switch
+/// compares its value with its labels rather than testing it for truth
+/// (C99 §6.8.4.2p5), so its chips name the label its title names after
+/// "jump to", `default`, or, when it skips its body, the body.
+fn switched(event: &Event, value: Option<FlowPart>) -> Vec<Option<FlowPart>> {
+    let (verb, target) = match event.title.split_once("jump to ") {
+        | Some((_, label)) => ("jumps to", label.trim_matches('`').to_owned()),
+        | None => ("skips", "its body".to_owned()),
+    };
+    vec![value, Some(arrow(verb)), Some(part("label", &target))]
 }
 
 fn arrow(verb: &str) -> FlowPart {

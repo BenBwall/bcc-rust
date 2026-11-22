@@ -55,6 +55,7 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                 | Some(tree) if !tree.nodes.is_empty() => view! {
                     <div class="schematic-scroll">{drawing(tree)}</div>
                     <ol class="sr-only" aria-label="Expression being evaluated">{outline(tree, tree.nodes.len() - 1)}</ol>
+                    {pointer_legend(tree)}
                 }.into_any(),
                 | _ if calling.with(Option::is_some) => {
                     let (waiting, call, called) = calling.get().unwrap_or_default();
@@ -319,4 +320,80 @@ fn outline(tree: &Tree, index: usize) -> AnyView {
         </li>
     }
     .into_any()
+}
+
+/// A line under the drawing when a wire carries a pointer: the wires write
+/// a pointer as `&` would make it, where the tape, the cells and Table 1
+/// draw the same value as an arrow, so the reader can match the two. A
+/// pointer into a string literal is left out: the other panels spell it by
+/// the literal's text, which the wire does not repeat.
+fn pointer_legend(tree: &Tree) -> Option<impl IntoView + use<>> {
+    let (written, drawn) = legend_spellings(tree)?;
+    Some(view! {
+        <p class="schematic-legend">
+            "A wire writes a pointer as "<code>"&"</code>" would make it, "<code>{written}</code>"; the tape, the cells and Table 1 draw the same pointer as an arrow, "<code>{drawn}</code>"."
+        </p>
+    })
+}
+
+/// The first pointer a wire carries, as the wire writes it and as the tape
+/// draws it: `&t[0]` and `→t[0]`, `&square` and `→square()`.
+fn legend_spellings(tree: &Tree) -> Option<(String, String)> {
+    let pointer = tree.nodes.iter().find(|node| {
+        !node.lvalue
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.starts_with('&') && !value.starts_with("&\""))
+    })?;
+    let written = pointer.value.clone().unwrap_or_default();
+    let name = written.trim_start_matches('&');
+    let drawn = if pointer.function {
+        format!("→{name}()")
+    } else {
+        format!("→{name}")
+    };
+    Some((written, drawn))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snapshot::TreeNode;
+
+    fn node(value: &str, function: bool) -> TreeNode {
+        TreeNode {
+            label: String::from("x"),
+            children: Vec::new(),
+            value: Some(value.to_owned()),
+            lvalue: false,
+            active: false,
+            skipped: false,
+            function,
+            object: None,
+            range: None,
+        }
+    }
+
+    // Part 15's N-c: the legend matches a wire's `&` with the arrow the
+    // other panels draw, and leaves out what it cannot spell as they do.
+    #[test]
+    fn the_legend_spells_a_pointer_as_both_panels_do() {
+        let tree = |nodes| Tree {
+            function: String::from("main"),
+            nodes,
+        };
+        assert_eq!(
+            legend_spellings(&tree(vec![node("3", false), node("&t[0]", false)])),
+            Some((String::from("&t[0]"), String::from("→t[0]")))
+        );
+        assert_eq!(
+            legend_spellings(&tree(vec![node("&square", true)])),
+            Some((String::from("&square"), String::from("→square()")))
+        );
+        assert_eq!(
+            legend_spellings(&tree(vec![node("&\"%d\\n\"[0]", false), node("5", false)])),
+            None
+        );
+    }
 }

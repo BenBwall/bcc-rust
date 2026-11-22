@@ -11,6 +11,8 @@ use super::{
     compile,
 };
 
+mod enumerations;
+
 fn run(source: &str) -> Session {
     let program = compile(source).expect("test source must compile");
     let mut session = program.session();
@@ -653,7 +655,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":10"), "versioned schema");
+    assert!(json.contains("\"schema_version\":11"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -1644,7 +1646,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":10"));
+    assert!(json.contains("\"schema_version\":11"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -2182,7 +2184,8 @@ fn schema_three_encodes_structures_and_static_objects() {
     assert!(
         trace.contains(
             "\"structures\":[{\"name\":\"point\",\"size\":8,\"align\":4,\"members\":[{\"name\":\"\
-             c\",\"type\":\"char\",\"offset\":0,\"size\":1,\"padding\":3,\"first\":0}"
+             c\",\"type\":\"char\",\"offset\":0,\"size\":1,\"padding\":3,\"first\":0,\"\
+             enumeration\":null}"
         ),
         "{trace}"
     );
@@ -4743,7 +4746,7 @@ int main(void) {
 fn floating_values_and_types_reach_the_json() {
     let session = run("int main(void) { double d = 0.1; float f = d; return 0; }");
     let json = session.trace_json();
-    assert!(json.starts_with("{\"schema_version\":10,"), "{json}");
+    assert!(json.starts_with("{\"schema_version\":11,"), "{json}");
     assert!(json.contains(
         "{\"kind\":\"floating\",\"type\":\"double\",\"value\":\"0.1\",\"exact\":\"0.\
          1000000000000000055511151231257827021181583404541015625\",\"bytes\":[154,153,153,153,153,\
@@ -5835,41 +5838,56 @@ fn arrays_hold_pointers_and_take_a_list_s_length() {
 /// refuses: each claim it makes, checked.
 #[test]
 fn the_limits_the_site_states_hold() {
-    for source in [
-        // Decimal, octal and hexadecimal constants; every operator family.
-        "int main(void) { int a = 10 + 010 + 0x10; a = a * 2 / 3 % 7 << 1 >> 1; a = (a & 3) | (a \
-         ^ 5) | ~a; return a < 3 && a != 2 || !a ? -a : +a; }",
-        // `?:` with structures, and the comma operator.
-        "struct s { int x; }; int main(void) { struct s a = {1}; struct s b = {2}; struct s c = \
-         a.x > 1 ? a : b; int n = (c.x, 3); return c.x + n; }",
-        // Pointers to pointers and arrays of pointers.
-        "int main(void) { int x = 1; int *p = &x; int **pp = &p; int *v[2] = {p, *pp}; return \
-         *v[1]; }",
-        // Calls anywhere in an expression.
-        "int f(int n) { return n + 1; } int main(void) { return f(f(1)) * f(0) + (f(1) ? 2 : 3); }",
-        // A statement's commas, and updates in a condition that sequence
-        // points separate from other uses of the variable and from calls.
-        "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
-        "int f(int n) { return n; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && f(i) \
-         && n < 5) n = n + 1; while (f(i++) < 2) {} return i == 3 && n == 2; }",
-        // Subtracting and ordering pointers into one array or object.
-        "struct s { int x; int y; }; int main(void) { int v[3] = {1, 2, 3}; int *p = v; int *q = \
-         v + 3; struct s a = {1, 2}; return (q - p) + (p < q) + (&a.x < &a.y); }",
-        // Assignments, compound assignments, ++ and -- anywhere in an
-        // expression.
-        "int main(void) { int x; int y; char s[3] = \"ab\"; char t[3]; char *d = t; const char *c \
-         = s; x = y = 0; while ((*d++ = *c++) != 0) {} return x + (y += 2) + t[1]; }",
-        "int k = 0; int next(void) { return k < 3 ? ++k : 0; } int main(void) { int c; int n = 0; \
-         while ((c = next()) != 0) n += c; return n; }",
-        // Pointers to functions, declared directly or with a typedef, in
-        // variables, tables and parameters, called both ways, compared and
-        // null; static tables of them; and constant expressions in static
-        // initializers.
-        "typedef int (*binop)(int, int); int add(int a, int b) { return a + b; } int apply(binop \
-         f, int x) { return f(x, x); } int (*table[])(int, int) = {add, &add}; static int mask = \
-         1 << 3; int main(void) { int (*f)(int, int) = add; binop g = 0; return apply(add, 1) + \
-         (*f)(1, 2) + table[1](1, 1) + (f == add) + (g == 0) + mask; }",
-    ] {
+    for source in
+        [
+            // Decimal, octal and hexadecimal constants; every operator family.
+            "int main(void) { int a = 10 + 010 + 0x10; a = a * 2 / 3 % 7 << 1 >> 1; a = (a & 3) | \
+             (a ^ 5) | ~a; return a < 3 && a != 2 || !a ? -a : +a; }",
+            // `?:` with structures, and the comma operator.
+            "struct s { int x; }; int main(void) { struct s a = {1}; struct s b = {2}; struct s c \
+             = a.x > 1 ? a : b; int n = (c.x, 3); return c.x + n; }",
+            // Pointers to pointers and arrays of pointers.
+            "int main(void) { int x = 1; int *p = &x; int **pp = &p; int *v[2] = {p, *pp}; return \
+             *v[1]; }",
+            // Calls anywhere in an expression.
+            "int f(int n) { return n + 1; } int main(void) { return f(f(1)) * f(0) + (f(1) ? 2 : \
+             3); }",
+            // A statement's commas, and updates in a condition that sequence
+            // points separate from other uses of the variable and from calls.
+            "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
+            "int f(int n) { return n; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && \
+             f(i) && n < 5) n = n + 1; while (f(i++) < 2) {} return i == 3 && n == 2; }",
+            // Subtracting and ordering pointers into one array or object.
+            "struct s { int x; int y; }; int main(void) { int v[3] = {1, 2, 3}; int *p = v; int \
+             *q = v + 3; struct s a = {1, 2}; return (q - p) + (p < q) + (&a.x < &a.y); }",
+            // Assignments, compound assignments, ++ and -- anywhere in an
+            // expression.
+            "int main(void) { int x; int y; char s[3] = \"ab\"; char t[3]; char *d = t; const \
+             char *c = s; x = y = 0; while ((*d++ = *c++) != 0) {} return x + (y += 2) + t[1]; }",
+            "int k = 0; int next(void) { return k < 3 ? ++k : 0; } int main(void) { int c; int n \
+             = 0; while ((c = next()) != 0) n += c; return n; }",
+            // Pointers to functions, declared directly or with a typedef, in
+            // variables, tables and parameters, called both ways, compared and
+            // null; static tables of them; and constant expressions in static
+            // initializers.
+            "typedef int (*binop)(int, int); int add(int a, int b) { return a + b; } int \
+             apply(binop f, int x) { return f(x, x); } int (*table[])(int, int) = {add, &add}; \
+             static int mask = 1 << 3; int main(void) { int (*f)(int, int) = add; binop g = 0; \
+             return apply(add, 1) + (*f)(1, 2) + table[1](1, 1) + (f == add) + (g == 0) + mask; }",
+            // Enumerations and their constants in expressions, case labels and
+            // array sizes; switch and break; typedefs of every type at file and
+            // block scope; pointers to functions as members and return values.
+            "enum color { RED, GREEN = 5, BLUE }; typedef struct { int x; } point; typedef enum \
+             color          shade; int main(void) { int v[BLUE]; typedef double celsius; celsius \
+             t = 1.5; point p =          {GREEN}; shade s = BLUE; int n = 0; switch (s) { case \
+             RED: n = 1; break; case BLUE: n =          2; break; default: n = 3; } for (;;) { \
+             break; } v[0] = n; return v[0] + p.x + (int)t; }",
+            "int f(int x) { return x + 1; } struct ops { int (*apply)(int); }; int \
+             (*pick(void))(int)          { return f; } typedef int (*unary)(int); unary \
+             again(void) { return f; } int main(void) {          struct ops s = {f}; struct ops \
+             *p = &s; return s.apply(1) + p->apply(2) + pick()(3) +          again()(4); }",
+        ]
+    {
         let session = run(source);
         assert_eq!(session.state().status, "finished", "{source}");
     }
@@ -5906,18 +5924,14 @@ fn the_limits_the_site_states_hold() {
         assert_eq!(session.state().status, status, "{source}");
     }
     for source in [
-        "int main(void) { switch (0) {} return 0; }",
         "int main(void) { do {} while (0); return 0; }",
-        "int main(void) { while (1) { break; } return 0; }",
-        "typedef int number; int main(void) { return 0; }",
-        "enum e { A }; int main(void) { return 0; }",
+        "int main(void) { while (1) { continue; } return 0; }",
+        "int main(void) { switch (0) { case 0: { case 1: break; } } return 0; }",
         "union u { int x; }; int main(void) { return 0; }",
         "void f(void) {} int main(void) { return 0; }",
         "static int f(void) { return 0; } int main(void) { return f(); }",
-        "struct ops { int (*f)(int); }; int main(void) { return 0; }",
-        "int f(int x) { return x; } int (*pick(void))(int); int main(void) { return 0; }",
+        "int x; int *f(void) { return &x; } int main(void) { return 0; }",
         "#include <stdio.h>\nint main(void) { int (*p)(const char *) = puts; return 0; }",
-        "int main(void) { typedef int (*fn)(int); return 0; }",
         "int x; int *p = &x; int main(void) { return 0; }",
         "int f(void) { return 1; } int x = f(); int main(void) { return x; }",
         "struct s { int x; }; int main(void) { struct s v[2]; return 0; }",
@@ -6825,8 +6839,8 @@ fn constraints_on_pointers_to_functions_are_refused() {
             "write that pointer, as in `int (*f)(int)`",
         ),
         (
-            "typedef int number; int main(void) { return 0; }",
-            "a typedef in this subset names a pointer to a function",
+            "typedef int (*f)(int); int main(void) { const f p = 0; return 0; }",
+            "makes the pointer itself const",
         ),
         (
             "int f(int a, int b) { return a; } int (*p)(int) = f; int main(void) { return 0; }",

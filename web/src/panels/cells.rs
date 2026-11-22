@@ -424,6 +424,7 @@ fn values(object: &Object) -> Option<Vec<Option<String>>> {
             | Value::Integer {
                 character: None,
                 text,
+                ..
             }
             | Value::Floating { text, .. } => Some(Some(text.clone())),
             | _ => None,
@@ -1037,6 +1038,7 @@ mod tests {
             .map(|index| Value::Integer {
                 text:      (index * index).to_string(),
                 character: None,
+                constant:  None,
             })
             .collect();
         elements.push(Value::Indeterminate);

@@ -4852,3 +4852,596 @@ pointer that points to a function is not null, so it counts as true".
 - **N-f, the listing's label wraps a short definition** at 1024 and 1440
   pixels. It stays readable and nothing scrolls sideways; moving the label
   out of the line is a layout change for the same walk.
+
+## Part 16: enumerations, switch, typedefs and pointers to functions in structures (2026-11)
+
+Part 15 left four things a beginner writes soon after pointers to
+functions, all refused before their first step: an enumeration, `enum color
+{ RED, GREEN = 5, BLUE };`, with the `switch` that usually reads one; a
+typedef of anything but a pointer to a function; a structure member that
+points to a function, which is how C writes a dispatch table; and a function
+that returns a pointer to a function. This part runs all of them, explains
+each step in the notes' usual order (what happened to memory and values,
+the rule of C99, why it matters, what comes next), and fixes the verb of
+the `*` step for ordinary pointers that Part 15's review found. The work is
+on `agent/machine-subset-4`.
+
+### Method
+
+- **The corpus.** Fourteen programs join the 58 of Parts 13 to 15 in
+  [`corpus/`](corpus/): five with enumerations (`e01` to `e05`: constants
+  and an object, a `switch` with `break` and `default`, a constant as an
+  array's size, a `for` over an enumeration, and cases that fall through),
+  one `break` out of a loop (`n01`), four typedefs (`t01` to `t04`: scalars
+  and a block-scope typedef, a structure without a tag and a self-referring
+  one, an array and a pointer, an enumeration without a tag), three with
+  pointers to functions in new places (`v01` a structure member called
+  through `.` and `->`, `v02` a function that returns one, `v03` a typedef'd
+  dispatch structure), and one undefined call through a null member (`u06`).
+  [`corpus/results-part16-before.txt`](corpus/results-part16-before.txt)
+  and [`corpus/results-part16-after.txt`](corpus/results-part16-after.txt)
+  are the engine's results on `main` and on this branch.
+- **The probes.** 65 programs of my own: 30 for enumerations, `switch` and
+  `break`, 13 for typedefs, 18 for pointers to functions as members and
+  return values, and 4 for the verb of `*`; 55 run and 10 are refused or
+  stop. As a regression set, the 299 probe programs of Part 15's two
+  reviews. A throwaway engine test stepped each to its end, checking every
+  step's "what comes next" against the step that followed, and every
+  program was compiled with GCC 14 (`gcc -B …/gcc14… -std=c99 -pedantic
+  -O0`) and run.
+- **The notes.** The same throwaway test dumped every step of every lesson
+  (title, lead, explanation, why it matters, citations, what comes next,
+  whether a sequence point follows) on `main` and on the branch.
+- **The builds.** The before build is the deployed site,
+  <https://bcc.benbwall.com/>, which is `main` at `26aa3d018` (Part 15
+  merged). This machine had 10 GB of disk free, less than a site build
+  needs while keeping 8 GB spare, so the after build is the one CI made for
+  this branch's pull request at `c56fc3a70` (`sh build.sh`, the release
+  build the site deploys), downloaded as its Pages artifact and served
+  locally. A first pass used CI's build of `e94df8058`; what it found is
+  below ("Found in the browser"), and every scene and the 1440x900 walk
+  were run again on the final build.
+- **The browser.** Playwright drove Chromium with reduced motion, one
+  browser at a time, at 1440x900, 1366x768, 1024x768 and 390x844 in both
+  themes, on both builds. Each scene's program was loaded through the
+  page's own Open .c and run with Run edited code, then stepped to its
+  scene, recording the note, the cells' text for screen readers, Table 1's
+  rows, the tape's labels, Figure 2's legend, the contrast of the new
+  visuals against their composited backgrounds, running animations,
+  sideways scroll and console errors.
+- **The lesson walk.** Part 9's walk, every note of every machine lesson,
+  on both builds at 1440x900 light and 390x844 dark, comparing each note's
+  title, lead, value flow, "why it matters" note and next step.
+
+The screenshots are in [`screenshots/part16/`](screenshots/part16/), named
+`<scene>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours.
+
+### The corpus, before and after
+
+| Construct | Program | Before: where the engine refused it | After |
+| --- | --- | --- | --- |
+| Enumeration | [`e01_enum_color.c`](corpus/e01_enum_color.c) | 3:1: expected an arithmetic type or struct | runs (21 steps), returns 1 and prints `0 5 6` |
+| `switch` on an enumeration | [`e02_enum_switch.c`](corpus/e02_enum_switch.c) | 3:1: the same | runs (41 steps), returns 3 and prints `4` |
+| Constant as an array's size | [`e03_enum_array_size.c`](corpus/e03_enum_array_size.c) | 1:1: the same | runs (129 steps), returns 14 |
+| `for` over an enumeration | [`e04_enum_loop.c`](corpus/e04_enum_loop.c) | 1:1: the same | runs (91 steps), returns 40 |
+| Falling through cases | [`e05_fallthrough.c`](corpus/e05_fallthrough.c) | 1:1: the same | runs (21 steps), returns 2 |
+| `break` out of a loop | [`n01_break_loop.c`](corpus/n01_break_loop.c) | 7:13: unsupported statement | runs (71 steps), returns 1 |
+| typedef of scalars | [`t01_typedef_scalar.c`](corpus/t01_typedef_scalar.c) | 1:9: "a typedef in this subset names a pointer to a function" | runs (29 steps), returns 25 |
+| typedef of structures | [`t02_typedef_struct.c`](corpus/t02_typedef_struct.c) | 1:16: expected an identifier | runs (37 steps), returns 32 |
+| typedef of an array and a pointer | [`t03_typedef_array.c`](corpus/t03_typedef_array.c) | 1:9: the typedef message | runs (33 steps), returns 104 |
+| typedef of an enumeration | [`t04_typedef_enum.c`](corpus/t04_typedef_enum.c) | 1:9: expected an arithmetic type or struct | runs (52 steps), returns 1 |
+| Member that points to a function | [`v01_struct_member.c`](corpus/v01_struct_member.c) | 10:9: "a member that points to a function is outside this subset" | runs (49 steps), returns 15 |
+| Function that returns one | [`v02_returns_pointer.c`](corpus/v02_returns_pointer.c) | 9:11: "a function that returns a pointer to a function is outside this subset" | runs (41 steps), returns 20 |
+| Dispatch structure | [`v03_dispatch_table.c`](corpus/v03_dispatch_table.c) | 15:15: the member message | runs (49 steps), returns 5 and prints `5` |
+| Undefined | [`u06_null_member_call.c`](corpus/u06_null_member_call.c) | 2:9: the member message | stops at step 10: call through a null pointer |
+
+On `main` all fourteen were refused before their first step. On the branch
+the thirteen defined programs run to GCC 14's output and exit status, and
+`u06` stops at the call, where GCC's build crashes with SIGSEGV. The other
+58 programs give exactly the results of Part 15; the engine's dump of every
+one of their steps is byte for byte the same, except `g03` and `u05`, whose
+declaration of an object written with a typedef name now says so (item 2).
+
+### What changed
+
+#### 1. Enumerations
+
+`enum color { RED, GREEN = 5, BLUE };` declares a type and three constants,
+at file scope or in a block, with or without a tag, and as a typedef.
+`enum color c = BLUE;`, `enum color *p`, `enum color palette[3]`, a member
+`enum color c;`, a parameter and a return type all work.
+
+- **The declaration is a step that creates nothing.** At file scope it runs
+  before `main`, after the directives and before the static objects; in a
+  block, where execution reaches it. "Declare the constants of `enum
+  color`", led by "`enum color` declares three constants, RED = 0, GREEN = 5
+  and BLUE = 6: names for int values, which are not objects and take no
+  storage." The explanation gives each constant's value and where it came
+  from ("RED is the first constant and has no =, so it is 0; GREEN = 5 gives
+  it the value 5; BLUE has no =, so it is the previous constant, GREEN, plus
+  1: 6"), says that nothing is created or stored and that the compiler puts
+  a constant's value wherever its name appears, gives the constants' scope,
+  and says which integer type the enumeration is compatible with, citing
+  §6.7.2.2p3, §6.4.4.3p2, §6.7.2.2p4 and §6.2.1p7. Its event kind is new,
+  `enumeration`, in the colour of declarations; the JSON trace's schema is
+  now version 11, which adds it, each object's and member's enumeration,
+  and the trace's list of enumerations.
+- **A constant reads nothing.** "Evaluate the enumeration constant BLUE",
+  led by "`BLUE` is an enumeration constant of enum color: it stands for
+  the int value 6, so nothing is read from memory", and explained with
+  where the value came from and that its type is int "even though enum
+  color itself is compatible with unsigned int" (§6.4.4.3p2, §6.7.2.2p3).
+  Constants work in expressions, case labels, array sizes (`int v[SIZE];`,
+  now any integer constant expression), static initializers and other
+  constants' values (`B = A + 10`).
+- **An enumeration's objects compute as GCC's do.** C leaves the compatible
+  integer type to the implementation (§6.7.2.2p4); GCC chooses `unsigned
+  int` unless a constant is negative, and `int` otherwise, and so does the
+  machine, so `enum e x = A; x - 1 > 0` is 1 here as in GCC's build. An
+  object's declaration says so: "Its type is an enumeration: enum color
+  itself is compatible with unsigned int: … So it may hold any value of
+  that type; C does not check that it holds one of the constants RED, GREEN
+  and BLUE."
+- **The page names the constant.** The tape, the cells and Table 1 write an
+  enumeration object's value with the constant it holds, `6 BLUE`, as they
+  write a char with its character, `65 'A'`; a value no constant has, such
+  as `enum color odd = 7`, reads as `7`. Its type is spelled `enum color`.
+- **What C refuses**, each as a constraint violation with its paragraph: a
+  constant's value that is not an integer constant expression or does not
+  fit in an int, including one that would be the previous constant plus 1
+  (§6.7.2.2p2); two definitions of one enumeration (§6.7.2.3p1); a tag used
+  for both a structure and an enumeration (§6.7.2.3p2); `enum tag` before
+  the enumeration is complete, as in its own list (§6.7.2.3p3); a constant
+  that repeats a name of the same scope (§6.7p3). A constant that would
+  hide a name of an enclosing scope, or a name that would hide a constant,
+  is refused as outside the subset.
+- **A note.** New "why it matters" note: an enumeration names related
+  integer values so a program can say `state == RUNNING`; the names are
+  constants, not variables, and C does not check that an object holds one
+  of them.
+
+[`enum-1440-light`](screenshots/part16/enum-1440-light-after.png)
+([before](screenshots/part16/enum-1440-light-before.png)), [the tape](screenshots/part16/enumvalue-deck-1440-dark-after.png),
+[the cells](screenshots/part16/enumvalue-headrow-1440-dark-after.png) and
+[Table 1](screenshots/part16/enumvalue-datasheet-1440-light-after.png) at
+`GREEN`, with `c` holding `6 BLUE`.
+
+#### 2. switch and break
+
+`switch` runs with its `case` and `default` labels written directly in its
+block, the form nearly every program uses, and `break` leaves a `switch`, a
+`while` or a `for`.
+
+- **The switch's step** is a branch: "switch on 1: jump to `case SQUARE`",
+  led by "`switch (s)` has the value 1: `case SQUARE` matches, so control
+  jumps to the statement after that label", or "no case matches, jump to
+  `default`", or "no case matches, skip the body". The explanation says
+  that the value is promoted and compared with each label's constant,
+  converted to the same type, and that execution then "runs on through the
+  statements that follow, past any later labels, until a break leaves the
+  switch or its body ends" (§6.8.4.2p4-5). Falling through to the next case
+  was no step at first; the first review round gave it one (below).
+- **`break`** is "break: leave the switch" or "break: leave the loop"
+  (§6.8.6.3p2). Leaving a block by a `break` ends the lifetimes of its
+  objects, so each block the `break` leaves is a step of its own first, as
+  at its closing brace.
+- **What C refuses:** a controlling expression that is not an integer
+  (§6.8.4.2p1), a case label that is not an integer constant expression, two
+  labels with the same value after conversion, and a second `default`
+  (§6.8.4.2p3), a label outside a switch (§6.8.1p2), and a `break` outside a
+  switch or loop (§6.8.6.3p1). A label nested deeper in the body, and a
+  declaration directly in the switch's block (which the switch jumps past),
+  are refused as outside the subset.
+- **A note** on why falling through is a classic bug.
+
+[`switch-390-dark`](screenshots/part16/switch-390-dark-after.png)
+([before](screenshots/part16/switch-390-dark-before.png)),
+[`break-1024-light`](screenshots/part16/break-1024-light-after.png)
+([before](screenshots/part16/break-1024-light-before.png)).
+
+#### 3. typedef of any type
+
+A typedef now names any type the subset has, at file scope or in a block
+(§6.7.7p3): scalars (`typedef double celsius;`), pointers (`typedef const
+char *string;`), arrays (`typedef int row[3];`), structures, tagged or not
+(`typedef struct { int x, y; } point;`, and `typedef struct node node;`
+before `struct node` is complete), enumerations, other typedef names, and
+pointers to functions as before. A block's typedef ends with its block.
+
+- **No step.** A typedef declares no object, so, as in Part 15, nothing runs
+  where it is written; a typedef that defines an enumeration is that
+  enumeration's step, which says the typedef "names a type and creates no
+  object either".
+- **The declaration says it.** An object declared with a typedef name says
+  so: "Its declaration spells the type with the typedef name `celsius`,
+  which line 1 declared as a synonym for double: a typedef names a type and
+  creates no object, so `warm` is simply an object of that type", citing
+  §6.7.7p3, with a new note on what a typedef is for. The cells and Table 1
+  spell the type C resolves it to (`double`, `int[3]`, `struct node`), as
+  they already did for a pointer to a function; a structure or an
+  enumeration without a tag has no name but its typedef name, so `point p`
+  is spelled `point`.
+- **What is refused:** a typedef of a `const` type, of a function type
+  (`typedef int fn(int);`), of an array of unknown size, two typedef names
+  in one declaration, and a pointer to or an array of a typedef'd array; a
+  typedef name repeated in one scope is a constraint violation (§6.7p3).
+
+[`typedef-1366-dark`](screenshots/part16/typedef-1366-dark-after.png)
+([before](screenshots/part16/typedef-1366-dark-before.png)), [Table
+1](screenshots/part16/typedef-datasheet-1440-light-after.png).
+
+#### 4. Pointers to functions as members and return values
+
+- **Members.** `struct ops { int (*apply)(int); int count; };` lays the
+  member out as the 8-byte pointer it is, spelled `int (*)(int)` in Table 1.
+  A structure's initializer, an assignment to the member, a copy of the
+  structure and a static structure all carry the pointer. `s.apply(3)`,
+  `p->apply(3)`, `(*s.apply)(3)` and `o.inner.f(1)` call through it: "Call
+  twice through `s.apply`", led by "`s.apply` holds a pointer to twice". A
+  table member, `int (*ops[2])(int, int)`, works too. A null member stops
+  the call as Part 15's null call does; an indeterminate one stops at its
+  read.
+- **Return values.** `int (*pick(int up))(int)`, and `operation find(char
+  name)` with a typedef, return a pointer to a function, or a null one from
+  `return 0;`. `pick(1)(10)` calls what the call returned: "Call decrement
+  through `pick(0)`", led by "`pick(0)` yields a pointer to decrement".
+  Returning a pointer of another function type is a constraint violation
+  (§6.5.16.1p1 through §6.8.6.4p3).
+
+[`member-1366-light`](screenshots/part16/member-1366-light-after.png)
+([before](screenshots/part16/member-1366-light-before.png)), [the
+listing](screenshots/part16/member-sourcepane-1440-light-after.png),
+[`returns-1024-dark`](screenshots/part16/returns-1024-dark-after.png)
+([before](screenshots/part16/returns-1024-dark-before.png)).
+
+#### 5. The verb of `*` for ordinary pointers
+
+The `*` step said "holds" for every operand. It now uses the rule #436 gave
+pointers to functions: an object holds its pointer ("`p` holds a pointer to
+`x`", "`*pp` holds …"), any other expression yields one ("`(t + 1)` yields
+a pointer to t[1]", "`&p` yields …"). The step also quoted its operand by
+stripping a `*` from its own source, which misquoted a parenthesized one:
+`(*(*&p))(4)` said "`*(*&p)` designates `p`" for the inner `*&p`. It now
+quotes the operand as written, "`*&p` designates `p`". Part 15 said no
+narration still built code by editing source text; this one did, and now
+none does.
+
+[`yields-1440-light`](screenshots/part16/yields-1440-light-after.png)
+([before](screenshots/part16/yields-1440-light-before.png)).
+
+#### 6. Part 15's page nits
+
+- **N-c, two spellings of one pointer.** Figure 2's wires write a pointer
+  as `&` would make it, and the tape, the cells and Table 1 draw it as an
+  arrow, for pointers to objects as to functions; choosing one would change
+  every panel. Instead Figure 2 now adds one line under the drawing whenever
+  a wire carries a pointer: "A wire writes a pointer as & would make it,
+  &square; the tape, the cells and Table 1 draw the same pointer as an
+  arrow, →square()." It is left out for a pointer into a string literal, which the other panels
+  spell by the literal's text.
+  [Figure 2](screenshots/part16/legend-schematic-1024-light-after.png)
+  ([before](screenshots/part16/legend-schematic-1024-light-before.png)).
+- **N-f, the listing's label wraps a short definition.** Left as it was. The wrap comes from a long
+  label, `ops[0], ops[1] →`, written into a short line; this part's new
+  labels (`s.apply →`, `step →`) fit on their lines at every size checked.
+  Moving the label out of the line is the layout change Part 15 described,
+  and is still left for later (below).
+
+#### 7. "Limits of this model" and the glossary
+
+§3 of "How it works" now lists among what runs: enumerations and their
+constants, usable wherever C takes a constant; a typedef of any of the
+subset's types, at file or block scope; functions that return an
+enumeration or a pointer to a function; pointers to functions in structure
+members, called as `s.f(x)` or `p->f(x)`; and `switch` with its labels
+directly in its block, and `break`. Among what does not: `do`, `continue`
+and `goto`, and a case label nested deeper in a switch's body; a function
+that returns any other pointer. The limits test runs a program for each new
+claim and refuses each new counterexample.
+[`limits-1440-light`](screenshots/part16/limits-1440-light-after.png)
+([before](screenshots/part16/limits-1440-light-before.png)).
+
+The glossary defines an enumeration constant (§6.4.4.3p2), a typedef name
+(§6.7.7p3) and a case label (§6.8.4.2p5).
+
+#### 8. What did not change
+
+- **No new lesson.** "Callbacks: passing a function to a function" needs its
+  LLVM IR from a native bcc build with LLVM, which needs at least 14 GB of
+  free disk; this machine had 10 GB, so the lesson is left for later again.
+  The corpus's `g04_callback.c` and `v03_dispatch_table.c` show the same
+  steps through Open .c meanwhile.
+- **The lessons' opening comments** still wrap in the narrow listing (Part
+  15's reason stands).
+
+### Checks
+
+- **Correctness against GCC 14.** Every program the engine runs gives GCC
+  14's output and exit status: the 13 new corpus programs that run, the 55
+  probes that run, and the two review probes that now run (`b3/e01_enum`,
+  1; `rv-p3/d22_fp_return`, 3). The undefined ones stop where C leaves the
+  behavior undefined: `u06` and a pointer returned null and then called at
+  the call, where GCC's builds crash with SIGSEGV, and an uninitialized
+  member at its read. The ten refused probes are refused for the rule they
+  break where GCC rejects or warns: a duplicate case after conversion, two
+  calls of the wrong function type, a constant used after its block, `enum
+  e` inside its own list, a floating case label, and an implicit constant
+  past `INT_MAX` (GCC 14 warns under `-pedantic`, the diagnostic the
+  constraint requires); a parameter named like a constant, which C allows,
+  is refused as outside the subset.
+- **Descriptions.** Every step of every probe, corpus program and lesson
+  named, in its "what comes next", the step that followed it; the engine
+  tests check this for every program they run, the eight new ones included.
+- **The notes.** The engine's dump of every lesson is byte for byte the
+  same on `main` and on the branch. The browser walk compares 1,571 notes of
+  the fifteen machine lessons at each size, 1440x900 light and 390x844
+  dark: none changed in its title, lead, value flow, "why it matters" note
+  or next step, and neither build scrolled sideways or raised a page error.
+  The changes a reader can see in an existing lesson are a link and a line:
+  "typedef name", in the unsigned lesson's declaration of a `size_t`
+  object, now links to the glossary's new entry, and Figure 2 adds its
+  legend under any expression whose wire carries a pointer to an object or
+  a function, as several of the pointer lessons' expressions do.
+- **Regressions.** Of Part 15's review probes, 289 of 299 have
+  byte-identical dumps. Of the other ten, three are item 5's verb and
+  quotation (`b2/n04`, `n10`, `rv-p1/b34`), three gain item 3's typedef
+  sentence (`b2/n09`, `rv-p3/d08`, `d11`), two now run (above), one is
+  refused with a clearer message (`rv-p1/b32`, a typedef of a function
+  type), and one, a recursion that ends at the engine's 8 MB trace limit
+  (`rv-p1/b17`), now reaches it at step 422 rather than 423, since each
+  retained state is a few bytes larger. That is the limit, not the
+  program's behavior.
+- **The scenes.** At the four sizes in both themes, every scene reached its
+  step on the after build, where the before build refused all but two of
+  the programs before their first step. No sideways scroll, no console
+  error or warning, no running animation.
+- **Contrast.** Figure 2's new legend measures, at its lowest across sizes
+  and themes, 5.89:1 for its text (12 px) and 8.38:1 for its code; an
+  enumeration's constant is written in the value's own style, whose
+  contrast is unchanged; the notes' text keeps 15.82:1 (light) and 13.34:1
+  (dark), and the pointer-to-function visuals of Part 15 keep their ratios
+  (7.05:1 at their lowest).
+- **Keyboard, screen readers and motion.** The change adds no control. A
+  cell of an enumeration is read as "c, enum color, 4 bytes: 6 BLUE", Table
+  1's value has the same words, and Figure 2's legend is text in the figure,
+  after the outline screen readers hear. The new styles have no
+  transition, and every run used reduced motion.
+- **Stack.** The limits test's stack need is unchanged: on the debug test
+  binary it passes at 500 KiB and aborts at 480 KiB, on `main` and on the
+  branch, well under 1 MiB. The new statements parse through `statement`,
+  whose frame is unchanged, and the new expression kind adds no frame.
+- **Tests:** as `pages.yml` runs them, the engine's tests (157: eight new,
+  and six updated: the limits test for what now runs, the constraints test
+  whose typedef case now runs, and the three JSON schema tests and the
+  structure layout test for schema version 11) and its clippy pass, as do
+  the site's tests (171, four new: an enumeration's objects and members,
+  the switch's chips, Figure 2's legend and a member's mark in the listing;
+  two changed their example of an unsupported statement from `switch` to
+  `do`; and the prerender's 2), the WebAssembly stepper's (79) and the
+  site's four clippy runs. CI's root jobs (Tests, Clippy, both Windows
+  jobs, the WebAssembly explorer) pass. `cargo +nightly fmt --check` passes
+  for every engine file; in the site's files every changed line is
+  formatted. `git diff --check` is clean.
+
+#### Found in the browser
+
+The first pass over CI's build found four things, fixed before the final
+screenshots:
+
+- **A switch's value flow** read "1 counts as true", the chips of an `if`'s
+  condition. It now reads "1 → jumps to → case SQUARE", or `default`, or
+  "past its body".
+- **An enumeration's declaration** had no value flow; it now draws "enum
+  color → declares → RED = 0, GREEN = 5, BLUE = 6", as a `#define` draws
+  its replacement.
+- **The listing** did not mark a function a structure member points to; it
+  now writes `s.apply →` before `twice`, as it does for a variable or a
+  table element.
+- **Figure 2's legend** spelled a pointer into a string literal as the
+  other panels do not; such a pointer is now left out of it.
+
+### Left for later
+
+- **A lesson on callbacks**, `apply(int (*f)(int), int x)` and a dispatch
+  table, with its LLVM IR from `web/pipeline/generate.sh` and its module
+  from `web/wasm/generate.sh`, once a native build has room.
+- **The lessons' opening comments**: rewrap them to 36 columns and
+  regenerate the line tables and modules.
+- **More of the switch**: a case label inside a nested block or statement
+  of the body (Duff's device), and a declaration in the switch's block;
+  `continue`, `do` and `goto`.
+- **Pointers returned in general**: a function returning a pointer to an
+  object (`int *f(void)`), with the lifetime checks that needs, and a
+  pointer to a library function.
+- **Static pointers to objects**: `static int *p = &x;` (§6.6p9), still
+  refused.
+- **Hiding a name**: an enumeration constant or a typedef name that hides a
+  name of an enclosing scope, or is hidden by one, which C allows and the
+  subset refuses.
+- **A direct call's conversion**, Part 15's last item, stands.
+- **N-f, the listing's label**: draw it outside the line, in the margin or
+  under the definition, so a long one cannot wrap a short line.
+
+### Review, round 1
+
+The review of the branch at `ddc0d709c` found four blockers: a typedef'd
+array parameter was not adjusted to a pointer, a `break` claimed later
+labels that did not exist, an enumeration's object said C promised it
+unsigned int's range, and Figure 2 drew the wrong enumeration's constants
+when two shared a name. It also found one should-fix (N1, the limits text)
+and seven nits. The review's own probe files went when its scratch
+directory was cleaned, so I rewrote the 86 its report names or describes
+(`k04` to `k10` for typedef'd parameters, `s01` to `s38` for `switch` and
+`break`, `e01` to `e22` for enumerations, `t01` to `t14` for typedefs, and
+`f` and `b` programs for members and `break` out of loops). They join the
+65 probes and 72 corpus programs of Part 16, the 299 regression probes of
+Part 15's reviews and the 17 lessons: 539 programs in all. A throwaway
+engine test dumped every step of each on `ddc0d709c` and on the fixed
+branch, and every program was compiled with GCC 14 (`-std=c99 -pedantic
+-O0`) and run.
+
+#### 1. A typedef'd array parameter was not adjusted
+
+After `typedef int row[3];`, the parameter of `int first(row r)` kept the
+type `int[3]`. C99 §6.7.5.3p7 adjusts it to `int *`, as it adjusts `int
+r[3]`. So `int (*fp)(int *) = first;` was refused as a constraint
+violation that it is not, `first(t)` as an argument that does not match,
+and `int size(row r) { return sizeof r; }` would have given 12, not 8.
+
+**Fixed by refusing it as the plain form is refused.** The subset has no
+array parameters: `int r[3]` was already refused with "array parameters are
+outside this subset; write the pointer they adjust to, such as `char *s`".
+The check now looks at the parameter's type as well as for a `[` after its
+name, so `row r` gets the same message, in a definition, a prototype or the
+parameter list of a pointer to a function. A parameter of function type
+(§6.7.5.3p8) cannot come from a typedef, since a typedef of a function type
+is refused where it is declared.
+
+#### 2. `break` claimed later labels
+
+Every `break` in a switch said "the statements after the break, including
+those under later case labels, do not run. Without the break, execution
+would run on into the next label's statements", even as the body's last
+statement, in the common `default: r = 2; break; }`.
+
+**Fixed, from the body as compiled.** When the switch's body is complete,
+each of its `break`s records what follows it: how many labels come after
+it, else whether any statement does. Leaving a block and an `if`'s jump
+over its `else` branch do not count, since neither runs anything. The text
+is one of:
+
+- a later label: "…the statements after the break, including those under
+  the later label, do not run. Without the break, execution would run on
+  past that label into its statements" (or "the later labels" and "the next
+  label" for more than one);
+- only statements: "…and the statements after the break, to the end of the
+  body, do not run";
+- nothing: "…control jumps to just after its body. Nothing in the body
+  follows the break, so it skips nothing: reaching the body's closing brace
+  would leave the switch the same way".
+
+#### 3. An enumeration's object promised unsigned int's range
+
+The declaration of `enum color c` reused unsigned int's width text: "4
+bytes on x86-64, 0 to 4294967295; C promises only 0 to 65535". C99
+§6.7.2.2p4 promises an enumerated type only a type that can represent its
+constants' values, which may be a char.
+
+**Fixed.** It reads "an enum color object (4 bytes on x86-64, 0 to
+4294967295; C promises only that its type can represent its constants'
+values, so at least 0 to 6)", "-3 to 11" for constants from -3 to 11, and
+"its constant's value, 4" for one constant. Round 2 changed "it holds" to
+"its type can represent": the object may hold any value of the type, such
+as 42 after `enum color c = 42;`. The next sentence lost its two colons in a
+row: "Its type, enum color, is an enumeration, compatible with unsigned
+int: C lets each implementation choose an integer type that holds every
+constant, and GCC chooses int when a constant is negative and unsigned int
+otherwise, as here, where none is". An array of an enumeration's objects
+says it of "Its element type" and of "each element", where it had said
+"Its type" of the array.
+
+#### 4. Figure 2 drew the wrong enumeration's constants
+
+The value flow found the enumeration by the name in the step's title, the
+first match. In sibling blocks that each declare `enum e`, legal since each
+tag's scope ends with its block (§6.2.1p4), the second declaration drew "enum
+e → declares → A = 1, B = 2", the first one's constants.
+
+**Fixed.** The step's range is the declaration's own, so the value flow
+takes the enumeration whose declaration covers the step's range: the second
+step now draws "C = 10, D = 20", and the same holds for `typedef enum { … }
+t;` in two blocks.
+
+#### 5. The limits text, and the nits
+
+- **N1, the limits text.** "a typedef of any of these types" now reads "a
+  typedef of any of these types but a const one", since `typedef const int
+  cint;` stays refused. A typedef'd array as a parameter is refused like any
+  array parameter (item 1), which the text never listed as in the subset.
+- **Fall-through is a step.** Reaching a label from the statement before it
+  is "Run on past `case 2:`", led by "The statement before `case 2:` has
+  finished, and no break came, so execution runs on past the label into the
+  statements after it", and explained by §6.8.1p4: a label "does not alter
+  the flow of control". A run of labels, as in `case 2: case 3:`, is one
+  step, and the step before it says "Next: run on past `case 2:` into the
+  statements after it". The switch's jump to a label lands past that step,
+  so it appears only where execution falls through. `e05_fallthrough.c`
+  now has 21 steps, not 20, which
+  [`corpus/results-part16-after.txt`](corpus/results-part16-after.txt)
+  records.
+- **Chip grammar.** A switch that skips its body reads "42 → skips → its
+  body".
+- **`compatible_text`** says "GCC chooses int when a constant is negative,
+  as one is here, and unsigned int otherwise" (item 3).
+- **The glossary's case label** is "A place in a switch's body, such as
+  case 3:, that the switch can jump to: it jumps to the case label whose
+  constant equals its value, or else to the default: label, which has no
+  constant".
+- **The doc comment** of `static_storage` is back on it, and
+  `enumeration_name` has only its own.
+- **Dead code.** The `labelled && at("}")` test inside the body's loop and
+  the switch step's branch for a promotion that changed the value are gone,
+  and "What changed" above no longer says the step gives one.
+- **A parameter of enumerated type** is named as declared: "The argument
+  for `c` converts to the parameter's type, enum color (compatible with
+  unsigned int)".
+
+#### What changed in the results
+
+- **The lessons:** all 17 dumps are byte for byte the same, as are 298 of
+  the 299 regression probes; the other, `b3/e01_enum`, changes only in the
+  enumeration step's GCC sentence.
+- **The corpus and Part 16's probes:** 66 of the 72 corpus programs are the
+  same, the 58 of Parts 13 to 15 among them. The other 6, all enumeration
+  programs, and 23 of the 65 probes change in the narration of items 2, 3
+  and 5; only `e05_fallthrough` and `p30_default_first` change their step
+  count, by their fall-through steps.
+- **The review's probes:** 42 of the 86 change. Four that were refused or
+  mis-refused (`k04`, `k06`, `k07`, and `k08`, whose prototype `int
+  first(row);` was refused as differing from `int first(int *r)`) are now
+  refused as array parameters; the rest change only in the narration of
+  items 2, 3 and 5, and seven gain fall-through steps.
+- **Explained in full.** A script undid each intended change in the after
+  dumps (removed the fall-through steps and restored the "next" before
+  them, and put back the old break, width, type, GCC and parameter
+  sentences). Every one of the 72 changed dumps then equals its before
+  dump, except the four refusals above.
+- **GCC 14.** Each of the 365 programs that the engine runs to its end
+  gives GCC 14's output and exit status, and GCC compiles each one. The 41
+  that stop (undefined behavior, an indeterminate read or a resource limit)
+  and the 133 refused stop or are refused as on `ddc0d709c`, except the four
+  refusals of item 1.
+
+#### Checks
+
+- **Engine tests:** 160 pass, three new: a typedef'd array is no parameter
+  type (B1), break and fall-through say what the body holds (B2 and the
+  fall-through step), and an enumeration's type promises only its
+  constants' range (B3, with the parameter's name). One changed for the new
+  type sentence. The engine's clippy passes.
+- **Site:** as `pages.yml` runs them, the site's tests (172, one new for
+  sibling enumerations and one extended for the skipped body; and the
+  prerender's 2) and the WebAssembly stepper's (79) pass. CI's Lint site
+  job failed on the first push, `c102fbc76`: clippy's `similar_names`
+  refused the fall-through step's bindings `them` and `they` in the
+  abstract machine's lint run. They are now `phrase` and `pronoun`, and the
+  five clippy runs (the abstract machine's, the site's native one and its
+  hydrate, worker and compiler wasm32 ones) pass locally.
+- **Formatting:** `rustfmt +nightly --check` passes for every changed
+  engine file; in the site's files every changed line is formatted. `git
+  diff --check` is clean.
+- **Browser:** CI's Pages build of `c102fbc76` (the rename after it changes
+  no behavior), served locally, at 1440x900 light and 390x844 dark with
+  reduced motion. The second of two sibling `enum e` declarations draws
+  "enum e → declares → C = 10, D = 20", and the `typedef enum` pair "t →
+  declares → C = 10, D = 20"
+  ([`review1-sibling-390-dark`](screenshots/part16/review1-sibling-390-dark.png)).
+  `switch (42)` with no matching label draws "42 → skips → its body".
+  `e05_fallthrough.c` reaches "Run on past `case LOW:`" at step 16
+  ([`review1-fallthrough-1440-light`](screenshots/part16/review1-fallthrough-1440-light.png)).
+  The final break's note says nothing follows it and names no later label,
+  `c`'s declaration reads "C promises only that its type can represent its
+  constants' values, so at least 0 to 6", and the limits text reads "a typedef of any of these
+  types but a const one". No sideways scroll, console error or warning, or
+  running animation.

@@ -5,6 +5,10 @@
 //! p. 78; PDF p. 90 (standalone increments; expression results are discarded).
 
 use super::{
+    enumerations::{
+        Constant,
+        Tag,
+    },
     expressions::{
         Expr,
         ExprKind,
@@ -18,11 +22,13 @@ use super::{
         Token,
     },
     model::{
+        Alias,
         Arithmetic,
         BlockObject,
         Diagnostic,
         Directive,
         DirectiveKind,
+        Enumeration,
         ExpressionNode,
         Function,
         Instruction,
@@ -35,6 +41,7 @@ use super::{
         MAX_OBJECTS,
         MAX_STRUCTURES,
         Macro,
+        Named,
         Op,
         Place,
         Program,
@@ -70,6 +77,13 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         function_types: Vec::new(),
         function_signatures: Vec::new(),
         typedefs: Vec::new(),
+        aliases: Vec::new(),
+        alias: None,
+        enumerations: Vec::new(),
+        file_enumerations: Vec::new(),
+        constants: Vec::new(),
+        enumeration_tags: Vec::new(),
+        breakables: Vec::new(),
         designated: Vec::new(),
         computed: Vec::new(),
         prototypes: Vec::new(),
@@ -89,11 +103,15 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             parser.directive()?;
             continue;
         }
-        if parser.at("struct") && parser.peek(2) == "{" {
+        if parser.at("struct") && (parser.peek(1) == "{" || parser.peek(2) == "{") {
             parser.structure_definition()?;
             continue;
         }
-        if parser.take("typedef") {
+        if parser.at("enum") && (parser.peek(1) == "{" || parser.peek(2) == "{") {
+            parser.enumeration_definition()?;
+            continue;
+        }
+        if parser.at("typedef") {
             parser.typedef_declaration()?;
             continue;
         }
@@ -102,7 +120,24 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         let is_static = parser.take("static");
         let typedef = parser.typedef_name();
         let base = parser.base_type()?;
+        let named = parser.named(base);
         let depth = parser.pointer()?;
+        // `int (*pick(int which))(int)`: a function that returns a pointer
+        // to a function (C99 §6.7.5.3p1 forbids only returning a function
+        // or an array).
+        if parser.at_function_declarator() && is_identifier(parser.peek(2)) && parser.peek(3) == "("
+        {
+            if is_static {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    storage.range,
+                    "static functions are outside this subset; drop the static",
+                ));
+            }
+            let (name, returns, header) = parser.pointer_returning_header(base, depth)?;
+            parser.function_definition(&mut functions, &mut total_code, name, returns, header)?;
+            continue;
+        }
         if parser.at_function_declarator() {
             let (name, ty) = parser.function_declarator(base, depth, Naming::Required)?;
             let name = name.unwrap_or_else(|| parser.current());
@@ -111,14 +146,15 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 ty,
                 Specified {
                     constant: false,
-                    typedef:  None,
+                    typedef: None,
+                    named,
                 },
             )?;
             continue;
         }
         let name = parser.identifier()?;
         if !parser.at("(") {
-            parser.file_scope_object(base, typedef, depth, name)?;
+            parser.file_scope_object((base, named), typedef, depth, name)?;
             continue;
         }
         if is_static {
@@ -128,16 +164,25 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 "static functions are outside this subset; drop the static",
             ));
         }
-        let returns = match (base, depth) {
-            | (Base::Arithmetic(arithmetic, false), 0) => arithmetic.ty(),
-            | (Base::Struct(id), 0) => parser.complete_structure(id, name.range)?,
-            | _ =>
-                return Err(Diagnostic::new(
-                    "unsupported",
-                    name.range,
-                    "functions return an arithmetic type or a structure in this subset",
-                )),
-        };
+        let returns = parser.return_type(base, depth, name.range)?;
+        let header = parser.function_header(name)?;
+        parser.function_definition(&mut functions, &mut total_code, name, returns, header)?;
+    }
+    parser.finish(source, functions)
+}
+
+impl<'a> Parser<'a> {
+    /// The rest of a function's declaration at file scope, after its
+    /// parameter list `header`: a prototype, or a definition and its body.
+    fn function_definition(
+        &mut self,
+        functions: &mut Vec<Function>,
+        total_code: &mut usize,
+        name: Token<'a>,
+        returns: Type,
+        header: Vec<Parameter<'a>>,
+    ) -> Result<(), Diagnostic> {
+        let parser = self;
         if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
             return Err(Diagnostic::new(
                 "unsupported",
@@ -147,10 +192,9 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         }
         parser.typedef_conflict(name)?;
         parser.library_conflict(name)?;
-        let header = parser.function_header(name)?;
         let signature = parser.intern(Signature {
             returns,
-            parameters: header.iter().map(|&(_, ty)| ty).collect(),
+            parameters: header.iter().map(|&(_, ty, _)| ty).collect(),
         });
         if !parser
             .function_signatures
@@ -163,8 +207,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         }
         if parser.take(";") {
             parser.prototype(name, returns, &header)?;
-            parser.symbols.retain(|symbol| symbol.scope == 0);
-            continue;
+            parser.prune_scope(1);
+            return Ok(());
         }
         if !parser.at("{") {
             return Err(parser
@@ -178,7 +222,9 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             ));
         }
         let mut parameters = Vec::new();
-        for (parameter, ty) in header {
+        let mut enumerations = Vec::new();
+        for (parameter, ty, enumeration) in header {
+            enumerations.push(enumeration);
             let Some(parameter) = parameter else {
                 return Err(Diagnostic::new(
                     "unsupported",
@@ -195,8 +241,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         parser.returns = returns;
         parser.block()?;
         parser.emit(Op::Fallthrough, name.range)?;
-        total_code += parser.code.len();
-        if total_code > MAX_CODE {
+        *total_code += parser.code.len();
+        if *total_code > MAX_CODE {
             return Err(Diagnostic::limit(
                 name.range,
                 "compiled operation limit reached",
@@ -206,101 +252,113 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             name: String::from(name.text),
             returns,
             parameters,
+            enumerations,
             signature,
             range: name.range,
             code: std::mem::take(&mut parser.code),
             nodes: roots(std::mem::take(&mut parser.nodes)),
         });
         parser.function_name = None;
-        parser.symbols.retain(|symbol| symbol.scope == 0);
+        parser.prune_scope(1);
+        Ok(())
     }
-    let Some(entry) = functions
-        .iter()
-        .position(|function| function.name == "main")
-    else {
-        return Err(parser.error("an int main(void) definition is required"));
-    };
-    if !functions[entry].parameters.is_empty() || functions[entry].returns != Type::INT {
-        return Err(parser.error("main must be int main(void) in this subset"));
-    }
-    for CallSite {
-        name,
-        arguments,
-        range,
-        declared,
-    } in &parser.calls
-    {
-        let Some(index) = functions.iter().position(|function| function.name == *name) else {
-            let message = if *declared {
-                format_message("`", name, "` is declared but never defined")
-            } else if Library::named(name).is_some() {
-                format_message(
-                    "`",
-                    name,
-                    "` is a library function declared in <stdio.h>; write #include <stdio.h> \
-                     before its first use",
-                )
-            } else {
-                String::from(
-                    "call to an undefined function; the only library functions are printf, puts \
-                     and putchar, from <stdio.h>",
-                )
-            };
-            return Err(Diagnostic::new("unsupported", *range, &message));
+
+    /// The program, once every declaration has been compiled: calls are
+    /// checked against the functions they name, and static pointers to
+    /// functions point to the functions' definitions.
+    fn finish(self, source: &str, functions: Vec<Function>) -> Result<Program, Diagnostic> {
+        let mut parser = self;
+        let Some(entry) = functions
+            .iter()
+            .position(|function| function.name == "main")
+        else {
+            return Err(parser.error("an int main(void) definition is required"));
         };
-        if !*declared {
-            return Err(Diagnostic::new(
-                "unsupported",
-                *range,
-                "in C99 a function must be declared before its call: define it earlier, or \
-                 declare it first with a prototype such as `int f(int);` (C99 §6.5.1p2)",
-            ));
+        if !functions[entry].parameters.is_empty() || functions[entry].returns != Type::INT {
+            return Err(parser.error("main must be int main(void) in this subset"));
         }
-        let function = &functions[index];
-        if function.parameters.len() != arguments.len() {
-            return Err(Diagnostic::new(
-                "syntax",
-                *range,
-                "argument count does not match the function definition",
-            ));
-        }
-        for ((_, expected), &(actual, null)) in function.parameters.iter().zip(arguments) {
-            if !compatible(*expected, actual, null) {
+        for CallSite {
+            name,
+            arguments,
+            range,
+            declared,
+        } in &parser.calls
+        {
+            let Some(index) = functions.iter().position(|function| function.name == *name) else {
+                let message = if *declared {
+                    format_message("`", name, "` is declared but never defined")
+                } else if Library::named(name).is_some() {
+                    format_message(
+                        "`",
+                        name,
+                        "` is a library function declared in <stdio.h>; write #include <stdio.h> \
+                         before its first use",
+                    )
+                } else {
+                    String::from(
+                        "call to an undefined function; the only library functions are printf, \
+                         puts and putchar, from <stdio.h>",
+                    )
+                };
+                return Err(Diagnostic::new("unsupported", *range, &message));
+            };
+            if !*declared {
                 return Err(Diagnostic::new(
                     "unsupported",
                     *range,
-                    "argument type does not match the parameter",
+                    "in C99 a function must be declared before its call: define it earlier, or \
+                     declare it first with a prototype such as `int f(int);` (C99 §6.5.1p2)",
+                ));
+            }
+            let function = &functions[index];
+            if function.parameters.len() != arguments.len() {
+                return Err(Diagnostic::new(
+                    "syntax",
+                    *range,
+                    "argument count does not match the function definition",
+                ));
+            }
+            for ((_, expected), &(actual, null)) in function.parameters.iter().zip(arguments) {
+                if !compatible(*expected, actual, null) {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        *range,
+                        "argument type does not match the parameter",
+                    ));
+                }
+            }
+        }
+        // A static pointer to a function named the function in declaration
+        // order; it now points to the function's definition.
+        for (name, range) in &parser.designated {
+            if !functions.iter().any(|function| function.name == *name) {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    *range,
+                    &format_message("`", name, "` is declared but never defined"),
                 ));
             }
         }
-    }
-    // A static pointer to a function named the function in declaration
-    // order; it now points to the function's definition.
-    for (name, range) in &parser.designated {
-        if !functions.iter().any(|function| function.name == *name) {
-            return Err(Diagnostic::new(
-                "unsupported",
-                *range,
-                &format_message("`", name, "` is declared but never defined"),
-            ));
+        for object in &mut parser.statics {
+            resolve_functions(&mut object.value, &parser.function_signatures, &functions);
+            for (_, value) in &mut object.computed {
+                resolve_functions(value, &parser.function_signatures, &functions);
+            }
         }
+        Ok(Program {
+            source: String::from(source),
+            functions,
+            entry,
+            structures: parser.structures.into(),
+            signatures: parser.function_types.into(),
+            statics: parser.statics,
+            directives: parser.directives,
+            macros: parser.macros,
+            enumerations: parser.enumerations.into(),
+            file_enumerations: parser.file_enumerations,
+            aliases: parser.aliases.into(),
+        })
     }
-    for object in &mut parser.statics {
-        resolve_functions(&mut object.value, &parser.function_signatures, &functions);
-        for (_, value) in &mut object.computed {
-            resolve_functions(value, &parser.function_signatures, &functions);
-        }
-    }
-    Ok(Program {
-        source: String::from(source),
-        functions,
-        entry,
-        structures: parser.structures.into(),
-        signatures: parser.function_types.into(),
-        statics: parser.statics,
-        directives: parser.directives,
-        macros: parser.macros,
-    })
 }
 
 pub(super) struct Parser<'a> {
@@ -339,9 +397,24 @@ pub(super) struct Parser<'a> {
     /// worked out before the program starts, rather than written as a
     /// constant: each one's source and the value it gives.
     pub computed:            Vec<(SourceRange, Value)>,
-    /// The typedef names declared so far, each naming a pointer to a
-    /// function.
-    pub typedefs:            Vec<(&'a str, Type)>,
+    /// The typedef names in scope, innermost last.
+    pub typedefs:            Vec<Typedef<'a>>,
+    /// Every typedef name the program declares, for the explanations.
+    pub aliases:             Vec<Alias>,
+    /// The typedef name the last type specifier `base_type` read was
+    /// spelled with, by index into [`Parser::aliases`].
+    pub alias:               Option<usize>,
+    /// The enumerations declared so far, at file and block scope.
+    pub enumerations:        Vec<Enumeration>,
+    /// The file-scope enumerations, by index, in source order.
+    pub file_enumerations:   Vec<usize>,
+    /// The enumeration constants in scope, innermost last.
+    pub constants:           Vec<Constant<'a>>,
+    /// The enumeration tags in scope, innermost last.
+    pub enumeration_tags:    Vec<Tag<'a>>,
+    /// The `switch` statements and loops being compiled, innermost last,
+    /// which a `break` leaves.
+    pub breakables:          Vec<Breakable>,
     /// Each function declared by a prototype so far.
     pub prototypes:          Vec<Prototype>,
     /// Each `#include <stdio.h>` and object-like `#define` so far.
@@ -391,9 +464,18 @@ impl<'a> Parser<'a> {
         let closing = self.current();
         self.expect("}")?;
         self.leave(closing.range)?;
-        self.symbols.retain(|symbol| symbol.scope < self.scope);
+        self.prune_scope(self.scope);
         self.scope -= 1;
         Ok(())
+    }
+
+    /// Forget every name declared in scope `scope` or deeper: objects,
+    /// typedef names, enumeration constants and enumeration tags.
+    pub fn prune_scope(&mut self, scope: usize) {
+        self.symbols.retain(|symbol| symbol.scope < scope);
+        self.typedefs.retain(|typedef| typedef.scope < scope);
+        self.constants.retain(|constant| constant.scope < scope);
+        self.enumeration_tags.retain(|tag| tag.scope < scope);
     }
 
     /// Enter a block at `range`. Its automatic objects are added to the
@@ -417,7 +499,7 @@ impl<'a> Parser<'a> {
         self.emit(Op::Leave, range)
     }
 
-    fn statement(&mut self) -> Result<(), Diagnostic> {
+    pub fn statement(&mut self) -> Result<(), Diagnostic> {
         self.enter_nesting()?;
         let result = self.statement_inner();
         self.nesting -= 1;
@@ -465,22 +547,24 @@ impl<'a> Parser<'a> {
                 let branch = self.code.len();
                 self.emit_node(Op::Branch(0, "while"), range, node)?;
                 self.loop_body = true;
+                self.open_breakable("while");
                 self.control_body()?;
                 self.emit(Op::Jump(head), token.range)?;
                 self.patch(branch, self.code.len());
+                self.close_breakable();
                 Ok(())
             },
             | "for" => self.for_statement(),
+            | "switch" => self.switch_statement(),
+            | "break" => self.break_statement(),
+            | "case" | "default" => Err(self.misplaced_label()),
             | ";" => {
                 self.position += 1;
                 Ok(())
             },
-            | "typedef" => Err(self.error(
-                "a typedef inside a function is outside this subset; write it at file scope",
-            )),
             | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "float" | "double"
-            | "struct" | "static" | "const" | "else" | "break" | "continue" | "goto" | "do"
-            | "switch" => Err(self.error("unsupported statement in this subset")),
+            | "struct" | "enum" | "typedef" | "static" | "const" | "else" | "continue"
+            | "goto" | "do" => Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -500,7 +584,7 @@ impl<'a> Parser<'a> {
         self.enter(range)?;
         self.statement()?;
         self.leave(range)?;
-        self.symbols.retain(|symbol| symbol.scope < self.scope);
+        self.prune_scope(self.scope);
         self.scope -= 1;
         Ok(())
     }
@@ -511,7 +595,7 @@ impl<'a> Parser<'a> {
         self.expect("(")?;
         self.scope += 1;
         self.enter(token.range)?;
-        if self.at_type() || self.at("const") {
+        if self.at_type() || self.at("const") || self.at("enum") {
             self.declaration()?;
         } else {
             if !self.at(";") {
@@ -542,6 +626,7 @@ impl<'a> Parser<'a> {
         self.expect(")")?;
         let mut iteration = self.code.split_off(iteration_start);
         self.loop_body = true;
+        self.open_breakable("for");
         self.control_body()?;
         // The clause moves after the body: its jumps inside itself (a
         // `?:` or `&&`'s) move with it.
@@ -559,8 +644,9 @@ impl<'a> Parser<'a> {
         self.code.extend(iteration);
         self.emit(Op::Jump(head), token.range)?;
         self.patch(branch, self.code.len());
+        self.close_breakable();
         self.leave(token.range)?;
-        self.symbols.retain(|symbol| symbol.scope < self.scope);
+        self.prune_scope(self.scope);
         self.scope -= 1;
         Ok(())
     }
@@ -604,9 +690,21 @@ impl<'a> Parser<'a> {
     /// initializer. A `static` one names an object that already exists.
     fn declaration(&mut self) -> Result<(), Diagnostic> {
         self.declaration_macros.clear();
+        if self.at("typedef") {
+            return self.typedef_declaration();
+        }
+        if self.at("enum") && (self.peek(1) == "{" || self.peek(2) == "{") {
+            return self.enumeration_definition();
+        }
+        if self.at("struct") && (self.peek(1) == "{" || self.peek(2) == "{") {
+            return Err(
+                self.error("define structures at file scope, on their own (struct tag { ... };)")
+            );
+        }
         let is_static = self.take("static");
         let typedef = self.typedef_name();
         let base = self.base_type()?;
+        let named = self.named(base);
         let depth = self.pointer()?;
         let (name, ty) = if self.at_function_declarator() {
             let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
@@ -620,6 +718,7 @@ impl<'a> Parser<'a> {
         let specified = Specified {
             constant: base.is_const() && depth == 0,
             typedef,
+            named,
         };
         if is_static {
             return self.static_local(name, ty, specified);
@@ -687,6 +786,7 @@ impl<'a> Parser<'a> {
                 ty,
                 constant: specified.constant,
                 typedef: specified.typedef,
+                named: specified.named,
             });
         }
         self.emit(
@@ -694,6 +794,7 @@ impl<'a> Parser<'a> {
                 name: String::from(name.text),
                 ty,
                 initialized: self.at("="),
+                named: specified.named,
             },
             name.range,
         )?;
@@ -704,9 +805,9 @@ impl<'a> Parser<'a> {
     /// Whether a block-scope declaration starts here. `void` starts only
     /// a declaration there, which `base_type` refuses as outside the
     /// subset.
-    fn at_declaration(&self) -> bool {
+    pub fn at_declaration(&self) -> bool {
         self.at_type()
-            || ["struct", "static", "const", "void"]
+            || ["struct", "enum", "typedef", "static", "const", "void"]
                 .iter()
                 .any(|keyword| self.at(keyword))
     }
@@ -727,18 +828,58 @@ impl<'a> Parser<'a> {
             || self.typedef(word).is_some()
     }
 
-    /// The type the typedef name `word` names, if the program declared it.
+    /// The type the typedef name `word` names, if one is in scope.
     pub fn typedef(&self, word: &str) -> Option<Type> {
-        self.typedefs
-            .iter()
-            .find(|(name, _)| *name == word)
-            .map(|&(_, ty)| ty)
+        self.typedef_entry(word).map(|typedef| typedef.ty)
     }
 
-    /// A declaration may not reuse a typedef name for an object or a
-    /// function: the two share one name space (C99 §6.7.7p3), and this
-    /// subset keeps each typedef name for its type.
+    /// The typedef name `word`, innermost first, if one is in scope.
+    pub fn typedef_entry(&self, word: &str) -> Option<&Typedef<'a>> {
+        self.typedefs
+            .iter()
+            .rev()
+            .find(|typedef| typedef.name == word)
+    }
+
+    /// What a declaration's type specifier `base` named beyond its type:
+    /// the typedef name it was spelled with, and its enumeration.
+    pub fn named(&mut self, base: Base) -> Named {
+        let alias = self.alias.take();
+        Named {
+            alias,
+            enumeration: base.enumeration(),
+        }
+    }
+
+    /// A declaration may not reuse a typedef name or an enumeration
+    /// constant's name for an object or a function: all share one name
+    /// space (C99 §6.2.3p1), and this subset keeps each typedef name for
+    /// its type and each constant for its value.
     pub fn typedef_conflict(&self, name: Token<'_>) -> Result<(), Diagnostic> {
+        if let Some(constant) = self.constant(name.text) {
+            if constant.scope == self.scope {
+                return Err(Diagnostic::constraint(
+                    name.range,
+                    &format_message(
+                        "`",
+                        name.text,
+                        "` is already an enumeration constant in this scope, and one scope may \
+                         declare a name only once (C99 §6.7p3)",
+                    ),
+                    &super::clauses::ONE_DECLARATION,
+                ));
+            }
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                &format_message(
+                    "`",
+                    name.text,
+                    "` is an enumeration constant here; naming an object or function after it is \
+                     outside this subset",
+                ),
+            ));
+        }
         if self.typedef(name.text).is_some() {
             return Err(Diagnostic::new(
                 "unsupported",
@@ -1835,10 +1976,7 @@ impl<'a> Parser<'a> {
     /// A function declarator's parenthesized parameter list: each
     /// parameter's name (absent in a prototype that omits it) and type.
     /// Named parameters enter the function's scope.
-    fn function_header(
-        &mut self,
-        name: Token<'a>,
-    ) -> Result<Vec<(Option<Token<'a>>, Type)>, Diagnostic> {
+    fn function_header(&mut self, name: Token<'a>) -> Result<Vec<Parameter<'a>>, Diagnostic> {
         self.expect("(")?;
         let mut parameters = Vec::new();
         self.scope = 1;
@@ -1856,11 +1994,12 @@ impl<'a> Parser<'a> {
             self.position += 1;
         } else {
             loop {
-                let (parameter, ty) = self.parameter()?;
+                let (parameter, ty, enumeration) = self.parameter()?;
                 if let Some(parameter) = parameter {
+                    self.typedef_conflict(parameter)?;
                     self.add_symbol(parameter, ty, 1, None, false)?;
                 }
-                parameters.push((parameter, ty));
+                parameters.push((parameter, ty, enumeration));
                 if self.take(")") {
                     break;
                 }
@@ -1873,8 +2012,11 @@ impl<'a> Parser<'a> {
 
     /// One parameter's declaration in a parameter list: its name, absent
     /// when the declaration omits it, and its type. A parameter may be a
-    /// pointer to a function, as in `int (*f)(int)`.
-    fn parameter(&mut self) -> Result<(Option<Token<'a>>, Type), Diagnostic> {
+    /// pointer to a function, as in `int (*f)(int)`; one of array or
+    /// function type is refused, since C adjusts it to a pointer.
+    ///
+    /// C99: §6.7.5.3 paragraphs 7-8, p. 119; PDF p. 131.
+    fn parameter(&mut self) -> Result<Parameter<'a>, Diagnostic> {
         if self.at("...") {
             return Err(self.error(
                 "a variable argument list (`...`) is outside this subset; printf is the only \
@@ -1884,7 +2026,8 @@ impl<'a> Parser<'a> {
         let base = self.base_type()?;
         let depth = self.pointer()?;
         if self.at_function_declarator() {
-            return self.function_declarator(base, depth, Naming::Optional);
+            let (name, ty) = self.function_declarator(base, depth, Naming::Optional)?;
+            return Ok((name, ty, None));
         }
         let parameter = if self.at(",") || self.at(")") {
             None
@@ -1893,7 +2036,7 @@ impl<'a> Parser<'a> {
         };
         let range = parameter.map_or(self.current().range, |token| token.range);
         let ty = match (base, depth) {
-            | (Base::Arithmetic(_, true), 0) =>
+            | (Base::Arithmetic(_, true) | Base::Enum(_, true), 0) =>
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
@@ -1902,8 +2045,19 @@ impl<'a> Parser<'a> {
                 )),
             | _ => self.declared_type(base, depth, None, range)?,
         };
-        if self.at("[") {
-            return Err(self.error(
+        // C99 §6.7.5.3p7 adjusts a parameter of array type to a pointer to
+        // its element type, whether `[N]` follows its name or a typedef
+        // name gives it the array type, as `row r` does after `typedef int
+        // row[3];`. The subset asks for the pointer as written.
+        if self.at("[") || ty.is_array() {
+            let at = if self.at("[") {
+                self.current().range
+            } else {
+                range
+            };
+            return Err(Diagnostic::new(
+                "unsupported",
+                at,
                 "array parameters are outside this subset; write the pointer they adjust to, such \
                  as `char *s`",
             ));
@@ -1916,7 +2070,7 @@ impl<'a> Parser<'a> {
                  §6.7.5.3p8); write that pointer, as in `int (*f)(int)`",
             ));
         }
-        Ok((parameter, ty))
+        Ok((parameter, ty, base.enumeration()))
     }
 
     /// Whether a parenthesized declarator for a pointer to a function, or
@@ -1943,17 +2097,7 @@ impl<'a> Parser<'a> {
         naming: Naming,
     ) -> Result<(Option<Token<'a>>, Type), Diagnostic> {
         let opening = self.current();
-        let returns = match (base, depth) {
-            | (Base::Arithmetic(arithmetic, false), 0) => arithmetic.ty(),
-            | (Base::Struct(id), 0) => self.complete_structure(id, opening.range)?,
-            | _ =>
-                return Err(Diagnostic::new(
-                    "unsupported",
-                    opening.range,
-                    "a pointer to a function here points to one that returns an arithmetic type \
-                     or a structure, as the subset's functions do",
-                )),
-        };
+        let returns = self.return_type(base, depth, opening.range)?;
         self.expect("(")?;
         let mut stars = 0;
         while self.take("*") {
@@ -1979,8 +2123,8 @@ impl<'a> Parser<'a> {
         let range = name.map_or(opening.range, |name| name.range);
         if name.is_some() && self.at("(") {
             return Err(self.error(
-                "a function that returns a pointer to a function is outside this subset; return \
-                 an index into a table of pointers instead",
+                "a function that returns a pointer to a function is defined or declared at file \
+                 scope in this subset, as in `int (*pick(int which))(int)`",
             ));
         }
         let mut length = None;
@@ -2012,7 +2156,7 @@ impl<'a> Parser<'a> {
         } else {
             let scope = self.scope;
             loop {
-                let (_, ty) = self.parameter()?;
+                let (_, ty, _) = self.parameter()?;
                 parameters.push(ty);
                 if parameters.len() > MAX_ARGUMENTS {
                     return Err(Diagnostic::limit(range, "too many parameters"));
@@ -2065,6 +2209,85 @@ impl<'a> Parser<'a> {
         Ok(length)
     }
 
+    /// The type a function returns, from its declaration specifiers `base`
+    /// with `depth` `*`s: an arithmetic type, an enumeration's integer type,
+    /// a complete structure, or a pointer to a function named by a typedef.
+    ///
+    /// C99: §6.7.5.3 paragraph 1, p. 118; PDF p. 130.
+    pub fn return_type(
+        &self,
+        base: Base,
+        depth: u8,
+        range: SourceRange,
+    ) -> Result<Type, Diagnostic> {
+        match (base, depth) {
+            | (Base::Arithmetic(arithmetic, false), 0) => Ok(arithmetic.ty()),
+            | (Base::Enum(id, false), 0) => Ok(Type::Integer(self.enumerations[id].integer)),
+            | (Base::Struct(id), 0) => self.complete_structure(id, range),
+            | (Base::Named(ty @ Type::FunctionPointer(_)), 0) => Ok(ty),
+            | _ => Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "functions return an arithmetic type, an enumeration, a structure or a pointer to \
+                 a function in this subset",
+            )),
+        }
+    }
+
+    /// `T (*name(parameters))(pointed-to parameters)`: a function whose
+    /// parameters are the inner list and which returns a pointer to a
+    /// function of the outer list, returning `T`. Returns the function's
+    /// name, its return type and its parameters.
+    ///
+    /// C99: §6.7.5 paragraph 4, p. 114; PDF p. 126.
+    /// C99: §6.7.5.3 paragraph 1, p. 118; PDF p. 130.
+    fn pointer_returning_header(
+        &mut self,
+        base: Base,
+        depth: u8,
+    ) -> Result<(Token<'a>, Type, Vec<Parameter<'a>>), Diagnostic> {
+        let opening = self.current();
+        let returns = self.return_type(base, depth, opening.range)?;
+        self.expect("(")?;
+        self.expect("*")?;
+        let name = self.identifier()?;
+        let header = self.function_header(name)?;
+        self.expect(")")?;
+        self.expect("(")?;
+        let mut parameters = Vec::new();
+        if self.take("void") {
+            self.expect(")")?;
+        } else if self.at(")") {
+            return Err(self.error(
+                "empty parentheses declare a function without a prototype; write (void) for no \
+                 parameters",
+            ));
+        } else {
+            loop {
+                let (_, ty, _) = self.parameter()?;
+                parameters.push(ty);
+                if parameters.len() > MAX_ARGUMENTS {
+                    return Err(Diagnostic::limit(name.range, "too many parameters"));
+                }
+                if self.take(")") {
+                    break;
+                }
+                self.expect(",")?;
+            }
+        }
+        if self.at("(") {
+            return Err(self.error(
+                "a function cannot return a function (C99 §6.7.5.3p1), and a pointer to a \
+                 function that returns one is outside this subset",
+            ));
+        }
+        let signature = self.intern(Signature {
+            returns,
+            parameters,
+        });
+        Ok((name, Type::FunctionPointer(signature), header))
+    }
+
     /// The index of `signature` in [`Parser::function_types`], added if
     /// new.
     pub fn intern(&mut self, signature: Signature) -> usize {
@@ -2079,52 +2302,188 @@ impl<'a> Parser<'a> {
         self.function_types.len() - 1
     }
 
-    /// `typedef T (*name)(parameters);` at file scope: `name` becomes a
-    /// synonym for the type of a pointer to a function. A typedef declares
-    /// no object, so nothing happens when the program runs; later
-    /// declarations use the name as a type specifier.
+    /// `typedef T declarator;`, at file or block scope: the declarator's
+    /// name becomes a synonym for the type that `T` and the declarator give
+    /// it, as they would give an object: `typedef double celsius;`,
+    /// `typedef char *string;`, `typedef int row[3];`, `typedef struct point
+    /// point;`, `typedef enum { OFF, ON } state;` or `typedef int
+    /// (*binop)(int, int);`. A typedef declares no object, so nothing
+    /// happens when the program runs; when it defines an enumeration, the
+    /// declaration of its constants is a step of its own. Later declarations
+    /// use the name as a type specifier.
     ///
     /// C99: §6.7.7 paragraph 3, p. 123; PDF p. 135.
     fn typedef_declaration(&mut self) -> Result<(), Diagnostic> {
         let start = self.current();
-        let base = self.base_type()?;
+        self.expect("typedef")?;
+        let mut defined = None;
+        let base = if self.at("struct") && (self.peek(1) == "{" || self.peek(2) == "{") {
+            if self.scope > 0 {
+                return Err(self
+                    .error("define structures at file scope, on their own or in a typedef there"));
+            }
+            Base::Struct(self.structure_body()?)
+        } else if self.at("enum") && (self.peek(1) == "{" || self.peek(2) == "{") {
+            let id = self.enumeration_specifier(true)?;
+            defined = Some(id);
+            Base::Enum(id, false)
+        } else {
+            self.base_type()?
+        };
+        self.alias = None;
         let depth = self.pointer()?;
-        if !self.at_function_declarator() || self.peek(2) == "*" {
+        if base.is_const() && depth == 0 {
             return Err(Diagnostic::new(
                 "unsupported",
                 start.range,
-                "a typedef in this subset names a pointer to a function, as in `typedef int \
-                 (*binop)(int, int);`; other typedefs are outside it",
+                "a typedef of a const type is outside this subset; write const in each \
+                 declaration that uses the typedef name",
             ));
         }
-        let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
-        let Some(name) = name else {
-            return Err(self.error("expected the typedef name"));
+        let (name, ty) = if self.at_function_declarator() {
+            let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
+            let Some(name) = name else {
+                return Err(self.error("expected the typedef name"));
+            };
+            (name, ty)
+        } else {
+            let name = self.identifier()?;
+            if self.at("(") {
+                return Err(self.error(
+                    "a typedef of a function type, as in `typedef int fn(int);`, is outside this \
+                     subset; name the pointer instead, as in `typedef int (*fn)(int);`",
+                ));
+            }
+            if self.at("[") && self.peek(1) == "]" {
+                return Err(self.error(
+                    "a typedef of an array of unknown size is outside this subset; give its size",
+                ));
+            }
+            let array = self.array_suffix()?;
+            // A typedef may name a structure before its definition completes
+            // it, as `typedef struct node node;` does (C99 §6.7.2.3p8).
+            let ty = match (base, depth, array) {
+                | (Base::Struct(id), 0, None) => Type::Struct(id),
+                | _ => self.declared_type(base, depth, array, name.range)?,
+            };
+            (name, ty)
         };
-        if ty.is_array() {
-            return Err(Diagnostic::new(
-                "unsupported",
-                name.range,
-                "a typedef of an array is outside this subset",
-            ));
+        if self.at(",") {
+            return Err(self.error("declare one typedef name per typedef in this subset"));
         }
-        if self.typedef(name.text).is_some()
-            || self.symbols.iter().any(|symbol| symbol.name == name.text)
-            || self
-                .function_signatures
-                .iter()
-                .any(|(function, _)| function == name.text)
-            || Library::named(name.text).is_some()
+        self.ordinary_conflict(name, "a typedef name")?;
+        // A structure or an enumeration without a tag has no name but the
+        // typedef name that names it.
+        if let Base::Struct(id) = base
+            && !self.structures[id].tagged
+            && self.structures[id].name.is_empty()
         {
-            return Err(Diagnostic::new(
+            self.structures[id].name = String::from(name.text);
+        }
+        let enumeration = base.enumeration();
+        let mut spelling = self.spelling(ty, enumeration);
+        if let Some(id) = enumeration
+            && self.enumerations[id].tag.is_none()
+        {
+            if self.enumerations[id].name.is_empty() {
+                self.enumerations[id].name = String::from(name.text);
+            }
+            spelling = format!(
+                "enum {{ {} }}",
+                self.enumerations[id]
+                    .constants
+                    .iter()
+                    .map(|constant| constant.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        } else if let Type::Struct(id) = ty
+            && !self.structures[id].tagged
+        {
+            spelling = String::from("struct { … }");
+        }
+        self.aliases.push(Alias {
+            name: String::from(name.text),
+            spelling,
+            line: name.range.line,
+        });
+        self.typedefs.push(Typedef {
+            name: name.text,
+            ty,
+            scope: self.scope,
+            enumeration,
+            alias: self.aliases.len() - 1,
+        });
+        let end = self.current();
+        self.expect(";")?;
+        if let Some(id) = defined {
+            self.declare_enumeration(id, combined(start.range, end.range))?;
+        }
+        Ok(())
+    }
+
+    /// How C writes the type `ty`, with the enumeration `enumeration` named
+    /// where its integer type stands: `enum color`, `enum color *`.
+    pub fn spelling(&self, ty: Type, enumeration: Option<usize>) -> String {
+        let spelled = ty.spelling(&self.structures, &self.function_types);
+        match (
+            enumeration,
+            ty.element()
+                .unwrap_or(ty)
+                .integer()
+                .or_else(|| ty.pointee().and_then(Type::integer)),
+        ) {
+            | (Some(id), Some(integer)) =>
+                spelled.replacen(integer.spelling(), &self.enumerations[id].name, 1),
+            | _ => spelled,
+        }
+    }
+
+    /// A new enumeration constant or typedef name `name`, `what`, may not
+    /// repeat an ordinary identifier of the same scope, since they share
+    /// one name space (C99 §6.2.3p1, §6.7p3); one that hides a name of an
+    /// enclosing scope is outside this subset.
+    pub fn ordinary_conflict(&self, name: Token<'_>, what: &str) -> Result<(), Diagnostic> {
+        self.library_conflict(name)?;
+        let scope = self
+            .constant(name.text)
+            .map(|constant| constant.scope)
+            .or_else(|| self.typedef_entry(name.text).map(|typedef| typedef.scope))
+            .or_else(|| {
+                self.symbols
+                    .iter()
+                    .rev()
+                    .find(|symbol| symbol.name == name.text)
+                    .map(|symbol| symbol.scope)
+            })
+            .or_else(|| {
+                self.function_signatures
+                    .iter()
+                    .any(|(function, _)| function == name.text)
+                    .then_some(0)
+            });
+        match scope {
+            | Some(scope) if scope == self.scope => Err(Diagnostic::constraint(
+                name.range,
+                &format!(
+                    "`{}` is already declared in this scope: {what} shares one name space with \
+                     objects, functions, typedef names and enumeration constants, and one scope \
+                     may declare a name only once (C99 §6.2.3p1, §6.7p3)",
+                    name.text
+                ),
+                &super::clauses::ONE_DECLARATION,
+            )),
+            | Some(_) => Err(Diagnostic::new(
                 "unsupported",
                 name.range,
-                "this name is already declared; a typedef name shares one name space with objects \
-                 and functions (C99 §6.7.7p3)",
-            ));
+                &format!(
+                    "`{}` is already declared in an enclosing scope; {what} that hides it is \
+                     outside this subset",
+                    name.text
+                ),
+            )),
+            | None => Ok(()),
         }
-        self.typedefs.push((name.text, ty));
-        self.expect(";")
     }
 
     /// `T name(parameters);`: a prototype that lets calls before the
@@ -2133,9 +2492,9 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Token<'a>,
         returns: Type,
-        header: &[(Option<Token<'a>>, Type)],
+        header: &[Parameter<'a>],
     ) -> Result<(), Diagnostic> {
-        let parameters: Vec<Type> = header.iter().map(|&(_, ty)| ty).collect();
+        let parameters: Vec<Type> = header.iter().map(|&(_, ty, _)| ty).collect();
         let named: Vec<(String, Type)> = parameters.iter().map(|&ty| (String::new(), ty)).collect();
         self.agrees_with_prototypes(name, returns, &named)?;
         if let Some((_, defined)) = self
@@ -2246,16 +2605,23 @@ impl<'a> Parser<'a> {
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120 (`const` qualifies
     /// the type; the object is then not modifiable).
     pub fn base_type(&mut self) -> Result<Base, Diagnostic> {
-        if let Some(ty) = self.typedef(self.current().text) {
-            self.position += 1;
-            return Ok(Base::Named(ty));
+        self.alias = None;
+        if self.typedef(self.current().text).is_some() {
+            return self.named_base(false);
         }
         let constant = self.take("const");
-        if constant && let Some(ty) = self.typedef(self.current().text) {
-            let _ = ty;
-            return Err(
-                self.error("a const pointer to a function is outside this subset; drop the const")
-            );
+        if constant && self.typedef(self.current().text).is_some() {
+            return self.named_base(true);
+        }
+        if self.at("enum") {
+            let id = self.enumeration_specifier(false)?;
+            if self.at("const") {
+                return Err(self.error(
+                    "write const first, as in `const enum color`; other placements of const are \
+                     outside this subset",
+                ));
+            }
+            return Ok(Base::Enum(id, constant));
         }
         if let Some(arithmetic) = self.arithmetic_type()? {
             if self.at("const") {
@@ -2286,6 +2652,56 @@ impl<'a> Parser<'a> {
             );
         }
         Ok(Base::Struct(self.tag(tag)?))
+    }
+
+    /// The type specifier a typedef name spells, read as the specifier of
+    /// the type it names (C99 §6.7.7p3): `const` applies to an arithmetic
+    /// type or an enumeration, as it would written out.
+    fn named_base(&mut self, constant: bool) -> Result<Base, Diagnostic> {
+        let token = self.current();
+        let Some(typedef) = self.typedef_entry(token.text) else {
+            return Err(self.error("expected a typedef name"));
+        };
+        let (ty, enumeration, alias) = (typedef.ty, typedef.enumeration, typedef.alias);
+        self.position += 1;
+        self.alias = Some(alias);
+        let base = match (ty, enumeration) {
+            | (Type::Integer(_), Some(id)) => Base::Enum(id, constant),
+            | (ty, _) if let Some(arithmetic) = ty.arithmetic() =>
+                Base::Arithmetic(arithmetic, constant),
+            | (Type::Struct(id), _) if !constant => Base::Struct(id),
+            | (Type::Struct(_), _) =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    "const structures are outside this subset; drop the const",
+                )),
+            | (ty, _) if constant && ty.is_pointer() =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    &format!(
+                        "`const {}` makes the pointer itself const, `* const`, which is outside \
+                         this subset; drop the const",
+                        token.text
+                    ),
+                )),
+            | _ if constant =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    "a const array is outside this subset when its type is a typedef name; drop \
+                     the const",
+                )),
+            | (ty, _) => Base::Named(ty),
+        };
+        if self.at("const") {
+            return Err(self.error(
+                "write const first, as in `const T`; other placements of const are outside this \
+                 subset",
+            ));
+        }
+        Ok(base)
     }
 
     /// The arithmetic type the type specifiers here name, if they start
@@ -2373,14 +2789,30 @@ impl<'a> Parser<'a> {
         if let Some(id) = self
             .structures
             .iter()
-            .position(|structure| structure.name == tag.text)
+            .position(|structure| structure.tagged && structure.name == tag.text)
         {
             return Ok(id);
+        }
+        if self
+            .enumeration_tags
+            .iter()
+            .any(|known| known.name == tag.text)
+        {
+            return Err(Diagnostic::constraint(
+                tag.range,
+                &format!(
+                    "{} is the tag of an enumeration, enum {}, not of a structure: one tag names \
+                     one kind of type (C99 §6.7.2.3p2)",
+                    tag.text, tag.text
+                ),
+                &super::clauses::TAG_KIND,
+            ));
         }
         if self.structures.len() >= MAX_STRUCTURES {
             return Err(Diagnostic::limit(tag.range, "structure type limit reached"));
         }
-        self.structures.push(layout::structure(tag.text, &[], &[]));
+        self.structures
+            .push(layout::structure(tag.text, &[], &[], &[]));
         self.complete.push(false);
         Ok(self.structures.len() - 1)
     }
@@ -2399,23 +2831,61 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// An optional `[N]` with a positive decimal length.
+    /// An optional `[N]`: a positive decimal length, or an integer
+    /// constant expression such as an enumeration constant, `SIZE`.
+    ///
+    /// C99: §6.7.5.2 paragraph 1, p. 116; PDF p. 128.
     fn array_suffix(&mut self) -> Result<Option<usize>, Diagnostic> {
         if !self.take("[") {
             return Ok(None);
         }
         let count = self.current();
         self.declaration_macros.extend(count.macro_use);
-        let Ok(length) = count.text.parse::<usize>() else {
-            return Err(self.error("array size must be a positive decimal literal"));
-        };
-        if length == 0 || length > MAX_CELLS {
-            return Err(Diagnostic::limit(
-                count.range,
-                "array size must be between 1 and 512",
+        if let Ok(length) = count.text.parse::<usize>()
+            && self.peek(1) == "]"
+        {
+            if length == 0 || length > MAX_CELLS {
+                return Err(Diagnostic::limit(
+                    count.range,
+                    "array size must be between 1 and 512",
+                ));
+            }
+            self.position += 2;
+            return Ok(Some(length));
+        }
+        let expression = self.expression(0)?;
+        let range = self.expressions[expression].range;
+        if self.expressions[expression].ty.integer().is_some()
+            && !self.is_integer_constant_expression(expression)
+        {
+            return Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "an array whose size is not an integer constant expression is a variable length \
+                 array (C99 §6.7.5.2p4), which is outside this subset; give a constant size",
             ));
         }
-        self.position += 1;
+        let length =
+            self.constant_integer(expression, "an array's size", &super::clauses::ARRAY_SIZE)?;
+        if length <= 0 {
+            return Err(Diagnostic::constraint(
+                range,
+                &format!(
+                    "this array's size is {length}: an array's constant size must be greater than \
+                     zero (C99 §6.7.5.2p1)"
+                ),
+                &super::clauses::ARRAY_SIZE,
+            ));
+        }
+        let Some(length) = usize::try_from(length)
+            .ok()
+            .filter(|&length| length <= MAX_CELLS)
+        else {
+            return Err(Diagnostic::limit(
+                range,
+                "array size must be between 1 and 512",
+            ));
+        };
         self.expect("]")?;
         Ok(Some(length))
     }
@@ -2436,11 +2906,23 @@ impl<'a> Parser<'a> {
     ) -> Result<Type, Diagnostic> {
         let target = match base {
             | Base::Arithmetic(arithmetic, constant) => Target::Arithmetic(arithmetic, constant),
+            | Base::Enum(id, constant) =>
+                Target::Arithmetic(Arithmetic::Integer(self.enumerations[id].integer), constant),
             | Base::Struct(id) => Target::Struct(id),
             | Base::Named(ty) => {
-                // A typedef name for `T (*)(…)` with more `*`s or a length
-                // after it: one pointer more for each `*`.
+                // A typedef name for a pointer, `T *` or `T (*)(…)`, with
+                // more `*`s or a length after it: one pointer more for each
+                // `*`.
                 let Some((target, named)) = ty.chain() else {
+                    // A typedef of an array names that array type whole.
+                    if depth > 0 || array.is_some() {
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            range,
+                            "this typedef name names an array type; a pointer to an array or an \
+                             array of arrays is outside this subset",
+                        ));
+                    }
                     return Ok(ty);
                 };
                 let depth = named + depth;
@@ -2460,6 +2942,11 @@ impl<'a> Parser<'a> {
             | (Base::Arithmetic(arithmetic, _), 0, None) => Ok(arithmetic.ty()),
             | (Base::Arithmetic(arithmetic, _), 0, Some(length)) =>
                 Ok(Type::Array(arithmetic, length)),
+            | (Base::Enum(id, _), 0, None) => Ok(Type::Integer(self.enumerations[id].integer)),
+            | (Base::Enum(id, _), 0, Some(length)) => Ok(Type::Array(
+                Arithmetic::Integer(self.enumerations[id].integer),
+                length,
+            )),
             | (Base::Struct(id), 0, None) => self.complete_structure(id, range),
             | (Base::Struct(_), 0, Some(_)) => Err(Diagnostic::new(
                 "unsupported",
@@ -2471,53 +2958,94 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `struct tag { members };` at file scope. Members are integers,
-    /// pointers to them, arrays of them, complete structures
-    /// and pointers to structures (including this one); several may share
-    /// a line (`int x, y;`).
+    /// `struct tag { members };` at file scope, on its own.
     fn structure_definition(&mut self) -> Result<(), Diagnostic> {
-        self.expect("struct")?;
-        let tag = self.identifier()?;
-        let id = self.tag(tag)?;
-        if self.complete[id] {
+        let start = self.current();
+        let id = self.structure_body()?;
+        if !self.structures[id].tagged {
             return Err(Diagnostic::new(
                 "unsupported",
+                start.range,
+                "a structure without a tag is defined in a typedef in this subset, as in `typedef \
+                 struct { int x, y; } point;`",
+            ));
+        }
+        if !self.at(";") {
+            return Err(self.error(
+                "end the structure definition with `;` and declare its objects separately",
+            ));
+        }
+        self.expect(";")
+    }
+
+    /// `struct tag { members }` or `struct { members }`, at file scope:
+    /// the structure's index. Members are arithmetic types, enumerations,
+    /// pointers to them, arrays of them, complete structures, pointers to
+    /// structures (including this one) and pointers to functions; several
+    /// may share a line (`int x, y;`).
+    fn structure_body(&mut self) -> Result<usize, Diagnostic> {
+        let keyword = self.current();
+        self.expect("struct")?;
+        let (id, tag) = if self.at("{") {
+            if self.structures.len() >= MAX_STRUCTURES {
+                return Err(Diagnostic::limit(
+                    keyword.range,
+                    "structure type limit reached",
+                ));
+            }
+            let mut structure = layout::structure("", &[], &[], &[]);
+            structure.tagged = false;
+            self.structures.push(structure);
+            self.complete.push(false);
+            (self.structures.len() - 1, keyword)
+        } else {
+            let tag = self.identifier()?;
+            (self.tag(tag)?, tag)
+        };
+        if self.complete[id] {
+            return Err(Diagnostic::constraint(
                 tag.range,
-                "this structure is already defined",
+                &format!(
+                    "struct {} is already defined: a type's contents may be defined only once \
+                     (C99 §6.7.2.3p1)",
+                    tag.text
+                ),
+                &super::clauses::TAG_DEFINED_ONCE,
             ));
         }
         self.expect("{")?;
         let mut members: Vec<(String, Type)> = Vec::new();
+        let mut enumerations = Vec::new();
         while !self.take("}") {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
             }
             let base = self.base_type()?;
+            self.alias = None;
             loop {
                 let depth = self.pointer()?;
-                if self.at_function_declarator() || matches!(base, Base::Named(_)) {
-                    return Err(self.error(
-                        "a member that points to a function is outside this subset; declare the \
-                         pointer as a variable of its own",
-                    ));
-                }
-                let name = self.identifier()?;
-                let array = self.array_suffix()?;
-                if base == Base::Struct(id) && depth == 0 {
-                    return Err(Diagnostic::new(
-                        "unsupported",
-                        name.range,
-                        "a structure cannot contain itself; a pointer to it is fine",
-                    ));
-                }
-                if base.is_const() && depth == 0 {
-                    return Err(Diagnostic::new(
-                        "unsupported",
-                        name.range,
-                        "const members are outside this subset",
-                    ));
-                }
-                let ty = self.declared_type(base, depth, array, name.range)?;
+                let (name, ty) = if self.at_function_declarator() {
+                    let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
+                    (name.unwrap_or_else(|| self.current()), ty)
+                } else {
+                    let name = self.identifier()?;
+                    let array = self.array_suffix()?;
+                    if base == Base::Struct(id) && depth == 0 {
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            name.range,
+                            "a structure cannot contain itself; a pointer to it is fine",
+                        ));
+                    }
+                    if base.is_const() && depth == 0 {
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            name.range,
+                            "const members are outside this subset",
+                        ));
+                    }
+                    (name, self.declared_type(base, depth, array, name.range)?)
+                };
                 if members.iter().any(|(existing, _)| existing == name.text) {
                     return Err(Diagnostic::new(
                         "unsupported",
@@ -2532,6 +3060,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 members.push((String::from(name.text), ty));
+                enumerations.push(base.enumeration());
                 if !self.take(",") {
                     break;
                 }
@@ -2545,18 +3074,25 @@ impl<'a> Parser<'a> {
                 "a structure needs at least one member",
             ));
         }
-        let laid = layout::structure(tag.text, &members, &self.structures);
+        let name = if self.structures[id].tagged {
+            tag.text
+        } else {
+            ""
+        };
+        let mut laid = layout::structure(name, &members, &self.structures, &self.function_types);
+        laid.tagged = self.structures[id].tagged;
         if laid.size > MAX_CELLS * 8 {
             return Err(Diagnostic::limit(tag.range, "structure size limit reached"));
         }
+        for (member, enumeration) in laid.members.iter_mut().zip(enumerations) {
+            if let Some(enumeration) = enumeration {
+                member.enumeration = u16::try_from(enumeration).ok();
+                member.r#type = self.spelling(member.ty, Some(enumeration));
+            }
+        }
         self.structures[id] = laid;
         self.complete[id] = true;
-        if !self.at(";") {
-            return Err(self.error(
-                "end the structure definition with `;` and declare its objects separately",
-            ));
-        }
-        self.expect(";")
+        Ok(id)
     }
 
     /// The error for a member `name` that structure `id` does not have.
@@ -2575,7 +3111,7 @@ impl<'a> Parser<'a> {
     /// `main` by its constant initializer or to zero.
     fn file_scope_object(
         &mut self,
-        base: Base,
+        (base, named): (Base, Named),
         typedef: Option<&'static str>,
         depth: u8,
         name: Token<'a>,
@@ -2585,6 +3121,7 @@ impl<'a> Parser<'a> {
         let specified = Specified {
             constant: base.is_const() && depth == 0,
             typedef,
+            named,
         };
         self.file_scope_typed(name, ty, specified)
     }
@@ -2660,6 +3197,7 @@ impl<'a> Parser<'a> {
             literal: false,
             constant: specified.constant,
             typedef: specified.typedef,
+            named: specified.named,
             parts: 0,
             macros: std::mem::take(&mut self.declaration_macros),
             computed: std::mem::take(&mut self.computed),
@@ -2688,6 +3226,7 @@ impl<'a> Parser<'a> {
             literal: true,
             constant: false,
             typedef: None,
+            named: Named::default(),
             parts: literal.parts,
             macros: literal.macro_use.into_iter().collect(),
             computed: Vec::new(),
@@ -2977,7 +3516,13 @@ pub(super) enum Base {
     /// An arithmetic type, `const`-qualified when set.
     Arithmetic(Arithmetic, bool),
     Struct(usize),
-    /// The type a typedef name names: a pointer to a function.
+    /// An enumeration, by index into [`Parser::enumerations`],
+    /// `const`-qualified when set: its objects have its compatible integer
+    /// type.
+    Enum(usize, bool),
+    /// The type a typedef name names, when it is a pointer or an array:
+    /// a typedef of an arithmetic type, a structure or an enumeration reads
+    /// as that type's own specifier.
     Named(Type),
 }
 
@@ -3019,13 +3564,45 @@ fn resolve_functions(value: &mut Value, declared: &[(String, usize)], functions:
 struct Specified {
     constant: bool,
     typedef:  Option<&'static str>,
+    named:    Named,
 }
 
 impl Base {
     /// Whether the specifier is `const`-qualified.
     pub(super) const fn is_const(self) -> bool {
-        matches!(self, Self::Arithmetic(_, true))
+        matches!(self, Self::Arithmetic(_, true) | Self::Enum(_, true))
     }
+
+    /// The enumeration the specifier names, if it is one.
+    pub(super) const fn enumeration(self) -> Option<usize> {
+        match self {
+            | Self::Enum(id, _) => Some(id),
+            | _ => None,
+        }
+    }
+}
+
+/// A typedef name in scope.
+pub(super) struct Typedef<'a> {
+    pub name:        &'a str,
+    /// The type it names.
+    pub ty:          Type,
+    pub scope:       usize,
+    /// The enumeration its type is, or is built from.
+    pub enumeration: Option<usize>,
+    /// Its declaration, by index into [`Parser::aliases`].
+    pub alias:       usize,
+}
+
+/// A `switch` or loop being compiled, which a `break` inside it leaves.
+pub(super) struct Breakable {
+    /// `switch`, `while` or `for`.
+    pub statement: &'static str,
+    /// How many blocks were open where its body began: a `break` leaves
+    /// each block opened since.
+    pub blocks:    usize,
+    /// The `break` jumps to patch to the statement's end.
+    pub breaks:    Vec<usize>,
 }
 
 /// The char value a byte holds: plain char is signed with 8 bits on x86-64
@@ -3140,6 +3717,10 @@ fn format_message(prefix: &str, value: &str, suffix: &str) -> String {
     message.push_str(suffix);
     message
 }
+
+/// One parameter of a function's parameter list: its name, when written,
+/// its type, and the enumeration its type is, if any.
+pub(super) type Parameter<'a> = (Option<Token<'a>>, Type, Option<usize>);
 
 pub(super) struct CallSite {
     pub name:      String,

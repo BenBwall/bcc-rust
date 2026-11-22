@@ -525,6 +525,26 @@ impl Parser<'_> {
             let node = self.node(kind, ty, false, range, 1)?;
             self.expressions[node].macro_use = token.macro_use;
             node
+        } else if let Some(constant) = self.constant(&text) {
+            // An enumeration constant is an integer constant of type int,
+            // not an object (C99 §6.4.4.3p2, §6.7.2.2p3).
+            let kind = ExprKind::Enumerator {
+                value:       constant.value,
+                enumeration: constant.enumeration,
+                constant:    constant.index,
+            };
+            self.position += 1;
+            if self.at("(") {
+                return Err(Diagnostic::constraint(
+                    combined(range, self.current().range),
+                    &format!(
+                        "`{text}` is an enumeration constant, an int, and only a function or a \
+                         pointer to a function can be called (C99 §6.5.2.2p1)"
+                    ),
+                    &super::clauses::CALLED_FUNCTION,
+                ));
+            }
+            self.node(kind, Type::INT, false, range, 1)?
         } else if is_identifier(&text) {
             self.position += 1;
             let binding = self
@@ -1114,6 +1134,7 @@ impl Parser<'_> {
             | ExprKind::Number(..)
             | ExprKind::Real(..)
             | ExprKind::Character(..)
+            | ExprKind::Enumerator { .. }
             | ExprKind::Sizeof(..) => {},
         }
         Ok(reach)
@@ -1775,6 +1796,24 @@ impl Parser<'_> {
                 self.mark_macro(node.macro_use);
                 tree
             },
+            | ExprKind::Enumerator {
+                value,
+                enumeration,
+                constant,
+            } => {
+                let name = self.source.get(range.start..range.end).unwrap_or_default();
+                let tree = self.tree(name, range, Vec::new())?;
+                self.emit_node(
+                    Op::Enumerator {
+                        value,
+                        enumeration,
+                        constant,
+                    },
+                    range,
+                    tree,
+                )?;
+                tree
+            },
             | ExprKind::Sizeof(size, ty) => {
                 let text = self.source.get(range.start..range.end).unwrap_or("sizeof");
                 let tree = self.tree(text, range, Vec::new())?;
@@ -1913,9 +1952,20 @@ impl Parser<'_> {
                 }
             },
             | ExprKind::Unary("*", child) => {
+                // An object holds the pointer `*` follows; any other operand
+                // yields it (C99 §6.5.3.2p4).
+                let object = self.check_lvalue(child).is_ok();
+                let written = self.expressions[child].range;
                 let operand = self.emit_expression(child, false)?;
                 let tree = self.tree("*", range, vec![operand])?;
-                self.emit_node(Op::Dereference, range, tree)?;
+                self.emit_node(
+                    Op::Dereference {
+                        object,
+                        operand: written,
+                    },
+                    range,
+                    tree,
+                )?;
                 if !address {
                     self.load(node.ty, range, tree)?;
                 }
@@ -2461,6 +2511,13 @@ pub(super) enum ExprKind {
     Real(Rounded, String),
     /// A character constant's value and its spelling, `'a'`.
     Character(i128, String),
+    /// The enumeration constant `constant` of enumeration `enumeration`,
+    /// with its value: an integer constant of type `int` (C99 §6.4.4.3p2).
+    Enumerator {
+        value:       i128,
+        enumeration: usize,
+        constant:    usize,
+    },
     /// `sizeof`: the size in bytes of the operand's type, and the type.
     Sizeof(usize, Type),
     /// `++`/`--` of `target`; `clash` says what else in the full

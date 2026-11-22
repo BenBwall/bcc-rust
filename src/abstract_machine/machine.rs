@@ -18,14 +18,17 @@ use super::{
         Real,
     },
     model::{
+        Alias,
         Arithmetic,
         Diagnostic,
+        Enumeration,
         Evaluation,
         Event,
         Frame,
         Instruction,
         MAX_FRAMES,
         MAX_OPERANDS,
+        Named,
         Op,
         Operand,
         Place,
@@ -62,6 +65,14 @@ pub(super) struct Machine {
     pub signatures:   Arc<[Signature]>,
     /// The program's functions' names, by index, for the pointers to them.
     pub functions:    Arc<[String]>,
+    /// The program's enumerations, for their types' names and constants.
+    pub enumerations: Arc<[Enumeration]>,
+    /// The program's typedef names, for the explanations.
+    pub aliases:      Arc<[Alias]>,
+    /// How many of the program's file-scope enumerations have been
+    /// declared: each is a step of its own, after the directives and
+    /// before the static objects exist.
+    pub enumerated:   usize,
     /// How many of the program's directives have run: each is a step of
     /// its own, before the static objects exist.
     pub preprocessed: usize,
@@ -81,6 +92,15 @@ impl Machine {
             self.state.status = "running";
             self.state.source_range = program.directives[index].range;
             self.state.event = narration::directive(program, index);
+            self.refresh(program);
+            return;
+        }
+        if self.enumerated < program.file_enumerations.len() {
+            let index = program.file_enumerations[self.enumerated];
+            self.enumerated += 1;
+            self.state.status = "running";
+            self.state.source_range = program.enumerations[index].range;
+            self.state.event = self.enumeration(program, index);
             self.refresh(program);
             return;
         }
@@ -134,7 +154,11 @@ impl Machine {
                 if let (Some(node), Some(result)) = (instruction.node, &event.result)
                     && !matches!(
                         instruction.op,
-                        Op::Call(..) | Op::Return(_) | Op::Fallthrough | Op::StaticLocal(_)
+                        Op::Call(..)
+                            | Op::Return(_)
+                            | Op::Fallthrough
+                            | Op::StaticLocal(_)
+                            | Op::Switch { .. }
                     )
                 {
                     self.record(node, result.clone());
@@ -177,6 +201,7 @@ impl Machine {
                     if let Some(typedef) = object.typedef {
                         self.name_type(id, typedef);
                     }
+                    self.name(id, object.named);
                     if object.constant {
                         self.make_const(id);
                     }
@@ -210,6 +235,7 @@ impl Machine {
                 ref name,
                 ty,
                 initialized,
+                named,
             } => {
                 let frame = &self.activations[top];
                 let id = self
@@ -229,9 +255,11 @@ impl Machine {
                         self.error("declaration of an object its block did not create")
                     })?;
                 self.state.objects[id - 1].declared = true;
-                self.declare(range, id, ty, initialized)
+                self.declare(range, id, ty, (initialized, named))
             },
             | &Op::StaticLocal(index) => self.static_local(range, index + 1),
+            | &Op::Enumeration(index) => self.enumeration(program, index),
+            | Op::Enumerator { .. } => self.enumerator_operation(instruction)?,
             | &Op::Push(integer, ty) => {
                 let value = Operand::Value(Value::Integer(integer));
                 self.push(value.clone())?;
@@ -479,16 +507,8 @@ impl Machine {
             },
             | Op::Function { .. } | Op::FunctionIndirection { .. } | Op::CallPointer { .. } =>
                 self.function_operation(instruction, program)?,
-            | Op::Dereference => {
-                let pointer = self.pop_value()?;
-                let (target, offset, structure) = self.dereference(&pointer)?;
-                self.push(Operand::Address {
-                    target,
-                    offset,
-                    structure,
-                })?;
-                self.indirection(range, source, pointer, target, offset, structure)
-            },
+            | &Op::Dereference { object, operand } =>
+                self.dereference_operation(range, source, object, operand)?,
             | Op::Index => {
                 let index = self.pop_value()?;
                 let base = self.pop_value()?;
@@ -641,6 +661,12 @@ impl Machine {
                 self.activations[top].pc = target;
                 narration::jump(range, backward)
             },
+            | &Op::Break(target, statement, skipped) => {
+                self.activations[top].pc = target;
+                narration::break_statement(range, statement, skipped)
+            },
+            | &Op::PastLabels(count) => narration::past_labels(range, source, count),
+            | Op::Switch { .. } => self.switch_operation(program, instruction)?,
             | &Op::Branch(target, statement) => {
                 let value = self.pop_value()?;
                 let truth = self.truth(&value)?;
@@ -682,6 +708,82 @@ impl Machine {
                     ));
                 },
         })
+    }
+
+    /// `*p` of a pointer to an object: the lvalue it points to. `object`
+    /// says whether its operand, written at `operand`, holds the pointer.
+    fn dereference_operation(
+        &mut self,
+        range: super::SourceRange,
+        source: &str,
+        object: bool,
+        operand: super::SourceRange,
+    ) -> Result<Event, Diagnostic> {
+        let pointer = self.pop_value()?;
+        let (target, offset, structure) = self.dereference(&pointer)?;
+        self.push(Operand::Address {
+            target,
+            offset,
+            structure,
+        })?;
+        Ok(self.indirection(
+            range,
+            &narration::snippet(source, operand),
+            (pointer, object),
+            target,
+            offset,
+            structure,
+        ))
+    }
+
+    /// An enumeration constant: push its value, an int.
+    fn enumerator_operation(&mut self, instruction: &Instruction) -> Result<Event, Diagnostic> {
+        let Op::Enumerator {
+            value,
+            enumeration,
+            constant,
+        } = instruction.op
+        else {
+            return Err(self.error("not an enumeration constant"));
+        };
+        self.push(Operand::Value(Value::Integer(value)))?;
+        Ok(self.enumerator(instruction.range, (enumeration, constant), value))
+    }
+
+    /// `switch`: jump to the case label whose constant equals the
+    /// controlling value, to `default` when none does, or past the body.
+    fn switch_operation(
+        &mut self,
+        program: &Program,
+        instruction: &Instruction,
+    ) -> Result<Event, Diagnostic> {
+        let Op::Switch {
+            cases,
+            default,
+            end,
+            promoted,
+        } = &instruction.op
+        else {
+            return Err(self.error("not a switch"));
+        };
+        let value = self.pop_value()?;
+        let Value::Integer(number) = value else {
+            return Err(self.error("a switch's controlling value is not an integer"));
+        };
+        // C99 §6.8.4.2p5: the integer promotions apply to the controlling
+        // expression, and each case constant was converted to the promoted
+        // type when it was compiled.
+        let promoted_value = promoted.convert(number);
+        let matched = cases.iter().find(|case| case.value == promoted_value);
+        let top = self.activations.len() - 1;
+        self.activations[top].pc = matched.map_or(default.unwrap_or(*end), |case| case.target);
+        Ok(Self::switched(
+            program,
+            instruction.range,
+            promoted_value,
+            matched,
+            *default,
+        ))
     }
 
     /// A store into the lvalue below the value on the stack: an
@@ -1130,6 +1232,18 @@ impl Machine {
         {
             parameters.push(self.allocate(name, *ty, 1, value, true)?);
         }
+        for (&id, &enumeration) in parameters
+            .iter()
+            .zip(&program.functions[function].enumerations)
+        {
+            self.name(
+                id,
+                Named {
+                    alias: None,
+                    enumeration,
+                },
+            );
+        }
         let mut event = self.called(
             instruction.range,
             name,
@@ -1157,15 +1271,25 @@ impl Machine {
         value: Value,
         fallthrough: bool,
     ) -> Result<Event, Diagnostic> {
-        if !matches!(
-            value,
-            Value::Integer(_) | Value::Floating(_) | Value::Struct { .. }
-        ) {
-            return Err(self.error("function returned a value of an unsupported type"));
-        }
         let top = self.activations.len() - 1;
         let id = self.activations[top].id;
         let defined = &program.functions[self.activations[top].function];
+        // A function may return a pointer to a function, or a null one,
+        // which a null pointer constant such as 0 converts to (C99
+        // §6.3.2.3p3).
+        let pointer = matches!(defined.returns, Type::FunctionPointer(_));
+        let value = match value {
+            | Value::Integer(0) if pointer => Value::null(),
+            | value => value,
+        };
+        let supported = match value {
+            | Value::Integer(_) | Value::Floating(_) | Value::Struct { .. } => !pointer,
+            | Value::Function(_) | Value::Pointer { target: None, .. } => pointer,
+            | _ => false,
+        };
+        if !supported {
+            return Err(self.error("function returned a value of an unsupported type"));
+        }
         let function = defined.name.clone();
         // The value converts to the return type as if by assignment (C99
         // §6.8.6.4p3).
@@ -1227,7 +1351,13 @@ impl Machine {
         let Some(node) = instruction.node else {
             if matches!(
                 instruction.op,
-                Op::Enter { .. } | Op::Leave | Op::Declare { .. } | Op::Jump(_)
+                Op::Enter { .. }
+                    | Op::Leave
+                    | Op::Declare { .. }
+                    | Op::Jump(_)
+                    | Op::Break(..)
+                    | Op::PastLabels(_)
+                    | Op::Enumeration(_)
             ) {
                 activation.evaluation = None;
                 activation.accesses.clear();
@@ -1335,7 +1465,11 @@ impl Machine {
         // Directives run in translation, and static initialization comes
         // before program startup: no call has begun until main's first
         // operation (C99 §5.1.1.2p1, §5.1.2p1).
-        if !self.started && (!program.statics.is_empty() || !program.directives.is_empty()) {
+        if !self.started
+            && (!program.statics.is_empty()
+                || !program.directives.is_empty()
+                || !program.file_enumerations.is_empty())
+        {
             self.state.evaluation = None;
             if !self.state.terminal() {
                 self.state.source_range = self.before_main(program);
@@ -1383,6 +1517,12 @@ impl Machine {
             .map(|directive| directive.range)
             .or_else(|| {
                 program
+                    .file_enumerations
+                    .get(self.enumerated)
+                    .map(|&index| program.enumerations[index].range)
+            })
+            .or_else(|| {
+                program
                     .statics
                     .get(self.initialized)
                     .map(|object| object.range)
@@ -1407,6 +1547,12 @@ impl Machine {
             .directives
             .first()
             .map(|directive| directive.range)
+            .or_else(|| {
+                program
+                    .file_enumerations
+                    .first()
+                    .map(|&index| program.enumerations[index].range)
+            })
             .or_else(|| program.statics.first().map(|object| object.range))
             .unwrap_or(program.functions[program.entry].code[0].range);
         let mut machine = Self {
@@ -1436,6 +1582,9 @@ impl Machine {
                 .iter()
                 .map(|function| function.name.clone())
                 .collect(),
+            enumerations: Arc::clone(&program.enumerations),
+            aliases: Arc::clone(&program.aliases),
+            enumerated: 0,
             preprocessed: 0,
             initialized: 0,
             started: false,

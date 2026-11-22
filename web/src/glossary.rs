@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 57] = [
+pub static TERMS: [Term; 60] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -512,6 +512,37 @@ pub static TERMS: [Term; 57] = [
                      takes an int and returns one.",
         clause:     "6.2.5p20",
         page:       47,
+    },
+    Term {
+        id:         "enumeration-constant",
+        name:       "Enumeration constant",
+        phrases:    &["enumeration constant", "enumeration constants"],
+        definition: "A name an enumeration declares for an int value, such as RED in enum color \
+                     { RED, GREEN }. It is a constant, not an object: it takes no storage, and \
+                     the compiler puts its value wherever the name appears.",
+        clause:     "6.4.4.3p2",
+        page:       71,
+    },
+    Term {
+        id:         "typedef-name",
+        name:       "Typedef name",
+        phrases:    &["typedef name", "typedef names"],
+        definition: "A second name for a type, declared with typedef, such as celsius in typedef \
+                     double celsius;. It makes no new type and no object: a declaration written \
+                     with it means exactly what one written with the type would.",
+        clause:     "6.7.7p3",
+        page:       135,
+    },
+    Term {
+        id:         "case-label",
+        name:       "Case label",
+        phrases:    &["case label", "case labels"],
+        definition: "A place in a switch's body, such as case 3:, that the switch can jump to: it \
+                     jumps to the case label whose constant equals its value, or else to the \
+                     default: label, which has no constant. Execution then runs on past later \
+                     labels until a break.",
+        clause:     "6.8.4.2p5",
+        page:       146,
     },
     Term {
         id:         "pointer-arithmetic",

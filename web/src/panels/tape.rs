@@ -546,7 +546,14 @@ pub fn value_text(value: &Value) -> Option<String> {
         | Value::Integer {
             text,
             character: Some(character),
+            ..
         } => Some(format!("{text} {character}")),
+        // An enumeration's object reads with the constant it holds.
+        | Value::Integer {
+            text,
+            constant: Some(constant),
+            ..
+        } => Some(format!("{text} {constant}")),
         | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
         // A char array reads as a string, spelled as a literal with every
         // null character written out, as the string cell boxes it:

@@ -19,7 +19,7 @@ use super::{
 };
 
 impl State {
-    /// Encodes this observation as schema version 10 JSON.
+    /// Encodes this observation as schema version 11 JSON.
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut output = String::new();
@@ -39,7 +39,7 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":10,\"source\":");
+    let mut output = String::from("{\"schema_version\":11,\"source\":");
     string(&mut output, &program.source);
     output.push_str(",\"structures\":[");
     for (index, structure) in program.structures.iter().enumerate() {
@@ -60,10 +60,26 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
             string(&mut output, &member.r#type);
             write!(
                 output,
-                ",\"offset\":{},\"size\":{},\"padding\":{},\"first\":{}}}",
+                ",\"offset\":{},\"size\":{},\"padding\":{},\"first\":{},\"enumeration\":",
                 member.offset, member.size, member.padding, member.first
             )
             .expect("String write");
+            optional(&mut output, member.enumeration.map(usize::from));
+            output.push('}');
+        }
+        output.push_str("]}");
+    }
+    output.push_str("],\"enumerations\":[");
+    for (index, enumeration) in program.enumerations.iter().enumerate() {
+        comma(&mut output, index);
+        output.push_str("{\"name\":");
+        string(&mut output, &enumeration.name);
+        output.push_str(",\"constants\":[");
+        for (index, constant) in enumeration.constants.iter().enumerate() {
+            comma(&mut output, index);
+            output.push_str("{\"name\":");
+            string(&mut output, &constant.name);
+            write!(output, ",\"value\":{}}}", constant.value).expect("String write");
         }
         output.push_str("]}");
     }
@@ -79,7 +95,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":10,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":11,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");
@@ -291,6 +307,8 @@ fn object_json(output: &mut String, object: &Object) {
         object.declared, object.parameter, object.literal
     )
     .expect("String write");
+    output.push_str(",\"enumeration\":");
+    optional(output, object.enumeration.map(usize::from));
     output.push_str(",\"value\":");
     value(output, &object.value);
     output.push('}');
