@@ -17,7 +17,9 @@ use super::{
     floating::Real,
     model::{
         Member,
+        Signature,
         Structure,
+        Target,
         Type,
         Value,
     },
@@ -29,7 +31,10 @@ impl Type {
         match self {
             | Self::Integer(integer) => (integer.bytes(), integer.bytes()),
             | Self::Floating(floating) => (floating.bytes(), floating.bytes()),
-            | Self::Pointer(..) | Self::StructPointer(_) | Self::Indirect(..) => (8, 8),
+            | Self::Pointer(..)
+            | Self::StructPointer(_)
+            | Self::Indirect(..)
+            | Self::FunctionPointer(_) => (8, 8),
             | Self::PointerArray(_, _, count) => (count.saturating_mul(8), 8),
             | Self::Array(element, count) =>
                 (count.saturating_mul(element.bytes()), element.bytes()),
@@ -55,10 +60,33 @@ impl Type {
     }
 
     /// The type spelled as C writes it: `unsigned int *`, `int[3]`, `struct
-    /// point`.
-    pub(super) fn spelling(self, structures: &[Structure]) -> String {
+    /// point`, `int (*)(int, int)`. `signatures` are the program's function
+    /// types.
+    pub(super) fn spelling(self, structures: &[Structure], signatures: &[Signature]) -> String {
         let tag = |id: usize| structures.get(id).map_or("?", |structure| &structure.name);
+        // A pointer to a function puts its `*`s, and a table's length, in
+        // parentheses between the return type and the parameters (C99
+        // §6.7.6p2).
+        let function = |signature: usize, declarator: &str| {
+            signatures.get(signature).map_or_else(
+                || format!("int ({declarator})(void)"),
+                |known| {
+                    format!(
+                        "{} ({declarator})({})",
+                        known.returns.spelling(structures, signatures),
+                        known.parameter_list(structures, signatures)
+                    )
+                },
+            )
+        };
         match self {
+            | Self::FunctionPointer(signature) => function(signature, "*"),
+            | Self::Indirect(Target::Function(signature), depth) =>
+                function(signature, &"*".repeat(usize::from(depth))),
+            | Self::PointerArray(Target::Function(signature), depth, count) => function(
+                signature,
+                &format!("{}[{count}]", "*".repeat(usize::from(depth))),
+            ),
             | Self::Integer(integer) => String::from(integer.spelling()),
             | Self::Floating(floating) => String::from(floating.spelling()),
             | Self::Pointer(element, false) => format!("{} *", element.spelling()),
@@ -67,14 +95,16 @@ impl Type {
             | Self::Struct(id) => format!("struct {}", tag(id)),
             | Self::StructPointer(id) => format!("struct {} *", tag(id)),
             | Self::Indirect(target, depth) => {
-                let mut text = target.pointer(1).spelling(structures);
+                let mut text = target.pointer(1).spelling(structures, signatures);
                 for _ in 1..depth {
                     text.push('*');
                 }
                 text
             },
-            | Self::PointerArray(target, depth, count) =>
-                format!("{}[{count}]", target.pointer(depth).spelling(structures)),
+            | Self::PointerArray(target, depth, count) => format!(
+                "{}[{count}]",
+                target.pointer(depth).spelling(structures, signatures)
+            ),
         }
     }
 
@@ -144,6 +174,33 @@ impl Type {
     }
 }
 
+impl Signature {
+    /// The function type as C writes it: `int (int, int)`.
+    pub(super) fn spelling(&self, structures: &[Structure], signatures: &[Signature]) -> String {
+        format!(
+            "{} ({})",
+            self.returns.spelling(structures, signatures),
+            self.parameter_list(structures, signatures)
+        )
+    }
+
+    /// The parameter types, comma-separated, or `void` for none.
+    pub(super) fn parameter_list(
+        &self,
+        structures: &[Structure],
+        signatures: &[Signature],
+    ) -> String {
+        if self.parameters.is_empty() {
+            return String::from("void");
+        }
+        self.parameters
+            .iter()
+            .map(|parameter| parameter.spelling(structures, signatures))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 /// Lay out `members` (name and type) as a structure tagged `name`: each
 /// member at the next offset its alignment allows, the whole rounded up to
 /// the largest alignment.
@@ -162,7 +219,7 @@ pub(super) fn structure(
         }
         laid.push(Member {
             name: member_name.clone(),
-            r#type: ty.spelling(structures),
+            r#type: ty.spelling(structures, &[]),
             offset,
             size,
             padding: 0,

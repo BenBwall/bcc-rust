@@ -8,7 +8,6 @@ use super::{
     expressions::{
         Expr,
         ExprKind,
-        Number,
         combined,
     },
     floating::Floating,
@@ -28,6 +27,7 @@ use super::{
         Function,
         Instruction,
         Library,
+        MAX_ARGUMENTS,
         MAX_CELLS,
         MAX_CODE,
         MAX_DEPTH,
@@ -39,6 +39,7 @@ use super::{
         Place,
         Program,
         SequencePoint,
+        Signature,
         SourceRange,
         Static,
         Structure,
@@ -66,6 +67,11 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         complete: Vec::new(),
         statics: Vec::new(),
         signatures: Vec::new(),
+        function_types: Vec::new(),
+        function_signatures: Vec::new(),
+        typedefs: Vec::new(),
+        designated: Vec::new(),
+        computed: Vec::new(),
         prototypes: Vec::new(),
         directives: Vec::new(),
         macros: Vec::new(),
@@ -87,12 +93,29 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             parser.structure_definition()?;
             continue;
         }
+        if parser.take("typedef") {
+            parser.typedef_declaration()?;
+            continue;
+        }
         let storage = parser.current();
         parser.declaration_macros.clear();
         let is_static = parser.take("static");
         let typedef = parser.typedef_name();
         let base = parser.base_type()?;
         let depth = parser.pointer()?;
+        if parser.at_function_declarator() {
+            let (name, ty) = parser.function_declarator(base, depth, Naming::Required)?;
+            let name = name.unwrap_or_else(|| parser.current());
+            parser.file_scope_typed(
+                name,
+                ty,
+                Specified {
+                    constant: false,
+                    typedef:  None,
+                },
+            )?;
+            continue;
+        }
         let name = parser.identifier()?;
         if !parser.at("(") {
             parser.file_scope_object(base, typedef, depth, name)?;
@@ -122,8 +145,22 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 "a function and a file-scope object share this name",
             ));
         }
+        parser.typedef_conflict(name)?;
         parser.library_conflict(name)?;
         let header = parser.function_header(name)?;
+        let signature = parser.intern(Signature {
+            returns,
+            parameters: header.iter().map(|&(_, ty)| ty).collect(),
+        });
+        if !parser
+            .function_signatures
+            .iter()
+            .any(|(function, _)| function == name.text)
+        {
+            parser
+                .function_signatures
+                .push((String::from(name.text), signature));
+        }
         if parser.take(";") {
             parser.prototype(name, returns, &header)?;
             parser.symbols.retain(|symbol| symbol.scope == 0);
@@ -169,6 +206,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             name: String::from(name.text),
             returns,
             parameters,
+            signature,
+            range: name.range,
             code: std::mem::take(&mut parser.code),
             nodes: roots(std::mem::take(&mut parser.nodes)),
         });
@@ -235,11 +274,29 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             }
         }
     }
+    // A static pointer to a function named the function in declaration
+    // order; it now points to the function's definition.
+    for (name, range) in &parser.designated {
+        if !functions.iter().any(|function| function.name == *name) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                *range,
+                &format_message("`", name, "` is declared but never defined"),
+            ));
+        }
+    }
+    for object in &mut parser.statics {
+        resolve_functions(&mut object.value, &parser.function_signatures, &functions);
+        for (_, value) in &mut object.computed {
+            resolve_functions(value, &parser.function_signatures, &functions);
+        }
+    }
     Ok(Program {
         source: String::from(source),
         functions,
         entry,
         structures: parser.structures.into(),
+        signatures: parser.function_types.into(),
         statics: parser.statics,
         directives: parser.directives,
         macros: parser.macros,
@@ -247,50 +304,66 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
 }
 
 pub(super) struct Parser<'a> {
-    pub tokens:             Vec<Token<'a>>,
-    pub source:             &'a str,
-    pub position:           usize,
-    pub code:               Vec<Instruction>,
-    pub expressions:        Vec<Expr>,
-    pub symbols:            Vec<Symbol<'a>>,
-    pub scope:              usize,
-    pub nesting:            usize,
-    pub calls:              Vec<CallSite>,
-    pub function_index:     usize,
+    pub tokens:              Vec<Token<'a>>,
+    pub source:              &'a str,
+    pub position:            usize,
+    pub code:                Vec<Instruction>,
+    pub expressions:         Vec<Expr>,
+    pub symbols:             Vec<Symbol<'a>>,
+    pub scope:               usize,
+    pub nesting:             usize,
+    pub calls:               Vec<CallSite>,
+    pub function_index:      usize,
     /// The function whose body is being compiled.
-    pub function_name:      Option<String>,
+    pub function_name:       Option<String>,
     /// The current function's expression-tree nodes.
-    pub nodes:              Vec<ExpressionNode>,
+    pub nodes:               Vec<ExpressionNode>,
     /// Structure types by index; an incomplete one (declared by `struct T *`
     /// or still being defined) has no members yet.
-    pub structures:         Vec<Structure>,
-    pub complete:           Vec<bool>,
+    pub structures:          Vec<Structure>,
+    pub complete:            Vec<bool>,
     /// Objects with static storage duration, in declaration order.
-    pub statics:            Vec<Static>,
+    pub statics:             Vec<Static>,
     /// Each function defined so far, or being defined, and its return type.
-    pub signatures:         Vec<(String, Type)>,
+    pub signatures:          Vec<(String, Type)>,
+    /// The function types declared so far, each once.
+    pub function_types:      Vec<Signature>,
+    /// Each function declared or defined so far, in the order of its first
+    /// declaration, and its type in [`Parser::function_types`]. A static
+    /// pointer to a function holds the function's index here until
+    /// compilation ends.
+    pub function_signatures: Vec<(String, usize)>,
+    /// The functions static initializers point to, and where.
+    pub designated:          Vec<(String, SourceRange)>,
+    /// The initializers of the static object being declared that are
+    /// worked out before the program starts, rather than written as a
+    /// constant: each one's source and the value it gives.
+    pub computed:            Vec<(SourceRange, Value)>,
+    /// The typedef names declared so far, each naming a pointer to a
+    /// function.
+    pub typedefs:            Vec<(&'a str, Type)>,
     /// Each function declared by a prototype so far.
-    pub prototypes:         Vec<Prototype>,
+    pub prototypes:          Vec<Prototype>,
     /// Each `#include <stdio.h>` and object-like `#define` so far.
-    pub directives:         Vec<Directive>,
+    pub directives:          Vec<Directive>,
     /// The object-like macros defined so far.
-    pub macros:             Vec<Macro>,
+    pub macros:              Vec<Macro>,
     /// The macros whose replacements the declaration being parsed uses
     /// outside expressions: in an array size or a static initializer.
-    pub declaration_macros: Vec<usize>,
+    pub declaration_macros:  Vec<usize>,
     /// The return type of the function being compiled.
-    pub returns:            Type,
+    pub returns:             Type,
     /// Whether the expression being checked or emitted is the
     /// controlling expression of an `if`, `while` or `for`.
-    pub in_condition:       bool,
+    pub in_condition:        bool,
     /// The sequence point that next follows the operand being emitted:
     /// where an update there completes its store.
-    pub next_point:         SequencePoint,
+    pub next_point:          SequencePoint,
     /// The `Enter` instruction of each open block, innermost last, which
     /// lists the automatic objects the block declares.
-    pub blocks:             Vec<usize>,
+    pub blocks:              Vec<usize>,
     /// Whether the next block entered is a loop body.
-    pub loop_body:          bool,
+    pub loop_body:           bool,
 }
 
 impl<'a> Parser<'a> {
@@ -402,6 +475,9 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
+            | "typedef" => Err(self.error(
+                "a typedef inside a function is outside this subset; write it at file scope",
+            )),
             | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "float" | "double"
             | "struct" | "static" | "const" | "else" | "break" | "continue" | "goto" | "do"
             | "switch" => Err(self.error("unsupported statement in this subset")),
@@ -532,9 +608,15 @@ impl<'a> Parser<'a> {
         let typedef = self.typedef_name();
         let base = self.base_type()?;
         let depth = self.pointer()?;
-        let name = self.identifier()?;
-        let array = self.declarator_array()?;
-        let ty = self.declared_type(base, depth, array, name.range)?;
+        let (name, ty) = if self.at_function_declarator() {
+            let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
+            (name.unwrap_or_else(|| self.current()), ty)
+        } else {
+            let name = self.identifier()?;
+            let array = self.declarator_array()?;
+            (name, self.declared_type(base, depth, array, name.range)?)
+        };
+        self.typedef_conflict(name)?;
         let specified = Specified {
             constant: base.is_const() && depth == 0,
             typedef,
@@ -631,7 +713,43 @@ impl<'a> Parser<'a> {
     /// as `unsigned` or `double`, or `size_t` once `<stdio.h>` has declared
     /// it.
     pub fn at_type(&self) -> bool {
-        is_type_specifier(self.current().text) || (self.at("size_t") && self.includes_stdio())
+        self.names_type(self.current().text)
+    }
+
+    /// Whether `word` starts a type's specifiers: a keyword such as
+    /// `unsigned`, `size_t` once `<stdio.h>` has declared it, or a typedef
+    /// name the program declared.
+    pub fn names_type(&self, word: &str) -> bool {
+        is_type_specifier(word)
+            || (word == "size_t" && self.includes_stdio())
+            || self.typedef(word).is_some()
+    }
+
+    /// The type the typedef name `word` names, if the program declared it.
+    pub fn typedef(&self, word: &str) -> Option<Type> {
+        self.typedefs
+            .iter()
+            .find(|(name, _)| *name == word)
+            .map(|&(_, ty)| ty)
+    }
+
+    /// A declaration may not reuse a typedef name for an object or a
+    /// function: the two share one name space (C99 §6.7.7p3), and this
+    /// subset keeps each typedef name for its type.
+    pub fn typedef_conflict(&self, name: Token<'_>) -> Result<(), Diagnostic> {
+        if self.typedef(name.text).is_some() {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                &format_message(
+                    "`",
+                    name.text,
+                    "` is a typedef name here; naming an object or function after it is outside \
+                     this subset",
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// A declarator's optional `[N]`, or `[]` when an initializer follows,
@@ -1440,6 +1558,21 @@ impl<'a> Parser<'a> {
                 ),
                 &super::clauses::POINTER_ASSIGNMENT,
             ))
+        } else if matches!(expected, Type::FunctionPointer(_))
+            || matches!(expression.ty, Type::FunctionPointer(_))
+        {
+            let spell = |ty: Type| ty.spelling(&self.structures, &self.function_types);
+            Err(Diagnostic::constraint(
+                expression.range,
+                &format!(
+                    "this is {}, where {} is needed: a pointer to a function converts only to a \
+                     pointer to a function of the same type, whose parameters and return type \
+                     agree (C99 §6.5.16.1p1, §6.7.5.3p15); a null pointer constant 0 is fine too",
+                    super::memory::article(&spell(expression.ty)),
+                    super::memory::article(&spell(expected)),
+                ),
+                &super::clauses::POINTER_ASSIGNMENT,
+            ))
         } else {
             Err(Diagnostic::new(
                 "unsupported",
@@ -1724,30 +1857,7 @@ impl<'a> Parser<'a> {
             self.position += 1;
         } else {
             loop {
-                let base = self.base_type()?;
-                let depth = self.pointer()?;
-                let parameter = if self.at(",") || self.at(")") {
-                    None
-                } else {
-                    Some(self.identifier()?)
-                };
-                let range = parameter.map_or(self.current().range, |token| token.range);
-                let ty = match (base, depth) {
-                    | (Base::Arithmetic(_, true), 0) =>
-                        return Err(Diagnostic::new(
-                            "unsupported",
-                            range,
-                            "const parameters are outside this subset; `const int *` and `const \
-                             char *` parameters are in it",
-                        )),
-                    | _ => self.declared_type(base, depth, None, range)?,
-                };
-                if self.at("[") {
-                    return Err(self.error(
-                        "array parameters are outside this subset; write the pointer they adjust \
-                         to, such as `char *s`",
-                    ));
-                }
+                let (parameter, ty) = self.parameter()?;
                 if let Some(parameter) = parameter {
                     self.add_symbol(parameter, ty, 1, None, false)?;
                 }
@@ -1760,6 +1870,262 @@ impl<'a> Parser<'a> {
         }
         self.scope = 0;
         Ok(parameters)
+    }
+
+    /// One parameter's declaration in a parameter list: its name, absent
+    /// when the declaration omits it, and its type. A parameter may be a
+    /// pointer to a function, as in `int (*f)(int)`.
+    fn parameter(&mut self) -> Result<(Option<Token<'a>>, Type), Diagnostic> {
+        if self.at("...") {
+            return Err(self.error(
+                "a variable argument list (`...`) is outside this subset; printf is the only \
+                 function with one here",
+            ));
+        }
+        let base = self.base_type()?;
+        let depth = self.pointer()?;
+        if self.at_function_declarator() {
+            return self.function_declarator(base, depth, Naming::Optional);
+        }
+        let parameter = if self.at(",") || self.at(")") {
+            None
+        } else {
+            Some(self.identifier()?)
+        };
+        let range = parameter.map_or(self.current().range, |token| token.range);
+        let ty = match (base, depth) {
+            | (Base::Arithmetic(_, true), 0) =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    range,
+                    "const parameters are outside this subset; `const int *` and `const char *` \
+                     parameters are in it",
+                )),
+            | _ => self.declared_type(base, depth, None, range)?,
+        };
+        if self.at("[") {
+            return Err(self.error(
+                "array parameters are outside this subset; write the pointer they adjust to, such \
+                 as `char *s`",
+            ));
+        }
+        // C99 §6.7.5.3p8 adjusts a parameter of function type to a pointer
+        // to the function; the subset asks for the pointer as written.
+        if self.at("(") {
+            return Err(self.error(
+                "a parameter declared as a function is adjusted to a pointer to one (C99 \
+                 §6.7.5.3p8); write that pointer, as in `int (*f)(int)`",
+            ));
+        }
+        Ok((parameter, ty))
+    }
+
+    /// Whether a parenthesized declarator for a pointer to a function, or
+    /// a table of them, starts here, after the declaration specifiers and
+    /// any `*`: `(*f)(int)`, `(*ops[2])(int, int)`.
+    pub fn at_function_declarator(&self) -> bool {
+        self.at("(") && self.peek(1) == "*"
+    }
+
+    /// A declarator for a pointer to a function: `(*name)(parameters)`,
+    /// with up to two `*` (`(**pp)(int)` points to such a pointer) and,
+    /// after the name, an optional array length for a table of them,
+    /// `(*name[N])(…)` or `(*name[])(…)` before a list. `naming` says
+    /// whether a name must, may or may not appear, as in a type name. The
+    /// declaration specifiers before it, `base` with `depth` `*`s, give
+    /// the functions' return type.
+    ///
+    /// C99: §6.7.5 paragraph 4, p. 114; PDF p. 126.
+    /// C99: §6.7.5.3 paragraph 1, p. 118; PDF p. 130.
+    pub fn function_declarator(
+        &mut self,
+        base: Base,
+        depth: u8,
+        naming: Naming,
+    ) -> Result<(Option<Token<'a>>, Type), Diagnostic> {
+        let opening = self.current();
+        let returns = match (base, depth) {
+            | (Base::Arithmetic(arithmetic, false), 0) => arithmetic.ty(),
+            | (Base::Struct(id), 0) => self.complete_structure(id, opening.range)?,
+            | _ =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    opening.range,
+                    "a pointer to a function here points to one that returns an arithmetic type \
+                     or a structure, as the subset's functions do",
+                )),
+        };
+        self.expect("(")?;
+        let mut stars = 0;
+        while self.take("*") {
+            stars += 1;
+            if self.at("const") {
+                return Err(self.error(
+                    "a const pointer (`* const`) is outside this subset; `const int *` and `const \
+                     char *`, pointers to const, are in it",
+                ));
+            }
+        }
+        if stars > 2 {
+            return Err(self.error(
+                "a pointer to a function, or a pointer to such a pointer, is in this subset; more \
+                 `*`s in a row are outside it",
+            ));
+        }
+        let name = match naming {
+            | Naming::Required => Some(self.identifier()?),
+            | Naming::Optional if is_identifier(self.current().text) => Some(self.identifier()?),
+            | _ => None,
+        };
+        let range = name.map_or(opening.range, |name| name.range);
+        if name.is_some() && self.at("(") {
+            return Err(self.error(
+                "a function that returns a pointer to a function is outside this subset; return \
+                 an index into a table of pointers instead",
+            ));
+        }
+        let mut length = None;
+        let mut open_length = false;
+        if naming != Naming::Absent && self.at("[") {
+            if stars != 1 || naming == Naming::Optional {
+                return Err(self.error(
+                    "a table of pointers to functions is declared as an object, `int \
+                     (*ops[2])(int)`; other arrays of them are outside this subset",
+                ));
+            }
+            if self.peek(1) == "]" {
+                self.position += 2;
+                open_length = true;
+            } else {
+                length = self.array_suffix()?;
+            }
+        }
+        self.expect(")")?;
+        self.expect("(")?;
+        let mut parameters = Vec::new();
+        if self.take("void") {
+            self.expect(")")?;
+        } else if self.at(")") {
+            return Err(self.error(
+                "empty parentheses declare a function without a prototype; write (void) for no \
+                 parameters",
+            ));
+        } else {
+            let scope = self.scope;
+            loop {
+                let (_, ty) = self.parameter()?;
+                parameters.push(ty);
+                if parameters.len() > MAX_ARGUMENTS {
+                    return Err(Diagnostic::limit(range, "too many parameters"));
+                }
+                if self.take(")") {
+                    break;
+                }
+                self.expect(",")?;
+            }
+            self.scope = scope;
+        }
+        if open_length {
+            length = Some(self.list_length_after(range)?);
+        }
+        if self.at("(") {
+            return Err(self.error(
+                "a function cannot return a function (C99 §6.7.5.3p1), and a pointer to a \
+                 function that returns one is outside this subset",
+            ));
+        }
+        let signature = self.intern(Signature {
+            returns,
+            parameters,
+        });
+        let target = Target::Function(signature);
+        let ty = match length {
+            | Some(length) => Type::PointerArray(target, stars, length),
+            | None => target.pointer(stars),
+        };
+        Ok((name, ty))
+    }
+
+    /// The length `int (*ops[])(int) = {…}` takes from its list.
+    fn list_length_after(&self, range: SourceRange) -> Result<usize, Diagnostic> {
+        if !(self.at("=") && self.peek(1) == "{") {
+            return Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "an array of unknown size needs a brace-enclosed list, whose length it takes; \
+                 give its size",
+            ));
+        }
+        let length = self.list_length(self.position + 1)?;
+        if length == 0 || length > MAX_CELLS {
+            return Err(Diagnostic::limit(
+                range,
+                "array size must be between 1 and 512",
+            ));
+        }
+        Ok(length)
+    }
+
+    /// The index of `signature` in [`Parser::function_types`], added if
+    /// new.
+    pub fn intern(&mut self, signature: Signature) -> usize {
+        if let Some(index) = self
+            .function_types
+            .iter()
+            .position(|known| *known == signature)
+        {
+            return index;
+        }
+        self.function_types.push(signature);
+        self.function_types.len() - 1
+    }
+
+    /// `typedef T (*name)(parameters);` at file scope: `name` becomes a
+    /// synonym for the type of a pointer to a function. A typedef declares
+    /// no object, so nothing happens when the program runs; later
+    /// declarations use the name as a type specifier.
+    ///
+    /// C99: §6.7.7 paragraph 3, p. 123; PDF p. 135.
+    fn typedef_declaration(&mut self) -> Result<(), Diagnostic> {
+        let start = self.current();
+        let base = self.base_type()?;
+        let depth = self.pointer()?;
+        if !self.at_function_declarator() || self.peek(2) == "*" {
+            return Err(Diagnostic::new(
+                "unsupported",
+                start.range,
+                "a typedef in this subset names a pointer to a function, as in `typedef int \
+                 (*binop)(int, int);`; other typedefs are outside it",
+            ));
+        }
+        let (name, ty) = self.function_declarator(base, depth, Naming::Required)?;
+        let Some(name) = name else {
+            return Err(self.error("expected the typedef name"));
+        };
+        if ty.is_array() {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "a typedef of an array is outside this subset",
+            ));
+        }
+        if self.typedef(name.text).is_some()
+            || self.symbols.iter().any(|symbol| symbol.name == name.text)
+            || self
+                .function_signatures
+                .iter()
+                .any(|(function, _)| function == name.text)
+            || Library::named(name.text).is_some()
+        {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "this name is already declared; a typedef name shares one name space with objects \
+                 and functions (C99 §6.7.7p3)",
+            ));
+        }
+        self.typedefs.push((name.text, ty));
+        self.expect(";")
     }
 
     /// `T name(parameters);`: a prototype that lets calls before the
@@ -1881,7 +2247,17 @@ impl<'a> Parser<'a> {
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120 (`const` qualifies
     /// the type; the object is then not modifiable).
     pub fn base_type(&mut self) -> Result<Base, Diagnostic> {
+        if let Some(ty) = self.typedef(self.current().text) {
+            self.position += 1;
+            return Ok(Base::Named(ty));
+        }
         let constant = self.take("const");
+        if constant && let Some(ty) = self.typedef(self.current().text) {
+            let _ = ty;
+            return Err(
+                self.error("a const pointer to a function is outside this subset; drop the const")
+            );
+        }
         if let Some(arithmetic) = self.arithmetic_type()? {
             if self.at("const") {
                 return Err(self.error(
@@ -2062,6 +2438,24 @@ impl<'a> Parser<'a> {
         let target = match base {
             | Base::Arithmetic(arithmetic, constant) => Target::Arithmetic(arithmetic, constant),
             | Base::Struct(id) => Target::Struct(id),
+            | Base::Named(ty) => {
+                // A typedef name for `T (*)(…)` with more `*`s or a length
+                // after it: one pointer more for each `*`.
+                let Some((target, named)) = ty.chain() else {
+                    return Ok(ty);
+                };
+                let depth = named + depth;
+                if depth > super::model::MAX_INDIRECTION {
+                    return Err(Diagnostic::limit(
+                        range,
+                        "a type may have at most four pointers in a row here (`int ****`)",
+                    ));
+                }
+                return Ok(match array {
+                    | Some(length) => Type::PointerArray(target, depth, length),
+                    | None => target.pointer(depth),
+                });
+            },
         };
         match (base, depth, array) {
             | (Base::Arithmetic(arithmetic, _), 0, None) => Ok(arithmetic.ty()),
@@ -2102,6 +2496,12 @@ impl<'a> Parser<'a> {
             let base = self.base_type()?;
             loop {
                 let depth = self.pointer()?;
+                if self.at_function_declarator() || matches!(base, Base::Named(_)) {
+                    return Err(self.error(
+                        "a member that points to a function is outside this subset; declare the \
+                         pointer as a variable of its own",
+                    ));
+                }
                 let name = self.identifier()?;
                 let array = self.array_suffix()?;
                 if base == Base::Struct(id) && depth == 0 {
@@ -2183,6 +2583,22 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Diagnostic> {
         let array = self.declarator_array()?;
         let ty = self.declared_type(base, depth, array, name.range)?;
+        let specified = Specified {
+            constant: base.is_const() && depth == 0,
+            typedef,
+        };
+        self.file_scope_typed(name, ty, specified)
+    }
+
+    /// The file-scope object `name` of type `ty`, with its optional
+    /// constant initializer.
+    fn file_scope_typed(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        specified: Specified,
+    ) -> Result<(), Diagnostic> {
+        self.typedef_conflict(name)?;
         self.library_conflict(name)?;
         if self
             .signatures
@@ -2195,10 +2611,6 @@ impl<'a> Parser<'a> {
                 "a function and a file-scope object share this name",
             ));
         }
-        let specified = Specified {
-            constant: base.is_const() && depth == 0,
-            typedef,
-        };
         let index = self.static_object(name, ty, None, specified)?;
         self.add_symbol(name, ty, 0, Some(index), specified.constant)?;
         self.expect(";")
@@ -2251,6 +2663,7 @@ impl<'a> Parser<'a> {
             typedef: specified.typedef,
             parts: 0,
             macros: std::mem::take(&mut self.declaration_macros),
+            computed: std::mem::take(&mut self.computed),
             range,
         });
         Ok(self.statics.len() - 1)
@@ -2278,6 +2691,7 @@ impl<'a> Parser<'a> {
             typedef: None,
             parts: literal.parts,
             macros: literal.macro_use.into_iter().collect(),
+            computed: Vec::new(),
             range: literal.range,
         });
         Ok(self.statics.len() - 1)
@@ -2380,55 +2794,28 @@ impl<'a> Parser<'a> {
                 }
                 self.expect("}")
             },
-            | Type::Integer(_) | Type::Floating(_) if self.current().text.starts_with('\'') => {
-                let token = self.current();
-                self.declaration_macros.extend(token.macro_use);
-                let value = self.character_constant(token)?;
-                self.position += 1;
-                leaves[offset] = Self::static_conversion(Value::Integer(value), ty, token)?;
-                Ok(())
-            },
+            // An arithmetic constant expression, worked out now: its value
+            // is fixed before the program starts (C99 §6.6p2, §6.7.8p4).
             | Type::Integer(_) | Type::Floating(_) => {
-                let negative = self.take("-");
-                let token = self.current();
-                self.declaration_macros.extend(token.macro_use);
-                let not_constant = |parser: &Self| {
-                    parser.error(
-                        "a static object's initializer must be a constant; this subset takes a \
-                         decimal integer constant or a floating constant, optionally negated",
-                    )
-                };
-                if !token
-                    .text
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.')
-                {
-                    return Err(not_constant(self));
+                let first = self.expressions.len();
+                let expression = self.expression(0)?;
+                for at in first..self.expressions.len() {
+                    self.declaration_macros
+                        .extend(self.expressions[at].macro_use);
                 }
-                // Unary minus negates in the constant's own type, which
-                // reduces modulo 2^N when it is unsigned: -1u is
-                // 4294967295. A decimal constant is never negative, so the
-                // negation of a signed one always fits; a floating one flips
-                // its sign.
-                // C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91 (unary minus).
-                // C99: §6.2.5 paragraph 9, p. 34; PDF p. 46 (unsigned
-                // arithmetic is reduced modulo 2^N).
-                let value = match Self::number_constant(token)? {
-                    | Number::Integer(value, constant) if negative =>
-                        Value::Integer(constant.convert(-value)),
-                    | Number::Integer(value, _) => Value::Integer(value),
-                    | Number::Real(rounded) if negative => Value::Floating(rounded.value.negate()),
-                    | Number::Real(rounded) => Value::Floating(rounded.value),
-                };
-                self.position += 1;
-                if !(self.at(",") || self.at(";") || self.at("}")) {
-                    return Err(self.error(
-                        "a static object's initializer must be a constant; this subset takes a \
-                         decimal integer constant or a floating constant, optionally negated, and \
-                         no arithmetic on it",
-                    ));
-                }
+                let (value, _) = self.constant_value(expression)?;
+                let node = &self.expressions[expression];
+                let range = node.range;
+                // A constant, optionally negated, needs no working out; any
+                // other expression is narrated as one.
+                let plain = match &node.kind {
+                    | ExprKind::Number(..) | ExprKind::Real(..) | ExprKind::Character(..) => true,
+                    | &ExprKind::Unary("-", child) => matches!(
+                        self.expressions[child].kind,
+                        ExprKind::Number(..) | ExprKind::Real(..)
+                    ),
+                    | _ => false,
+                } && !node.parenthesized;
                 // Only then does the initializer convert as by assignment:
                 // modulo 2^N into an unsigned type, wrapped into a signed
                 // one, rounded into a floating type, truncated into an
@@ -2437,7 +2824,12 @@ impl<'a> Parser<'a> {
                 // initializer converts as by assignment).
                 // C99: §6.3.1.3 paragraphs 1-3, p. 43; PDF p. 55.
                 // C99: §6.3.1.4 paragraphs 1-2, pp. 43-44; PDF pp. 55-56.
-                leaves[offset] = Self::static_conversion(value, ty, token)?;
+                let text = self.source.get(range.start..range.end).unwrap_or_default();
+                let converted = Self::static_conversion(value, ty, range, text)?;
+                if !plain {
+                    self.computed.push((range, converted.clone()));
+                }
+                leaves[offset] = converted;
                 Ok(())
             },
             | Type::Pointer(Arithmetic::CHAR, _) if self.current().text.starts_with('"') => {
@@ -2453,7 +2845,58 @@ impl<'a> Parser<'a> {
                 leaves[offset] = Value::pointer(index + 1, 0, 0, length);
                 Ok(())
             },
-            | Type::Pointer(..) | Type::StructPointer(_) | Type::Indirect(..) => {
+            // A function's name, or `&` and the name, is an address constant
+            // (C99 §6.6p9): the function exists before the program runs.
+            | Type::FunctionPointer(signature) if !self.at("0") => {
+                let start = self.current();
+                let address = self.take("&");
+                let name = self.current();
+                let Some(&(_, designated)) = self
+                    .function_signatures
+                    .iter()
+                    .find(|(function, _)| function == name.text)
+                else {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        name.range,
+                        "a static pointer to a function takes a constant: a function's name, & \
+                         and a function's name, or 0, the null pointer constant",
+                    ));
+                };
+                if designated != signature {
+                    return Err(Diagnostic::constraint(
+                        combined(start.range, name.range),
+                        &format!(
+                            "`{}` has the type {}, which is not the type this pointer points to, \
+                             {}: a pointer to a function is initialized only from a function of \
+                             its own type (C99 §6.5.16.1p1, §6.7.8p11)",
+                            name.text,
+                            self.function_spelling(designated),
+                            self.function_spelling(signature),
+                        ),
+                        &super::clauses::POINTER_ASSIGNMENT,
+                    ));
+                }
+                self.position += 1;
+                let index = self
+                    .function_signatures
+                    .iter()
+                    .position(|(function, _)| function == name.text)
+                    .unwrap_or_default();
+                self.designated.push((String::from(name.text), name.range));
+                let written = if address {
+                    combined(start.range, name.range)
+                } else {
+                    name.range
+                };
+                self.computed.push((written, Value::Function(index)));
+                leaves[offset] = Value::Function(index);
+                Ok(())
+            },
+            | Type::Pointer(..)
+            | Type::StructPointer(_)
+            | Type::Indirect(..)
+            | Type::FunctionPointer(_) => {
                 if !self.take("0") {
                     return Err(self.error(
                         "a static pointer's initializer must be a constant; this subset takes 0, \
@@ -2466,22 +2909,36 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// How C writes the function type `signature`: `int (int, int)`.
+    pub fn function_spelling(&self, signature: usize) -> String {
+        self.function_types
+            .get(signature)
+            .map_or_else(String::new, |known| {
+                known.spelling(&self.structures, &self.function_types)
+            })
+    }
+
     /// A static initializer's constant `value` converted to the arithmetic
     /// type `ty` as assignment converts it. A floating constant whose
     /// integral part an integer type cannot hold has no value there (C99
     /// §6.3.1.4p1), so the program is rejected before it starts.
-    fn static_conversion(value: Value, ty: Type, token: Token<'_>) -> Result<Value, Diagnostic> {
+    fn static_conversion(
+        value: Value,
+        ty: Type,
+        range: SourceRange,
+        text: &str,
+    ) -> Result<Value, Diagnostic> {
         let Some(arithmetic) = ty.arithmetic() else {
             return Ok(value);
         };
         arithmetic.convert(&value).map_err(|_| {
             Diagnostic::new(
                 "unsupported",
-                token.range,
+                range,
                 &format!(
                     "the integral part of `{}` does not fit in {}, so converting it is undefined \
                      (C99 §6.3.1.4p1); the machine stops before the program starts",
-                    token.text,
+                    text,
                     super::memory::article(arithmetic.spelling())
                 ),
             )
@@ -2499,14 +2956,44 @@ impl<'a> Parser<'a> {
 
 /// A declaration's type specifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "A short-lived parser value; a structure's index is the larger variant."
-)]
 pub(super) enum Base {
     /// An arithmetic type, `const`-qualified when set.
     Arithmetic(Arithmetic, bool),
     Struct(usize),
+    /// The type a typedef name names: a pointer to a function.
+    Named(Type),
+}
+
+/// Whether a declarator names what it declares: an object or a typedef
+/// must, a parameter may, and a type name in a cast or `sizeof` does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Naming {
+    Required,
+    Optional,
+    Absent,
+}
+
+/// Point each pointer to a function in `value`, a static object's initial
+/// value, from the function's place in declaration order (`declared`) to
+/// its definition among `functions`.
+fn resolve_functions(value: &mut Value, declared: &[(String, usize)], functions: &[Function]) {
+    match value {
+        | Value::Function(index) =>
+            if let Some((name, _)) = declared.get(*index)
+                && let Some(defined) = functions.iter().position(|function| function.name == *name)
+            {
+                *index = defined;
+            },
+        | Value::Array(elements) =>
+            for element in elements {
+                resolve_functions(element, declared, functions);
+            },
+        | Value::Struct { members, .. } =>
+            for member in members {
+                resolve_functions(member, declared, functions);
+            },
+        | _ => {},
+    }
 }
 
 /// What a declaration says of its object beyond its type: whether it is

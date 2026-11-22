@@ -183,7 +183,7 @@ impl Machine {
         self.state.objects.push(Object {
             id,
             name: String::from(name),
-            r#type: ty.spelling(&self.structures),
+            r#type: ty.spelling(&self.structures, &self.signatures),
             size: ty.size_align(&self.structures).0,
             frame_id,
             storage_duration: if static_storage {
@@ -346,6 +346,10 @@ impl Machine {
             value = self.converted(&value, arithmetic)?;
         }
         let valid = match ty {
+            | Some(Type::FunctionPointer(_)) => matches!(
+                value,
+                Value::Function(_) | Value::Pointer { target: None, .. }
+            ),
             | Some(ty) if ty.is_pointer() => matches!(value, Value::Pointer { .. }),
             | Some(Type::Floating(_)) => matches!(value, Value::Floating(_)),
             | _ => matches!(value, Value::Integer(_)),
@@ -497,6 +501,8 @@ impl Machine {
             // §6.8.4.1p2, §F.3).
             | Value::Floating(real) => Ok(!real.is_zero()),
             | Value::Pointer { target, .. } => Ok(target.is_some()),
+            // A pointer to a function is never null (C99 §6.3.2.3p3).
+            | Value::Function(_) => Ok(true),
             | _ => Err(self.error("condition requires a determinate scalar")),
         }
     }
@@ -561,6 +567,23 @@ impl Machine {
                     left.same_address(&right) == (operator == "=="),
                 )))
             },
+            // Two pointers to functions are equal when they point to the
+            // same function, and a null pointer equals neither (C99
+            // §6.5.9p6, §6.3.2.3p3).
+            | (left @ (Value::Function(_) | Value::Pointer { target: None, .. }), right)
+                if matches!(operator, "==" | "!=")
+                    && matches!(
+                        right,
+                        Value::Function(_) | Value::Pointer { target: None, .. }
+                    )
+                    && (matches!(left, Value::Function(_))
+                        || matches!(right, Value::Function(_))) =>
+                Ok(Value::Integer(i128::from(
+                    left.same_address(&right) == (operator == "=="),
+                ))),
+            | (Value::Function(_), Value::Integer(0)) | (Value::Integer(0), Value::Function(_))
+                if matches!(operator, "==" | "!=") =>
+                Ok(Value::Integer(i128::from(operator == "!="))),
             | (pointer @ Value::Pointer { .. }, Value::Integer(0))
             | (Value::Integer(0), pointer @ Value::Pointer { .. })
                 if matches!(operator, "==" | "!=") =>

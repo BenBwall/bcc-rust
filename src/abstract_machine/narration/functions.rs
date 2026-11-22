@@ -1,0 +1,270 @@
+//! Pointers to functions: a function's name becoming a pointer, `&f` and
+//! `*fp`, a call through a pointer, and comparing two pointers to
+//! functions. A pointer to a function holds which function's code a call
+//! runs, so the explanations name the function, its type and the line that
+//! defines it.
+//!
+//! C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58.
+//! C99: §6.5.2.2 paragraphs 1 and 3, p. 71; PDF p. 83.
+//! C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
+
+use super::{
+    Topic,
+    enclosing_parenthesis,
+    explained,
+    noted,
+    result,
+    snippet,
+};
+use crate::abstract_machine::{
+    clauses,
+    machine::Machine,
+    model::{
+        Event,
+        EventKind,
+        Operand,
+        Program,
+        SourceRange,
+        Value,
+    },
+};
+
+/// `text` without the parentheses that enclose all of it: `*f` for `(*f)`.
+pub(super) fn unparenthesized(text: &str) -> String {
+    let mut text = text.trim();
+    while text.starts_with('(') && enclosing_parenthesis(text.as_bytes()) {
+        text = text[1..text.len() - 1].trim();
+    }
+    String::from(text)
+}
+
+impl Machine {
+    /// The function's name, its type as C writes it (`int (int)`) and the
+    /// line of its definition.
+    fn function_facts(&self, program: &Program, function: usize) -> (String, String, usize) {
+        let defined = &program.functions[function];
+        let ty = self
+            .signatures
+            .get(defined.signature)
+            .map_or_else(String::new, |signature| {
+                signature.spelling(&self.structures, &self.signatures)
+            });
+        (defined.name.clone(), ty, defined.range.line)
+    }
+
+    /// The function `function`'s name as an operand designated it and
+    /// became a pointer to it, or, when `address`, `&` and the name made
+    /// that pointer without the conversion.
+    ///
+    /// C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58.
+    /// C99: §6.5.3.2 paragraph 3, pp. 78-79; PDF pp. 90-91.
+    pub(in crate::abstract_machine) fn function_designator(
+        &self,
+        range: SourceRange,
+        program: &Program,
+        function: usize,
+        address: bool,
+        value: Value,
+    ) -> Event {
+        let (name, ty, line) = self.function_facts(program, function);
+        let event = if address {
+            explained(
+                Event::new(
+                    EventKind::AddressOf,
+                    range,
+                    format!("Take the address of the function {name}"),
+                ),
+                &format!(
+                    "`&{name}` yields a pointer to the function {name}, the same pointer `{name}` \
+                     alone would become."
+                ),
+                &format!(
+                    "`{name}` designates the function {name}, defined on line {line}, of type \
+                     {ty}. The & operator applied to a function yields a pointer to it, so \
+                     `&{name}` and a plain `{name}` give the same value: the & only says so \
+                     explicitly, and the name is not converted first. A function is code, not an \
+                     object, so nothing is read."
+                ),
+                &[clauses::ADDRESS_OPERATOR, clauses::FUNCTION_DESIGNATOR],
+            )
+        } else {
+            explained(
+                Event::new(
+                    EventKind::FunctionDesignator,
+                    range,
+                    format!("`{name}` becomes a pointer to the function"),
+                ),
+                &format!(
+                    "A function's name used as an operand designates the function, and C converts \
+                     it to a pointer to it: `{name}` yields a pointer to the function {name}."
+                ),
+                &format!(
+                    "`{name}` names the function {name}, defined on line {line}, of type {ty}. A \
+                     function is code, not an object: it has no value to read and cannot be \
+                     copied, so wherever its name is an operand, other than after & or sizeof, C \
+                     converts it to a pointer to the function. The pointer records which \
+                     function's code a call through it runs. A call written `{name}(…)` makes the \
+                     same conversion before it calls; this machine shows it as a step only where \
+                     the pointer is kept or passed on."
+                ),
+                &[clauses::FUNCTION_DESIGNATOR, clauses::FUNCTION_TYPE],
+            )
+        };
+        result(noted(event, Topic::FunctionPointer), Operand::Value(value))
+    }
+
+    /// `*fp` of a pointer to the function `function`: the function
+    /// designator it yields converts straight back to the same pointer.
+    ///
+    /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
+    pub(in crate::abstract_machine) fn function_indirection(
+        &self,
+        range: SourceRange,
+        source: &str,
+        program: &Program,
+        function: usize,
+        pointer: Value,
+    ) -> Event {
+        let (name, _, _) = self.function_facts(program, function);
+        let written = unparenthesized(&snippet(source, range));
+        let operand = written.strip_prefix('*').unwrap_or(&written).trim_start();
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Dereference,
+                    range,
+                    format!("`*{operand}` designates the function {name}"),
+                ),
+                &format!(
+                    "`*{operand}` follows the pointer to the function {name}, and that function \
+                     designator converts straight back to a pointer to it."
+                ),
+                &format!(
+                    "`{operand}` holds a pointer to the function {name}. The unary * applied to a \
+                     pointer to a function yields a function designator, {name} itself, and a \
+                     function designator in an expression is converted to a pointer to the \
+                     function. The two steps cancel: `*{operand}` yields the pointer `{operand}` \
+                     holds. That is why `(*{operand})(…)` and `{operand}(…)` call the same \
+                     function; the * only shows the reader that a pointer is being followed."
+                ),
+                &[clauses::INDIRECTION, clauses::FUNCTION_DESIGNATOR],
+            ),
+            Topic::FunctionPointer,
+        );
+        event.operands.push(Operand::Value(pointer.clone()));
+        result(event, Operand::Value(pointer))
+    }
+
+    /// `event`, a call's, retold as a call through the pointer `callee`
+    /// evaluated to, which points to the function `function`.
+    ///
+    /// C99: §6.5.2.2 paragraphs 1 and 3, p. 71; PDF p. 83.
+    pub(in crate::abstract_machine) fn called_through(
+        &self,
+        mut event: Event,
+        program: &Program,
+        function: usize,
+        callee: &str,
+        pointer: Value,
+    ) -> Event {
+        let (name, ty, line) = self.function_facts(program, function);
+        event.title = event.title.replacen(
+            &format!("Call {name}"),
+            &format!("Call {name} through `{callee}`"),
+            1,
+        );
+        event.summary = event.summary.replacen(
+            "The call runs",
+            &format!("`{callee}` yields a pointer to {name}, so the call runs"),
+            1,
+        );
+        event.explanation = format!(
+            "This call goes through a pointer: the expression before the parentheses, `{callee}`, \
+             gave a pointer to the function {name} (defined on line {line}), and the call runs \
+             the function it points to, exactly as `{name}(…)` would. C leaves the order of \
+             evaluating that expression and the arguments unspecified; this machine evaluates it \
+             first. In compiled code the pointer holds the address where {name}'s machine code \
+             starts, and the call jumps there rather than to an address fixed when the program \
+             was linked. The pointer's type promised a function of type {ty}, which {name} has, \
+             so the arguments convert to {name}'s parameters as that type says. {}",
+            event.explanation
+        );
+        let mut cited = vec![clauses::CALLED_FUNCTION, clauses::FUNCTION_CALL];
+        cited.append(&mut event.clauses);
+        event.clauses = cited;
+        if event.note.is_empty() {
+            event = noted(event, Topic::FunctionPointer);
+        }
+        event.operands.insert(0, Operand::Value(pointer));
+        event
+    }
+
+    /// `left == right` or `!=` where one operand points to a function and
+    /// the other to a function or nowhere.
+    ///
+    /// C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
+    pub(in crate::abstract_machine) fn function_comparison(
+        &self,
+        range: SourceRange,
+        source: &str,
+        operator: &str,
+        (left, right): (&Value, &Value),
+        shown: &str,
+    ) -> Event {
+        let null = |value: &Value| !matches!(value, Value::Function(_));
+        let (summary, text) = if null(left) || null(right) {
+            (
+                format!(
+                    "A null pointer points to no function, so it equals no pointer to one: \
+                     `{operator}` yields {shown}."
+                ),
+                format!(
+                    "A null pointer is guaranteed to compare unequal to a pointer to any \
+                     function. The left is {}, the right is {}, so `{operator}` yields the int \
+                     {shown}. A pointer to a function is never null, which is why a program tests \
+                     a pointer it was given against null before calling through it.",
+                    self.value_text(left),
+                    self.value_text(right),
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "Two pointers to functions are equal exactly when they point to the same \
+                     function: `{operator}` yields {shown}."
+                ),
+                format!(
+                    "Two pointers to functions compare equal exactly when both point to the same \
+                     function, or both are null. The left is {}, the right is {}, so `{operator}` \
+                     yields the int {shown}.",
+                    self.value_text(left),
+                    self.value_text(right),
+                ),
+            )
+        };
+        noted(
+            explained(
+                Event::new(
+                    EventKind::Comparison,
+                    range,
+                    format!(
+                        "Compare pointers to functions: {} → {shown}",
+                        unparenthesized(&snippet(source, range))
+                    ),
+                ),
+                &summary,
+                &text,
+                &if null(left) || null(right) {
+                    vec![
+                        clauses::POINTER_EQUALITY,
+                        clauses::NULL_POINTER,
+                        clauses::EVALUATION_ORDER,
+                    ]
+                } else {
+                    vec![clauses::POINTER_EQUALITY, clauses::EVALUATION_ORDER]
+                },
+            ),
+            Topic::FunctionPointer,
+        )
+    }
+}

@@ -56,6 +56,7 @@
 )]
 
 // Compilation
+mod constant;
 mod expressions;
 mod lexer;
 mod parser;
@@ -172,7 +173,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 9.
+    /// Encodes the current observation using schema version 10.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()

@@ -6,6 +6,7 @@
 //! operation applied (see `clauses.rs` for the citations).
 
 mod floating;
+mod functions;
 mod upcoming;
 
 use std::{
@@ -50,6 +51,7 @@ use super::{
         Program,
         SequencePoint,
         SourceRange,
+        Target,
         Type,
         Undefined,
         Value,
@@ -131,6 +133,8 @@ pub(super) enum Topic {
     ShortCircuit,
     Conditional,
     Comma,
+    FunctionPointer,
+    ConstantExpression,
 }
 
 impl Topic {
@@ -440,6 +444,22 @@ impl Topic {
                  among the arguments and puts no sequence point between them. The commas between \
                  declarators separate too, but in `int a = 1, b = a + 1;` inside a function each \
                  initializer is a full expression, evaluated in declarator order, so b is 2.",
+            | Self::FunctionPointer =>
+                "A pointer to a function lets a program choose at run time which code runs: a \
+                 table of pointers can replace a long chain of ifs, and a callback lets a library \
+                 function such as qsort call code it has never seen. The pointer only records \
+                 which function; calling through it runs that function exactly as a call by name \
+                 would, with the arguments converted to the parameter types the pointer's type \
+                 spells. That type is a promise: a call through a null pointer, or through a \
+                 pointer cast to the wrong type, is undefined, and a compiled program usually \
+                 crashes there.",
+            | Self::ConstantExpression =>
+                "An object with static storage duration gets its value before main runs, so its \
+                 initializer must be a constant expression, which the compiler works out while it \
+                 translates the program: `1 << 3`, `sizeof(int) * 4`, or a function's name for a \
+                 pointer to it. Anything that needs the program to run, such as a call, reading a \
+                 variable or an assignment, is refused there. An automatic variable's initializer \
+                 may be any expression, since it runs each time the declaration is reached.",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -1105,6 +1125,17 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Subtracting pointers counts the elements between them, which has a meaning only \
              inside one array.",
         ),
+        | Some(Undefined::NullCall) => (
+            "Undefined behavior: call through a null pointer",
+            "A null pointer points to no function, and C defines a call only of a function, so \
+             this call has no meaning; a compiled program usually crashes here.",
+        ),
+        | Some(Undefined::CallType) => (
+            "Undefined behavior: call through the wrong function type",
+            "A cast let this pointer reach a function of another type. C lets such a pointer be \
+             converted back, but a call through the wrong type has no meaning: the caller and the \
+             function would disagree about the arguments and the result.",
+        ),
         | Some(Undefined::PointerOrder) => (
             "Undefined behavior: ordering unrelated pointers",
             "C orders pointers only within one object; separate objects have no order in the \
@@ -1391,10 +1422,32 @@ impl Machine {
                 article(&object.r#type),
                 self.pointee_words(ty)
             ),
+            | Type::FunctionPointer(signature) => format!(
+                "{} object, a pointer to a function of type {} (8 bytes on x86-64): it holds \
+                 which function a call through it runs. Its value is",
+                article(&object.r#type),
+                self.signatures
+                    .get(signature)
+                    .map_or_else(String::new, |known| known
+                        .spelling(&self.structures, &self.signatures))
+            ),
+            | Type::PointerArray(Target::Function(signature), 1, count) => format!(
+                "an array of {count} pointers to functions of type {} (8 bytes each, {} bytes on \
+                 x86-64), a table to choose a function from by its index. Each element's value is",
+                self.signatures
+                    .get(signature)
+                    .map_or_else(String::new, |known| known
+                        .spelling(&self.structures, &self.signatures)),
+                count.saturating_mul(8)
+            ),
             | Type::PointerArray(target, depth, count) => format!(
                 "an array of {count} pointers, each {} (8 bytes each, {} bytes on x86-64). Each \
                  element's value is",
-                article(&target.pointer(depth).spelling(&self.structures)),
+                article(
+                    &target
+                        .pointer(depth)
+                        .spelling(&self.structures, &self.signatures)
+                ),
                 count.saturating_mul(8)
             ),
             | Type::Struct(id) => format!(
@@ -1424,7 +1477,10 @@ impl Machine {
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
+            | Type::FunctionPointer(_) => format!("{} object", article(&object.r#type)),
             | Type::Indirect(..) => format!("a pointer to {}", self.pointee_words(ty)),
+            | Type::PointerArray(Target::Function(_), 1, count) =>
+                format!("an array of {count} pointers to functions"),
             | Type::PointerArray(_, _, count) => format!("an array of {count} pointers"),
             | Type::Struct(_) => format!("a {}", object.r#type),
             | Type::Integer(_) if let Some(typedef) = typedef =>
@@ -1565,18 +1621,35 @@ impl Machine {
             "`{name}` is {place}, so it has static storage duration: it exists for the whole run \
              of the program, not just during one call, and belongs to no frame."
         );
+        let worked = self.worked_out(program, index);
         let (title, summary, how, mut cited) = if declared.explicit {
             (
                 format!("Before main: `{name}` = {shown}"),
+                if worked.is_empty() {
+                    format!(
+                        "`{name}` has static storage duration: it gets its constant initializer's \
+                         value, {shown}, before main runs, and keeps existing until the program \
+                         ends."
+                    )
+                } else {
+                    format!(
+                        "`{name}` has static storage duration: its initializer is worked out \
+                         while the program is translated, so it holds {shown} before main runs, \
+                         and keeps existing until the program ends."
+                    )
+                },
                 format!(
-                    "`{name}` has static storage duration: it gets its constant initializer's \
-                     value, {shown}, before main runs, and keeps existing until the program ends."
-                ),
-                format!(
-                    "Its initializer must be a constant expression, known before the program \
-                     runs, so no code runs to compute it: the value {} is simply there when the \
-                     program starts.{}",
-                    self.value_text(&object.value),
+                    "{}{}",
+                    if worked.is_empty() {
+                        format!(
+                            "Its initializer must be a constant expression, known before the \
+                             program runs, so no code runs to compute it: the value {} is simply \
+                             there when the program starts.",
+                            self.value_text(&object.value)
+                        )
+                    } else {
+                        worked.clone()
+                    },
                     if aggregate {
                         " Every element or member the initializer does not mention starts at zero."
                     } else {
@@ -1617,7 +1690,25 @@ impl Machine {
             )
         };
         cited.extend([clauses::STARTUP, scope]);
-        let mut text = format!("{lifetime} {how} All of this happens before main is called.");
+        let mut text = format!("{lifetime} {how}");
+        if !worked.is_empty() {
+            cited.push(clauses::CONSTANT_EXPRESSION);
+            if declared
+                .computed
+                .iter()
+                .any(|(_, value)| !matches!(value, Value::Function(_)))
+            {
+                cited.push(clauses::ARITHMETIC_CONSTANT);
+            }
+            if declared
+                .computed
+                .iter()
+                .any(|(_, value)| matches!(value, Value::Function(_)))
+            {
+                cited.extend([clauses::ADDRESS_CONSTANT, clauses::FUNCTION_DESIGNATOR]);
+            }
+        }
+        text.push_str(" All of this happens before main is called.");
         if let Type::Struct(structure) = declared.ty {
             let _ = write!(
                 text,
@@ -1635,8 +1726,10 @@ impl Machine {
             );
             cited.push(clauses::MODIFIABLE_LVALUE);
             Topic::Const
-        } else {
+        } else if declared.computed.is_empty() {
             Topic::StaticStorage
+        } else {
+            Topic::ConstantExpression
         };
         let mut event = noted(
             explained(
@@ -1650,6 +1743,63 @@ impl Machine {
         event.objects.push(id);
         event.result = Some(Operand::Value(object.value.clone()));
         event
+    }
+
+    /// What the compiler worked out for static object `index`'s
+    /// initializers, in a sentence or two; empty when each was a constant
+    /// as written.
+    fn worked_out(&self, program: &Program, index: usize) -> String {
+        let declared = &program.statics[index];
+        let written = |range: SourceRange| snippet(&program.source, range).into_owned();
+        let (functions, numbers): (Vec<_>, Vec<_>) = declared
+            .computed
+            .iter()
+            .partition(|(_, value)| matches!(value, Value::Function(_)));
+        let mut text = String::new();
+        if !numbers.is_empty() {
+            let sources: Vec<String> = numbers
+                .iter()
+                .map(|(range, _)| format!("`{}`", written(*range)))
+                .collect();
+            let values: Vec<String> = numbers
+                .iter()
+                .map(|(_, value)| self.short_value(value))
+                .collect();
+            let (noun, verb, pronoun) = if numbers.len() == 1 {
+                ("initializer", "is a constant expression", "it")
+            } else {
+                ("initializers", "are constant expressions", "them")
+            };
+            let _ = write!(
+                text,
+                "Its {noun} {} {verb}: the compiler works {pronoun} out while it translates the \
+                 program, by the same rules the running program would use, giving {}. The value \
+                 is fixed before the program starts, and no step of the run computes it.",
+                list_words(&sources),
+                list_words(&values),
+            );
+        }
+        if !functions.is_empty() {
+            let sources: Vec<String> = functions
+                .iter()
+                .map(|(range, _)| format!("`{}`", written(*range)))
+                .collect();
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            let _ = write!(
+                text,
+                "{} {}: a function exists before the program starts, so a pointer to it is known \
+                 while the program is translated.",
+                sentence_case(&list_words(&sources)),
+                if functions.len() == 1 {
+                    "is an address constant"
+                } else {
+                    "are address constants"
+                },
+            );
+        }
+        text
     }
 
     /// Before `main`: the array of the string literal at `range`, object
@@ -2689,7 +2839,7 @@ impl Machine {
         value: Value,
     ) -> Event {
         let form = snippet(source, range);
-        let spelled = ty.spelling(&self.structures);
+        let spelled = ty.spelling(&self.structures, &self.signatures);
         let plural = if size == 1 { "" } else { "s" };
         let mut text = format!(
             "sizeof yields the size in bytes of its operand's type, {spelled}: {size} \
@@ -3092,6 +3242,8 @@ impl Machine {
             self.short_value(&output),
         );
         let mut event = match (&left, &right) {
+            | (Value::Function(_), _) | (_, Value::Function(_)) =>
+                self.function_comparison(range, source, operator, (&left, &right), &shown),
             | (Value::Pointer { .. }, Value::Pointer { .. })
                 if matches!(operator, "-" | "<" | "<=" | ">" | ">=") =>
                 self.pointer_order(range, source, operator, &left, &right, &output),
@@ -4237,11 +4389,11 @@ impl Machine {
             return event;
         }
         let form = snippet(source, range);
-        let name = to.spelling(&self.structures);
+        let name = to.spelling(&self.structures, &self.signatures);
         let name = name.as_str();
         let old = self.short_value(&value);
         let new = self.short_value(&converted);
-        let source_type = from.spelling(&self.structures);
+        let source_type = from.spelling(&self.structures, &self.signatures);
         let source_type = source_type.as_str();
         let (title, summary, text, cited, topic): (String, String, String, Vec<Clause>, Topic) =
             if from == to {
@@ -4259,6 +4411,33 @@ impl Machine {
                     ),
                     vec![clauses::CAST],
                     Topic::Cast,
+                )
+            } else if let (Type::FunctionPointer(_), Type::FunctionPointer(signature)) = (from, to)
+            {
+                let target = self.value_text(&converted);
+                let promised = self
+                    .signatures
+                    .get(signature)
+                    .map_or_else(String::new, |known| {
+                        known.spelling(&self.structures, &self.signatures)
+                    });
+                (
+                    format!("Cast to {name}: another function type"),
+                    format!(
+                        "`{form}` converts a pointer to a function to a pointer to a function of \
+                         another type; it still points to the same function."
+                    ),
+                    format!(
+                        "A cast converts its operand's value to the type it names, here from \
+                         {source_type} to {name}. C lets a pointer to a function be converted to \
+                         a pointer to a function of another type, and back again, unchanged: the \
+                         result is still {target}. Only calling through it is restricted: a call \
+                         through a pointer whose type, here a function of type {promised}, does \
+                         not match the function's own type is undefined, so a program casts the \
+                         pointer back before it calls."
+                    ),
+                    vec![clauses::CAST, clauses::FUNCTION_POINTER_CONVERSION],
+                    Topic::FunctionPointer,
                 )
             } else if from.is_pointer() {
                 let target = self.value_text(&converted);
@@ -4792,6 +4971,7 @@ impl Machine {
         let meaning = match value {
             | Value::Pointer { target: None, .. } => "a null pointer counts as false",
             | Value::Pointer { .. } => "a non-null pointer counts as true",
+            | Value::Function(_) => "a pointer to a function, which is never null, counts as true",
             | _ if truth => "any nonzero value counts as true",
             | _ => "zero counts as false",
         };
@@ -5388,7 +5568,7 @@ impl Machine {
                 text,
                 " The value converts to {function}'s return type, {}, as if by assignment: \
                  {words}.",
-                returns.spelling(&self.structures)
+                returns.spelling(&self.structures, &self.signatures)
             );
         }
         if !ended.is_empty() {
@@ -5542,6 +5722,10 @@ impl Machine {
             | Value::Integer(integer) => format!("{integer}"),
             | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("a null pointer"),
+            | &Value::Function(function) => format!(
+                "a pointer to the function {}",
+                self.functions.get(function).map_or("?", String::as_str)
+            ),
             | &Value::Pointer {
                 target: Some(target),
                 offset,
@@ -5598,6 +5782,10 @@ impl Machine {
             | Value::Integer(integer) => format!("{integer}"),
             | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("NULL"),
+            | &Value::Function(function) => format!(
+                "&{}",
+                self.functions.get(function).map_or("?", String::as_str)
+            ),
             | &Value::Pointer {
                 target: Some(target),
                 offset,
@@ -5618,7 +5806,7 @@ impl Machine {
     fn pointee_words(&self, ty: Type) -> String {
         ty.pointee().map_or_else(
             || String::from("an object"),
-            |pointee| article(&pointee.spelling(&self.structures)),
+            |pointee| article(&pointee.spelling(&self.structures, &self.signatures)),
         )
     }
 
@@ -5806,6 +5994,7 @@ fn truth_words(value: &Value, truth: bool) -> &'static str {
     match value {
         | Value::Pointer { target: None, .. } => "a null pointer counts as false",
         | Value::Pointer { .. } => "a non-null pointer counts as true",
+        | Value::Function(_) => "a pointer to a function, which is never null, counts as true",
         | _ if truth => "any nonzero value counts as true",
         | _ => "zero counts as false",
     }
@@ -6362,5 +6551,14 @@ fn arithmetic_words(operator: &str) -> (&'static str, Clause, Topic) {
             clauses::DIVISION,
             Topic::Division,
         ),
+    }
+}
+
+/// `items` as a list in words: "`a`", "`a` and `b`", "`a`, `b` and `c`".
+fn list_words(items: &[String]) -> String {
+    match items {
+        | [] => String::new(),
+        | [only] => only.clone(),
+        | [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }

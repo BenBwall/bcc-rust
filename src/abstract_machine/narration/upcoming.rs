@@ -209,8 +209,8 @@ impl Machine {
                     EventKind::Cast,
                     format!(
                         "cast {operand} from `{}` to `{}`",
-                        from.spelling(&self.structures),
-                        to.spelling(&self.structures)
+                        from.spelling(&self.structures, &self.signatures),
+                        to.spelling(&self.structures, &self.signatures)
                     ),
                     clauses::CAST,
                 )
@@ -457,6 +457,49 @@ impl Machine {
                 format!("call `{name}`"),
                 clauses::CALL_ARGUMENTS,
             ),
+            | Op::CallPointer { .. } => {
+                let callee = operands()
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| String::from("the pointer"));
+                // `(*fp)` designates the function; `fp` points to it.
+                let verb = if super::functions::unparenthesized(&callee.replace('`', ""))
+                    .starts_with('*')
+                {
+                    "designates"
+                } else {
+                    "points to"
+                };
+                (
+                    EventKind::Call,
+                    format!("call the function {callee} {verb}"),
+                    clauses::FUNCTION_CALL,
+                )
+            },
+            | Op::Function {
+                name,
+                address: false,
+            } => (
+                EventKind::FunctionDesignator,
+                format!("convert `{name}` to a pointer to the function"),
+                clauses::FUNCTION_DESIGNATOR,
+            ),
+            | Op::Function { name, .. } => (
+                EventKind::AddressOf,
+                format!("take the address of the function `{name}`"),
+                clauses::ADDRESS_OPERATOR,
+            ),
+            | Op::FunctionIndirection => {
+                let pointer = operands()
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| String::from("the pointer"));
+                (
+                    EventKind::Dereference,
+                    format!("follow {pointer} to the function it points to"),
+                    clauses::INDIRECTION,
+                )
+            },
             | &Op::Library(library, _) => (
                 EventKind::LibraryCall,
                 format!("call `{}`, which writes to standard output", library.name()),
