@@ -34,7 +34,8 @@ impl Type {
             | Self::Pointer(..)
             | Self::StructPointer(_)
             | Self::Indirect(..)
-            | Self::FunctionPointer(_) => (8, 8),
+            | Self::FunctionPointer(_)
+            | Self::VoidPointer => (8, 8),
             | Self::PointerArray(_, _, count) => (count.saturating_mul(8), 8),
             | Self::Array(element, count) =>
                 (count.saturating_mul(element.bytes()), element.bytes()),
@@ -94,6 +95,7 @@ impl Type {
             | Self::Array(element, count) => format!("{}[{count}]", element.spelling()),
             | Self::Struct(id) => format!("struct {}", tag(id)),
             | Self::StructPointer(id) => format!("struct {} *", tag(id)),
+            | Self::VoidPointer => String::from("void *"),
             | Self::Indirect(target, depth) => {
                 let mut text = target.pointer(1).spelling(structures, signatures);
                 for _ in 1..depth {

@@ -674,6 +674,9 @@ pub enum Undefined {
     FloatingConversion,
     /// `*` applied to a null pointer (C99 §6.5.3.2p4).
     NullIndirection,
+    /// `*` applied to a null pointer of a pointer-to-function type, which
+    /// points to no function (C99 §6.5.3.2p4).
+    NullFunctionIndirection,
     /// Pointer arithmetic on a null pointer, which points into no array.
     NullArithmetic,
     /// `p[i]` on a null pointer: `*(p + i)`'s addition has no meaning.
@@ -810,6 +813,32 @@ pub(super) struct BlockObject {
     pub typedef:  Option<&'static str>,
 }
 
+/// How an expression gives a pointer to a function, which decides how the
+/// explanations speak of it: a function designator converts to the pointer,
+/// an object holds it, and any other expression yields it (C99 §6.3.2.1p4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PointerSource {
+    pub kind:    PointerSourceKind,
+    /// Whether the expression is a postfix expression, which a call's
+    /// parentheses may follow as written (C99 §6.5.2p1); any other needs
+    /// parentheses of its own first.
+    pub postfix: bool,
+}
+
+/// What kind of expression gives a pointer to a function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointerSourceKind {
+    /// A function's name, `f`, a function designator.
+    Name,
+    /// `*e`, which designates the function `e` points to.
+    Indirection,
+    /// An object that holds the pointer: `fp` or `ops[i]`.
+    Object,
+    /// Any other expression that yields the pointer: `&f`, a cast or
+    /// `c ? f : g`.
+    Value,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum Op {
     /// Enter a block, creating the automatic objects declared directly in
@@ -905,8 +934,12 @@ pub(super) enum Op {
     Dereference,
     /// `*fp` of a pointer to a function: the function designator it yields
     /// converts straight back to the same pointer (C99 §6.5.3.2p4,
-    /// §6.3.2.1p4).
-    FunctionIndirection,
+    /// §6.3.2.1p4). `operand` is the source of the expression after the
+    /// `*` and how it gives the pointer.
+    FunctionIndirection {
+        operand: SourceRange,
+        form:    PointerSource,
+    },
     Index,
     /// A unary operator; the promoted arithmetic type it computes in,
     /// `None` for `!` and pointers.
@@ -1001,6 +1034,8 @@ pub(super) enum Op {
     CallPointer {
         signature: usize,
         types:     Vec<Type>,
+        /// How the expression before the parentheses gives the pointer.
+        callee:    PointerSource,
     },
     /// A call to a library function with the arguments' types, after the
     /// default argument promotions for those passed through `...`.
@@ -1172,6 +1207,9 @@ pub(super) enum Type {
     /// A pointer to a function of the signature at this index of
     /// [`Program::signatures`]: `int (*)(int, int)`.
     FunctionPointer(usize),
+    /// `void *`, which this subset has only as the type of a null pointer
+    /// constant cast to it, `(void *)0` (C99 §6.3.2.3p3).
+    VoidPointer,
 }
 
 /// What a chain of pointers ends at: an arithmetic type, `const` when set,
@@ -1212,6 +1250,7 @@ impl Type {
                 | Self::StructPointer(_)
                 | Self::Indirect(..)
                 | Self::FunctionPointer(_)
+                | Self::VoidPointer
         )
     }
 

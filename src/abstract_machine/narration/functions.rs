@@ -23,6 +23,8 @@ use crate::abstract_machine::{
         Event,
         EventKind,
         Operand,
+        PointerSource,
+        PointerSourceKind,
         Program,
         SourceRange,
         Value,
@@ -30,7 +32,7 @@ use crate::abstract_machine::{
 };
 
 /// `text` without the parentheses that enclose all of it: `*f` for `(*f)`.
-pub(super) fn unparenthesized(text: &str) -> String {
+fn unparenthesized(text: &str) -> String {
     let mut text = text.trim();
     while text.starts_with('(') && enclosing_parenthesis(text.as_bytes()) {
         text = text[1..text.len() - 1].trim();
@@ -113,39 +115,65 @@ impl Machine {
         result(noted(event, Topic::FunctionPointer), Operand::Value(value))
     }
 
-    /// `*fp` of a pointer to the function `function`: the function
-    /// designator it yields converts straight back to the same pointer.
+    /// `*e` of a pointer to the function `function`, where `operand` is
+    /// the source of `e` and how it gives the pointer: the function
+    /// designator `*` yields converts straight back to the same pointer.
+    /// The explanation is built from that structure, so each spelling it
+    /// quotes is C: `(**f)(…)` and `(*f)(…)` call the same function, where
+    /// `*f(…)` would apply `*` to what `f` returns.
     ///
     /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
+    /// C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58.
     pub(in crate::abstract_machine) fn function_indirection(
         &self,
         range: SourceRange,
-        source: &str,
+        (operand, form): (&str, PointerSource),
         program: &Program,
         function: usize,
         pointer: Value,
     ) -> Event {
         let (name, _, _) = self.function_facts(program, function);
-        let written = unparenthesized(&snippet(source, range));
-        let operand = written.strip_prefix('*').unwrap_or(&written).trim_start();
+        // `*` and its operand as written: the operand is a cast expression
+        // there, so this is the expression the step evaluates.
+        let written = format!("*{operand}");
+        // A call's parentheses follow a postfix expression; any other
+        // operand needs parentheses of its own (C99 §6.5.2p1).
+        let callee = if form.postfix {
+            String::from(operand)
+        } else {
+            format!("({operand})")
+        };
+        let gives = match form.kind {
+            | PointerSourceKind::Name => format!(
+                "`{operand}` designates the function {name}, and like any function designator it \
+                 converts to a pointer to that function."
+            ),
+            | PointerSourceKind::Indirection => format!(
+                "`{operand}` designates the function {name} too, and converts to a pointer to it."
+            ),
+            | PointerSourceKind::Object =>
+                format!("`{operand}` holds a pointer to the function {name}."),
+            | PointerSourceKind::Value =>
+                format!("`{operand}` yields a pointer to the function {name}."),
+        };
         let mut event = noted(
             explained(
                 Event::new(
                     EventKind::Dereference,
                     range,
-                    format!("`*{operand}` designates the function {name}"),
+                    format!("`{written}` designates the function {name}"),
                 ),
                 &format!(
-                    "`*{operand}` follows the pointer to the function {name}, and that function \
+                    "`{written}` follows the pointer to the function {name}, and that function \
                      designator converts straight back to a pointer to it."
                 ),
                 &format!(
-                    "`{operand}` holds a pointer to the function {name}. The unary * applied to a \
-                     pointer to a function yields a function designator, {name} itself, and a \
-                     function designator in an expression is converted to a pointer to the \
-                     function. The two steps cancel: `*{operand}` yields the pointer `{operand}` \
-                     holds. That is why `(*{operand})(…)` and `{operand}(…)` call the same \
-                     function; the * only shows the reader that a pointer is being followed."
+                    "{gives} The unary * applied to a pointer to a function yields a function \
+                     designator, {name} itself, and a function designator in an expression is \
+                     converted to a pointer to the function. The two steps cancel: `{written}` \
+                     yields the same pointer as `{operand}`, so `({written})(…)` and \
+                     `{callee}(…)` call the same function. However many * a program writes, each \
+                     only shows the reader that a pointer is being followed."
                 ),
                 &[clauses::INDIRECTION, clauses::FUNCTION_DESIGNATOR],
             ),
@@ -157,7 +185,7 @@ impl Machine {
 
     /// `event`, a call's, retold as a call through the pointer the
     /// expression `callee` evaluated to, which points to the function
-    /// `function`.
+    /// `function`; `kind` says how `callee` gave that pointer.
     ///
     /// C99: §6.5.2.2 paragraphs 1 and 3, p. 71; PDF p. 83.
     pub(in crate::abstract_machine) fn called_through(
@@ -165,19 +193,26 @@ impl Machine {
         mut event: Event,
         program: &Program,
         function: usize,
-        callee: &str,
+        (callee, kind): (&str, PointerSourceKind),
     ) -> Event {
         let (name, ty, line) = self.function_facts(program, function);
+        let gives = match kind {
+            | PointerSourceKind::Name | PointerSourceKind::Indirection => format!(
+                "`{callee}` designates {name} and converts to a pointer to it, so the call runs"
+            ),
+            | PointerSourceKind::Object => {
+                format!("`{callee}` holds a pointer to {name}, so the call runs")
+            },
+            | PointerSourceKind::Value => {
+                format!("`{callee}` yields a pointer to {name}, so the call runs")
+            },
+        };
         event.title = event.title.replacen(
             &format!("Call {name}"),
             &format!("Call {name} through `{callee}`"),
             1,
         );
-        event.summary = event.summary.replacen(
-            "The call runs",
-            &format!("`{callee}` yields a pointer to {name}, so the call runs"),
-            1,
-        );
+        event.summary = event.summary.replacen("The call runs", &gives, 1);
         event.explanation = format!(
             "This call goes through a pointer: the expression before the parentheses, `{callee}`, \
              gave a pointer to the function {name} (defined on line {line}), and the call runs \
@@ -207,12 +242,21 @@ impl Machine {
     pub(in crate::abstract_machine) fn function_comparison(
         &self,
         range: SourceRange,
-        source: &str,
+        (source, constant): (&str, Option<&str>),
         operator: &str,
         (left, right): (&Value, &Value),
         shown: &str,
     ) -> Event {
         let null = |value: &Value| !matches!(value, Value::Function(_));
+        // An integer 0 here is a null pointer constant, which converts to
+        // a null pointer (C99 §6.3.2.3p3).
+        let side = |value: &Value| match value {
+            | Value::Integer(0) => format!(
+                "the null pointer constant `{}`, which converts to a null pointer",
+                constant.unwrap_or("0")
+            ),
+            | value => self.value_text(value),
+        };
         let (summary, text) = if null(left) || null(right) {
             (
                 format!(
@@ -222,10 +266,11 @@ impl Machine {
                 format!(
                     "A null pointer is guaranteed to compare unequal to a pointer to any \
                      function. The left is {}, the right is {}, so `{operator}` yields the int \
-                     {shown}. A pointer to a function is never null, which is why a program tests \
-                     a pointer it was given against null before calling through it.",
-                    self.value_text(left),
-                    self.value_text(right),
+                     {shown}. A pointer that points to a function never compares equal to a null \
+                     pointer, so comparing a pointer with null tells whether there is a function \
+                     to call through it.",
+                    side(left),
+                    side(right),
                 ),
             )
         } else {

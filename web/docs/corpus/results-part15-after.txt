@@ -49,7 +49,7 @@ s02_computed_table.c	finished	12 steps	returns Some(Integer(6))	""
 u01_alias_increment.c	undefined_behavior	16 steps	`*p = i++` stores into `i`, and `i++` stores into it too, with no sequence point between the two: between two sequence points C99 lets an object be modified at most once, and read only to compute the value stored there
 u02_alias_subscript.c	undefined_behavior	16 steps	`a[i++]` reads `i`, and `i++` stores into it too, with no sequence point between the two: between two sequence points C99 lets an object be modified at most once, and read only to compute the value stored there
 u03_difference_of_objects.c	undefined_behavior	24 steps	the left pointer points into `y` and the right one into `x`: C defines the difference of two pointers only when both point into the same array, or one past its end
-u04_null_call.c	undefined_behavior	6 steps	the call `handler(…)` goes through a null pointer, which points to no function: C defines a call only of a function, so this one has no meaning
+u04_null_call.c	undefined_behavior	6 steps	the call `handler(…)` goes through a null pointer, which points to no function (C99 §6.3.2.3p3). A call's first expression denotes the function it calls (§6.5.2.2p3), and C defines no call of anything else, so this one is undefined by the omission of any definition (§4p2)
 u05_wrong_type.c	undefined_behavior	10 steps	`f` points to add, a function of type int (int, int), but its own type says it points to a function of type int (int): a cast converted the pointer, and a call through the wrong type is undefined
 w01_strlen.c	finished	93 steps	returns Some(Integer(0))	"5\n"
 w02_strcpy.c	finished	98 steps	returns Some(Integer(0))	"copy 5\n"

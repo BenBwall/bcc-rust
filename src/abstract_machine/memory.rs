@@ -501,7 +501,7 @@ impl Machine {
             // §6.8.4.1p2, §F.3).
             | Value::Floating(real) => Ok(!real.is_zero()),
             | Value::Pointer { target, .. } => Ok(target.is_some()),
-            // A pointer to a function is never null (C99 §6.3.2.3p3).
+            // A pointer that points to a function is not null (C99 §6.3.2.3p3).
             | Value::Function(_) => Ok(true),
             | _ => Err(self.error("condition requires a determinate scalar")),
         }

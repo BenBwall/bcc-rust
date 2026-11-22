@@ -26,6 +26,7 @@ use crate::abstract_machine::{
         Op,
         Operand,
         Place,
+        PointerSourceKind,
         Program,
         Upcoming,
         Value,
@@ -457,7 +458,7 @@ impl Machine {
                 format!("call `{name}`"),
                 clauses::CALL_ARGUMENTS,
             ),
-            | Op::CallPointer { .. } | Op::Function { .. } | Op::FunctionIndirection =>
+            | Op::CallPointer { .. } | Op::Function { .. } | Op::FunctionIndirection { .. } =>
                 function_upcoming(&next.op, &operands()),
             | &Op::Library(library, _) => (
                 EventKind::LibraryCall,
@@ -847,24 +848,35 @@ fn function_upcoming(op: &Op, operands: &[String]) -> (EventKind, String, Clause
             format!("take the address of the function `{name}`"),
             clauses::ADDRESS_OPERATOR,
         ),
-        | Op::FunctionIndirection => (
+        // A function designator converts to the pointer `*` follows;
+        // an object holds it, and any other expression yields it.
+        | Op::FunctionIndirection { form, .. } => (
             EventKind::Dereference,
-            format!("follow {pointer} to the function it points to"),
+            if designates(form.kind) {
+                format!("follow the pointer {pointer} converts to back to its function")
+            } else {
+                format!("follow {pointer} to the function it points to")
+            },
             clauses::INDIRECTION,
         ),
-        | _ => {
-            // `(*fp)` designates the function; `fp` points to it.
-            let verb =
-                if super::functions::unparenthesized(&pointer.replace('`', "")).starts_with('*') {
-                    "designates"
-                } else {
-                    "points to"
-                };
-            (
-                EventKind::Call,
-                format!("call the function {pointer} {verb}"),
-                clauses::FUNCTION_CALL,
-            )
-        },
+        | Op::CallPointer { callee, .. } if designates(callee.kind) => (
+            EventKind::Call,
+            format!("call the function {pointer} designates"),
+            clauses::FUNCTION_CALL,
+        ),
+        | _ => (
+            EventKind::Call,
+            format!("call the function {pointer} points to"),
+            clauses::FUNCTION_CALL,
+        ),
     }
+}
+
+/// Whether an expression of this kind designates a function, rather than
+/// holding or yielding a pointer to it.
+const fn designates(kind: PointerSourceKind) -> bool {
+    matches!(
+        kind,
+        PointerSourceKind::Name | PointerSourceKind::Indirection
+    )
 }

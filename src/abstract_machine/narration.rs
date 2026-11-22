@@ -1052,6 +1052,11 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: null pointer dereference",
             "A null pointer points to no object, so there is nothing for `*` to designate.",
         ),
+        | Some(Undefined::NullFunctionIndirection) => (
+            "Undefined behavior: * of a null pointer to a function",
+            "A null pointer points to no function, so there is no function designator for `*` to \
+             yield.",
+        ),
         | Some(Undefined::NullSubscript) => (
             "Undefined behavior: subscript of a null pointer",
             "`p[i]` means `*(p + i)`, and a null pointer points into no array, so even the \
@@ -1465,6 +1470,10 @@ impl Machine {
             ),
             | Type::Floating(floating) =>
                 format!("{}. Its value is", floating_declaration(floating)),
+            // No object has this type: the subset has `void *` only as the
+            // type of `(void *)0`.
+            | Type::VoidPointer =>
+                String::from("a void * object, a pointer to void (8 bytes on x86-64). Its value is"),
         };
         // A const object says so where it is created: it keeps the value its
         // initializer gives it.
@@ -1477,6 +1486,7 @@ impl Machine {
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
+            | Type::VoidPointer => String::from("a pointer to void"),
             | Type::FunctionPointer(_) => format!("{} object", article(&object.r#type)),
             | Type::Indirect(..) => format!("a pointer to {}", self.pointee_words(ty)),
             | Type::PointerArray(Target::Function(_), 1, count) =>
@@ -3206,6 +3216,8 @@ impl Machine {
 
     /// The event for a binary operator; `&[]` is `&E1[E2]`, which C99
     /// §6.5.3.2p3 evaluates as `E1 + E2` without the indirection.
+    /// `constant` is the spelling of an integer 0 compared with a pointer,
+    /// a null pointer constant.
     #[expect(
         clippy::too_many_arguments,
         reason = "One operator's complete observation."
@@ -3213,7 +3225,7 @@ impl Machine {
     pub(super) fn binary(
         &self,
         range: SourceRange,
-        source: &str,
+        (source, constant): (&str, Option<&str>),
         operator: &str,
         ty: Option<Arithmetic>,
         left: Value,
@@ -3242,11 +3254,55 @@ impl Machine {
             self.short_value(&output),
         );
         let mut event = match (&left, &right) {
-            | (Value::Function(_), _) | (_, Value::Function(_)) =>
-                self.function_comparison(range, source, operator, (&left, &right), &shown),
+            | (Value::Function(_), _) | (_, Value::Function(_)) => self.function_comparison(
+                range,
+                (source, constant),
+                operator,
+                (&left, &right),
+                &shown,
+            ),
             | (Value::Pointer { .. }, Value::Pointer { .. })
                 if matches!(operator, "-" | "<" | "<=" | ">" | ">=") =>
                 self.pointer_order(range, source, operator, &left, &right, &output),
+            | (Value::Pointer { target: None, .. }, Value::Pointer { .. })
+            | (Value::Pointer { .. }, Value::Pointer { target: None, .. }) => {
+                // C99 §6.5.9p6, §6.3.2.3p3: two null pointers compare
+                // equal, and a null pointer equals no pointer to an object.
+                let both = left.same_address(&right);
+                noted(
+                    explained(
+                        Event::new(
+                            EventKind::Comparison,
+                            range,
+                            format!("Compare pointers: {} → {shown}", snippet(source, range)),
+                        ),
+                        &if both {
+                            format!(
+                                "Two null pointers compare equal, so `{operator}` yields {shown}."
+                            )
+                        } else {
+                            format!(
+                                "A null pointer equals no pointer to an object, so `{operator}` \
+                                 yields {shown}."
+                            )
+                        },
+                        &format!(
+                            "Two pointers compare equal exactly when both are null pointers, or \
+                             both point to the same place; a null pointer is guaranteed to \
+                             compare unequal to a pointer to any object. The left is {}, the \
+                             right is {}, so `{operator}` yields the int {shown}.{UNORDERED}",
+                            self.value_text(&left),
+                            self.value_text(&right),
+                        ),
+                        &[
+                            clauses::POINTER_EQUALITY,
+                            clauses::NULL_POINTER,
+                            clauses::EVALUATION_ORDER,
+                        ],
+                    ),
+                    Topic::Comparison,
+                )
+            },
             | (Value::Pointer { .. }, Value::Pointer { .. }) => noted(
                 explained(
                     Event::new(
@@ -3375,11 +3431,26 @@ impl Machine {
                     format!("Compare with a null pointer → {shown}"),
                 ),
                 &format!("`{operator}` tests whether the pointer is null: the result is {shown}."),
-                &format!(
-                    "The constant 0 here is a null pointer constant, so `{operator}` tests \
-                     whether the pointer is null. The result is the int {shown}.{UNORDERED}"
-                ),
-                &[clauses::EQUALITY, clauses::EVALUATION_ORDER],
+                &match constant {
+                    | Some(written) if written != "0" => format!(
+                        "`{written}` is an integer constant expression with the value 0, so here \
+                         it is a null pointer constant, and `{operator}` tests whether the \
+                         pointer is null. The result is the int {shown}.{UNORDERED}"
+                    ),
+                    | _ => format!(
+                        "The constant 0 here is a null pointer constant, so `{operator}` tests \
+                         whether the pointer is null. The result is the int {shown}.{UNORDERED}"
+                    ),
+                },
+                &if constant.is_some_and(|written| written != "0") {
+                    vec![
+                        clauses::EQUALITY,
+                        clauses::NULL_POINTER,
+                        clauses::EVALUATION_ORDER,
+                    ]
+                } else {
+                    vec![clauses::EQUALITY, clauses::EVALUATION_ORDER]
+                },
             ),
             | _ if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") => {
                 let truth = if output == Value::Integer(1) {
@@ -4412,6 +4483,24 @@ impl Machine {
                     vec![clauses::CAST],
                     Topic::Cast,
                 )
+            } else if to == Type::VoidPointer {
+                (
+                    format!("Cast to void *: a null pointer, {new}"),
+                    format!(
+                        "`{form}` converts the null pointer constant {old} to void *, which gives \
+                         a null pointer: it points to no object and no function."
+                    ),
+                    format!(
+                        "An integer constant expression with the value 0 is a null pointer \
+                         constant, and so is one cast to void *, as here. Converted to a pointer \
+                         type, a null pointer constant becomes a null pointer, which compares \
+                         unequal to a pointer to any object or function. That is why `{form}` can \
+                         be stored into, or compared with, a pointer of any type, a pointer to a \
+                         function included."
+                    ),
+                    vec![clauses::CAST, clauses::NULL_POINTER],
+                    Topic::Cast,
+                )
             } else if let (Type::FunctionPointer(_), Type::FunctionPointer(signature)) = (from, to)
             {
                 let target = self.value_text(&converted);
@@ -4971,7 +5060,8 @@ impl Machine {
         let meaning = match value {
             | Value::Pointer { target: None, .. } => "a null pointer counts as false",
             | Value::Pointer { .. } => "a non-null pointer counts as true",
-            | Value::Function(_) => "a pointer to a function, which is never null, counts as true",
+            | Value::Function(_) =>
+                "a pointer that points to a function is not null, so it counts as true",
             | _ if truth => "any nonzero value counts as true",
             | _ => "zero counts as false",
         };
@@ -5241,9 +5331,18 @@ impl Machine {
                          second and third operands together, {}, which holds {input} unchanged.",
                         arithmetic.spelling()
                     ),
-                    | None if to.is_some() => String::from(
+                    // C99 §6.3.2.3p3, §6.5.15p6: a null pointer constant
+                    // operand gives a null pointer of the other's type.
+                    | None if to.is_some() && operand == "0" => String::from(
                         " The constant 0 here is a null pointer constant: the result is a null \
                          pointer.",
+                    ),
+                    | None if to.is_some() && value == Value::Integer(0) => format!(
+                        " `{operand}` is an integer constant expression with the value 0, so here \
+                         it is a null pointer constant: the result is a null pointer."
+                    ),
+                    | None if to.is_some() => format!(
+                        " `{operand}` is a null pointer constant: the result is a null pointer."
                     ),
                     | None => String::new(),
                 };
@@ -5994,7 +6093,8 @@ fn truth_words(value: &Value, truth: bool) -> &'static str {
     match value {
         | Value::Pointer { target: None, .. } => "a null pointer counts as false",
         | Value::Pointer { .. } => "a non-null pointer counts as true",
-        | Value::Function(_) => "a pointer to a function, which is never null, counts as true",
+        | Value::Function(_) =>
+            "a pointer that points to a function is not null, so it counts as true",
         | _ if truth => "any nonzero value counts as true",
         | _ => "zero counts as false",
     }

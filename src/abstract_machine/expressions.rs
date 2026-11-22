@@ -30,6 +30,8 @@ use super::{
         Nested,
         Op,
         Place,
+        PointerSource,
+        PointerSourceKind,
         SequencePoint,
         SourceRange,
         Type,
@@ -83,9 +85,16 @@ impl Parser<'_> {
     ) -> Result<usize, Diagnostic> {
         let lhs = &self.expressions[left];
         let rhs = &self.expressions[right];
-        let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
         let function = |ty: Type| matches!(ty, Type::FunctionPointer(_));
         let ty = match (operator, lhs.ty, rhs.ty) {
+            // `(void *)0` is in this subset only to be compared with or
+            // stored into a pointer.
+            | (operator, Type::VoidPointer, _) | (operator, _, Type::VoidPointer)
+                if !matches!(operator, "==" | "!=" | "&&" | "||") =>
+                return Err(self.error(
+                    "`(void *)0` is in this subset only as a null pointer constant, to store into \
+                     or compare with a pointer; pointers to void are outside it",
+                )),
             | (operator, left_type, right_type)
                 if (function(left_type) || function(right_type))
                     && !matches!(operator, "&&" | "||") =>
@@ -202,9 +211,12 @@ impl Parser<'_> {
             | ("+" | "-", pointer @ (Type::Pointer(..) | Type::Indirect(..)), Type::Integer(_))
             | ("+", Type::Integer(_), pointer @ (Type::Pointer(..) | Type::Indirect(..))) =>
                 pointer,
-            | ("==" | "!=", pointer, Type::Integer(_)) if pointer.is_pointer() && null(rhs) =>
+            // A pointer compares with a null pointer constant (C99 §6.5.9p2).
+            | ("==" | "!=", pointer, _)
+                if pointer.is_pointer() && self.null_pointer_constant(right) =>
                 Type::INT,
-            | ("==" | "!=", Type::Integer(_), pointer) if pointer.is_pointer() && null(lhs) =>
+            | ("==" | "!=", _, pointer)
+                if pointer.is_pointer() && self.null_pointer_constant(left) =>
                 Type::INT,
             | _ => return Err(self.error("unsupported operand types for this operator")),
         };
@@ -291,7 +303,6 @@ impl Parser<'_> {
                 &super::clauses::CONDITIONAL_FIRST,
             ));
         }
-        let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
         let ty = match (second.ty, third.ty) {
             | (left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() => left
                 .arithmetic()
@@ -309,8 +320,9 @@ impl Parser<'_> {
                 )),
             | (Type::Pointer(left, a), Type::Pointer(right, b)) if left == right =>
                 Type::Pointer(left, a || b),
-            | (pointer, Type::Integer(_)) if pointer.is_pointer() && null(third) => pointer,
-            | (Type::Integer(_), pointer) if pointer.is_pointer() && null(second) => pointer,
+            | (pointer, _) if pointer.is_pointer() && self.null_pointer_constant(otherwise) =>
+                pointer,
+            | (_, pointer) if pointer.is_pointer() && self.null_pointer_constant(then) => pointer,
             | _ =>
                 return Err(Diagnostic::constraint(
                     combined(second.range, third.range),
@@ -531,11 +543,9 @@ impl Parser<'_> {
                 if !self.take(")") {
                     loop {
                         let argument = self.expression(0)?;
+                        let null = self.null_pointer_constant(argument);
                         let expression = &self.expressions[argument];
-                        types.push((
-                            expression.ty,
-                            matches!(expression.kind, ExprKind::Number(0, ..)),
-                        ));
+                        types.push((expression.ty, null));
                         height = height.max(expression.height + 1);
                         arguments.push(argument);
                         if self.take(")") {
@@ -692,32 +702,60 @@ impl Parser<'_> {
         left: usize,
         right: usize,
     ) -> Result<Type, Diagnostic> {
-        let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
         let (lhs, rhs) = (&self.expressions[left], &self.expressions[right]);
         let range = combined(lhs.range, rhs.range);
         match (operator, lhs.ty, rhs.ty) {
             | ("==" | "!=", Type::FunctionPointer(a), Type::FunctionPointer(b)) if a == b =>
                 Ok(Type::INT),
-            | ("==" | "!=", Type::FunctionPointer(_), Type::Integer(_)) if null(rhs) =>
+            | ("==" | "!=", Type::FunctionPointer(_), _) if self.null_pointer_constant(right) =>
                 Ok(Type::INT),
-            | ("==" | "!=", Type::Integer(_), Type::FunctionPointer(_)) if null(lhs) =>
+            | ("==" | "!=", _, Type::FunctionPointer(_)) if self.null_pointer_constant(left) =>
                 Ok(Type::INT),
             | ("==" | "!=", ..) => Err(Diagnostic::constraint(
                 range,
                 "== and != compare a pointer to a function with a pointer to a function of the \
-                 same type, or with the null pointer constant 0 (C99 §6.5.9p2)",
+                 same type, or with a null pointer constant such as 0 (C99 §6.5.9p2, §6.3.2.3p3)",
                 &super::clauses::EQUALITY_CONSTRAINT,
             )),
-            | _ => Err(Diagnostic::constraint(
-                range,
-                &format!(
-                    "`{operator}` does not take a pointer to a function: pointer arithmetic and \
-                     ordering count elements of an array of objects, and a function is no object \
-                     (C99 §6.5.6p2, §6.5.8p2); a pointer to a function can be called, compared \
-                     with == and !=, and tested"
-                ),
-                &super::clauses::FUNCTION_POINTER_ARITHMETIC,
-            )),
+            | _ => {
+                let (reason, clause) = match operator {
+                    | "+" => (
+                        "pointer arithmetic counts elements of an array of objects, and a \
+                         function is no object (C99 §6.5.6p2)",
+                        &super::clauses::FUNCTION_POINTER_ARITHMETIC,
+                    ),
+                    | "-" => (
+                        "subtraction takes a pointer to an object, an element of an array, and a \
+                         function is no object (C99 §6.5.6p3)",
+                        &super::clauses::SUBTRACTION_CONSTRAINT,
+                    ),
+                    | "<" | "<=" | ">" | ">=" => (
+                        "ordering compares pointers to objects, by their places in an array, and \
+                         a function is no object (C99 §6.5.8p2)",
+                        &super::clauses::RELATIONAL_CONSTRAINT,
+                    ),
+                    | "<<" | ">>" => (
+                        "a shift takes integers (C99 §6.5.7p2)",
+                        &super::clauses::SHIFT_CONSTRAINT,
+                    ),
+                    | "&" | "^" | "|" => (
+                        "the bitwise operators take integers (C99 §6.5.10p2, §6.5.11p2, §6.5.12p2)",
+                        &super::clauses::BITWISE_CONSTRAINT,
+                    ),
+                    | _ => (
+                        "the multiplicative operators take numbers (C99 §6.5.5p2)",
+                        &super::clauses::MULTIPLICATIVE_CONSTRAINT,
+                    ),
+                };
+                Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{operator}` does not take a pointer to a function: {reason}; a pointer \
+                         to a function can be called, compared with == and !=, and tested"
+                    ),
+                    clause,
+                ))
+            },
         }
     }
 
@@ -784,6 +822,35 @@ impl Parser<'_> {
         )?;
         self.expressions[node].effect = effect;
         Ok(node)
+    }
+
+    /// How `expression`, of a pointer-to-function type, gives its pointer:
+    /// as a function designator that converts to it, from an object that
+    /// holds it, or as any other expression's value.
+    pub(super) fn pointer_source(&self, expression: usize) -> PointerSource {
+        let node = &self.expressions[expression];
+        let kind = match node.kind {
+            | ExprKind::Function(_) => PointerSourceKind::Name,
+            | ExprKind::Unary("*", _) if self.designator(expression) =>
+                PointerSourceKind::Indirection,
+            | ExprKind::Name(..) | ExprKind::Index(..) | ExprKind::Member { .. } =>
+                PointerSourceKind::Object,
+            | _ => PointerSourceKind::Value,
+        };
+        // C99 §6.5.1, §6.5.2p1: a parenthesized expression is a primary
+        // expression, and a primary or postfix expression is a postfix
+        // expression.
+        let postfix = node.parenthesized
+            || matches!(
+                node.kind,
+                ExprKind::Function(_)
+                    | ExprKind::Name(..)
+                    | ExprKind::Index(..)
+                    | ExprKind::Member { .. }
+                    | ExprKind::Call(..)
+                    | ExprKind::CallPointer(..)
+            );
+        PointerSource { kind, postfix }
     }
 
     /// Whether `expression` designates a function rather than an object: a
@@ -1340,6 +1407,37 @@ impl Parser<'_> {
         Ok((i128::from(integer.0), integer.1))
     }
 
+    /// `(void *)` and an integer constant expression with the value 0: a
+    /// null pointer constant too, the only pointer to void in this subset.
+    ///
+    /// C99: §6.3.2.3 paragraph 3, p. 47; PDF p. 59.
+    #[inline(never)]
+    fn void_pointer_cast(&mut self, opening: Token<'_>) -> Result<usize, Diagnostic> {
+        self.position += 3;
+        let child = self.expression(UNARY)?;
+        let operand = &self.expressions[child];
+        let range = combined(opening.range, operand.range);
+        if operand.ty.integer().is_none() || !self.null_pointer_constant(child) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "this subset has a pointer to void only as the null pointer constant `(void *)0`, \
+                 a cast of an integer constant expression with the value 0; other pointers to \
+                 void are outside it",
+            ));
+        }
+        let (effect, height) = (operand.effect, operand.height + 1);
+        let node = self.node(
+            ExprKind::Cast(Type::VoidPointer, child),
+            Type::VoidPointer,
+            false,
+            range,
+            height,
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
+    }
+
     /// `(type-name) operand`: a cast between arithmetic types, or between
     /// pointers to the same type that differ only in `const`. Its operand
     /// binds as a unary operator's does, so `(char)300 + 1` adds 1 to the
@@ -1350,6 +1448,9 @@ impl Parser<'_> {
         let opening = self.current();
         self.position += 1;
         let start = self.current();
+        if self.at("void") && self.peek(1) == "*" && self.peek(2) == ")" {
+            return self.void_pointer_cast(opening);
+        }
         if self.at("void") {
             return Err(self.error(
                 "a cast to void, which discards a value, is outside this subset; write the \
@@ -1781,9 +1882,11 @@ impl Parser<'_> {
             // straight back to a pointer to it (C99 §6.5.3.2p4,
             // §6.3.2.1p4).
             | ExprKind::Unary("*", child) if self.designator(expression) => {
-                let operand = self.emit_expression(child, false)?;
-                let tree = self.tree("*", range, vec![operand])?;
-                self.emit_node(Op::FunctionIndirection, range, tree)?;
+                let form = self.pointer_source(child);
+                let operand = self.expressions[child].range;
+                let tree = self.emit_expression(child, false)?;
+                let tree = self.tree("*", range, vec![tree])?;
+                self.emit_node(Op::FunctionIndirection { operand, form }, range, tree)?;
                 tree
             },
             | ExprKind::Unary("&", child) => {
@@ -2031,7 +2134,16 @@ impl Parser<'_> {
                     .get(callee_range.start..callee_range.end)
                     .unwrap_or("f");
                 let tree = self.tree(&format!("{text}()"), range, children)?;
-                self.emit_node(Op::CallPointer { signature, types }, range, tree)?;
+                let callee = self.pointer_source(callee);
+                self.emit_node(
+                    Op::CallPointer {
+                        signature,
+                        types,
+                        callee,
+                    },
+                    range,
+                    tree,
+                )?;
                 tree
             },
             | ExprKind::Library(library, arguments) => {

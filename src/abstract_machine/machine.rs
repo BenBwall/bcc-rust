@@ -29,6 +29,7 @@ use super::{
         Op,
         Operand,
         Place,
+        PointerSourceKind,
         Program,
         Signature,
         State,
@@ -411,6 +412,9 @@ impl Machine {
                 let value = self.pop_value()?;
                 let converted = match to.arithmetic() {
                     | Some(arithmetic) => self.converted(&value, arithmetic)?,
+                    // `(void *)0` converts a null pointer constant to a
+                    // null pointer (C99 §6.3.2.3p3).
+                    | None if to == Type::VoidPointer => Value::null(),
                     | None => value.clone(),
                 };
                 self.push(Operand::Value(converted.clone()))?;
@@ -473,7 +477,7 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.address_of(range, target, offset, structure, value)
             },
-            | Op::Function { .. } | Op::FunctionIndirection | Op::CallPointer { .. } =>
+            | Op::Function { .. } | Op::FunctionIndirection { .. } | Op::CallPointer { .. } =>
                 self.function_operation(instruction, program)?,
             | Op::Dereference => {
                 let pointer = self.pop_value()?;
@@ -544,14 +548,33 @@ impl Machine {
                 let left = self.pop_value()?;
                 let result = self.binary_value(operator, ty, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, operator, ty, left, right, result)
+                // An integer 0 compared with a pointer is a null pointer
+                // constant (C99 §6.3.2.3p3); the narration names it as
+                // written.
+                let pointer =
+                    |value: &Value| matches!(value, Value::Pointer { .. } | Value::Function(_));
+                let spelled = self.operand_texts(program, instruction);
+                let constant = match (&left, &right) {
+                    | (value, Value::Integer(0)) if pointer(value) => spelled.get(1),
+                    | (Value::Integer(0), value) if pointer(value) => spelled.first(),
+                    | _ => None,
+                };
+                self.binary(
+                    range,
+                    (source, constant.map(String::as_str)),
+                    operator,
+                    ty,
+                    left,
+                    right,
+                    result,
+                )
             },
             | Op::ElementAddress => {
                 let right = self.pop_value()?;
                 let left = self.pop_value()?;
                 let result = self.binary_value("+", None, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, "&[]", None, left, right, result)
+                self.binary(range, (source, None), "&[]", None, left, right, result)
             },
             | &Op::Store {
                 initializer,
@@ -960,7 +983,7 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.function_designator(range, program, function, address, value)
             },
-            | Op::FunctionIndirection => {
+            | &Op::FunctionIndirection { operand, form } => {
                 let pointer = self.pop_value()?;
                 let Value::Function(function) = pointer else {
                     // A null pointer points to no function, and `*` of it
@@ -973,13 +996,18 @@ impl Machine {
                             source.get(range.start..range.end).unwrap_or("*")
                         ),
                         &clauses::INDIRECTION,
-                        Undefined::NullIndirection,
+                        Undefined::NullFunctionIndirection,
                     ));
                 };
                 self.push(Operand::Value(pointer.clone()))?;
-                self.function_indirection(range, source, program, function, pointer)
+                let operand = source
+                    .get(operand.start..operand.end)
+                    .unwrap_or("the pointer");
+                self.function_indirection(range, (operand, form), program, function, pointer)
             },
-            | Op::CallPointer { signature, types } => {
+            | Op::CallPointer {
+                signature, types, ..
+            } => {
                 let arguments = self.arguments(types)?;
                 let pointer = self.pop_value()?;
                 let function = self.called_function(program, instruction, &pointer, *signature)?;
@@ -1019,9 +1047,11 @@ impl Machine {
                 self.state.source_range,
                 &format!(
                     "the call `{callee}(…)` goes through a null pointer, which points to no \
-                     function: C defines a call only of a function, so this one has no meaning"
+                     function (C99 §6.3.2.3p3). A call's first expression denotes the function it \
+                     calls (§6.5.2.2p3), and C defines no call of anything else, so this one is \
+                     undefined by the omission of any definition (§4p2)"
                 ),
-                &clauses::NULL_POINTER,
+                &clauses::UNDEFINED_BY_OMISSION,
                 Undefined::NullCall,
             ));
         };
@@ -1120,7 +1150,11 @@ impl Machine {
             parameters,
         );
         if through_pointer {
-            event = self.called_through(event, program, function, callee_source);
+            let kind = match instruction.op {
+                | Op::CallPointer { callee, .. } => callee.kind,
+                | _ => PointerSourceKind::Value,
+            };
+            event = self.called_through(event, program, function, (callee_source, kind));
         }
         Ok(event)
     }

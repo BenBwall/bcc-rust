@@ -6637,7 +6637,7 @@ fn pointers_to_functions_are_values_a_call_follows() {
     assert!(
         call.event
             .summary
-            .starts_with("`f` yields a pointer to square, so the call runs square"),
+            .starts_with("`f` holds a pointer to square, so the call runs square"),
         "{}",
         call.event.summary
     );
@@ -6736,7 +6736,7 @@ fn undefined_calls_through_pointers_to_functions_stop() {
     );
     assert_eq!(cause, Some(super::Undefined::NullCall));
     let (cause, _) = undefined("int main(void) { int (*f)(int) = 0; return (*f)(1); }");
-    assert_eq!(cause, Some(super::Undefined::NullIndirection));
+    assert_eq!(cause, Some(super::Undefined::NullFunctionIndirection));
     let source = "typedef int (*one)(int);\nint add(int a, int b) { return a + b; }\nint \
                   main(void) {\n    one f = (one)add;\n    return f(3);\n}\n";
     let (cause, title) = undefined(source);
@@ -6840,6 +6840,255 @@ fn constraints_on_pointers_to_functions_are_refused() {
         let message = rejected(source);
         assert!(message.contains(needle), "{source}: {message}");
     }
+}
+
+// C99 §6.5.3.2p4, §6.3.2.1p4, §6.5.2p1: each `*` before a pointer to a
+// function yields the function designator, which converts straight back to
+// the pointer. The explanation says how its operand gives the pointer, and
+// every spelling it quotes is C, parenthesized where a call needs it.
+#[test]
+fn each_star_before_a_pointer_to_a_function_is_explained_in_c() {
+    let states = finished(
+        "int sq(int x) { return x * x; }\nint main(void) {\n    int (*fp)(int) = sq;\n    int a = \
+         (*sq)(1);\n    int b = (**sq)(2);\n    int c = (***sq)(3);\n    int d = (*&sq)(4);\n    \
+         int (*e)(int) = &*sq;\n    int g = (*fp)(5);\n    int h = (**fp)(6);\n    int i = \
+         (*&fp)(7);\n    int j = e(8);\n    return a + b + c + d + g + h + i + j;\n}\n",
+        204,
+    );
+    for (title, gives, same) in [
+        (
+            "`*sq` designates",
+            "`sq` designates the function sq, and like any function designator it converts to a \
+             pointer to that function.",
+            "`(*sq)(…)` and `sq(…)` call the same function",
+        ),
+        (
+            "`**sq` designates",
+            "`*sq` designates the function sq too, and converts to a pointer to it.",
+            "`(**sq)(…)` and `(*sq)(…)` call the same function",
+        ),
+        (
+            "`***sq` designates",
+            "`**sq` designates the function sq too",
+            "`(***sq)(…)` and `(**sq)(…)` call the same function",
+        ),
+        (
+            "`*&sq` designates",
+            "`&sq` yields a pointer to the function sq.",
+            "`(*&sq)(…)` and `(&sq)(…)` call the same function",
+        ),
+        (
+            "`*fp` designates",
+            "`fp` holds a pointer to the function sq.",
+            "`(*fp)(…)` and `fp(…)` call the same function",
+        ),
+        (
+            "`**fp` designates",
+            "`*fp` designates the function sq too",
+            "`(**fp)(…)` and `(*fp)(…)` call the same function",
+        ),
+    ] {
+        let explanation = &step(&states, EventKind::Dereference, title)
+            .event
+            .explanation;
+        assert!(
+            explanation.starts_with(gives) && explanation.contains(same),
+            "{title}: {explanation}"
+        );
+    }
+    // No step claims a call spelling C reads otherwise: `*sq(…)` applies *
+    // to what sq returns, and `&sq(…)` takes the address of a value.
+    for state in &states {
+        let event = &state.event;
+        for wrong in [
+            "`*sq(…)`",
+            "`&sq(…)`",
+            "`*fp(…)`",
+            "`sq` holds",
+            "`*sq` holds",
+        ] {
+            assert!(
+                !event.explanation.contains(wrong) && !event.summary.contains(wrong),
+                "{}: {}",
+                event.title,
+                event.explanation
+            );
+        }
+    }
+    // `*&fp` is the object `fp`, which yields its pointer for the call.
+    let call = step(&states, EventKind::Call, "Call sq through `(*&fp)`");
+    assert!(
+        call.event
+            .summary
+            .starts_with("`(*&fp)` yields a pointer to sq"),
+        "{}",
+        call.event.summary
+    );
+    // An operand that is not a postfix expression keeps its parentheses.
+    let states = finished(
+        "int sq(int x) { return x * x; }\nint main(void) {\n    int c = 1;\n    int a = (*(int \
+         (*)(int))sq)(2);\n    int b = (*(c ? sq : sq))(3);\n    return a + b + (sq)(4);\n}\n",
+        29,
+    );
+    let cast = step(
+        &states,
+        EventKind::Dereference,
+        "`*(int (*)(int))sq` designates",
+    );
+    assert!(
+        cast.event.explanation.contains(
+            "`(*(int (*)(int))sq)(…)` and `((int (*)(int))sq)(…)` call the same function"
+        ),
+        "{}",
+        cast.event.explanation
+    );
+    let conditional = step(
+        &states,
+        EventKind::Dereference,
+        "`*(c ? sq : sq)` designates",
+    );
+    assert!(
+        conditional
+            .event
+            .explanation
+            .contains("`(*(c ? sq : sq))(…)` and `(c ? sq : sq)(…)` call the same function"),
+        "{}",
+        conditional.event.explanation
+    );
+    let named = step(&states, EventKind::Call, "Call sq through `(sq)`");
+    assert!(
+        named
+            .event
+            .summary
+            .starts_with("`(sq)` designates sq and converts to a pointer to it"),
+        "{}",
+        named.event.summary
+    );
+}
+
+// C99 §6.3.2.3p3, §6.6p6: a null pointer constant is any integer constant
+// expression with the value 0, or one cast to `void *`, wherever a pointer
+// takes one: an initializer, an assignment, a comparison, `?:`, an argument
+// and a static initializer.
+#[test]
+fn any_null_pointer_constant_makes_a_null_pointer() {
+    returned(
+        "int f(int x) { return x + 1; }\nint main(void) {\n    int (*p)(int) = (1 - 1);\n    int \
+         (*q)(int) = (void *)0;\n    int *r = (void *)0;\n    int *s = 0L;\n    int n = 0;\n    if \
+         (p == (void *)0) n += 1;\n    if (q != (1 - 1)) n += 10;\n    p = (1 - 1);\n    p = \
+         '\\0';\n    q = (void *)(2 - 2);\n    if (r == (void *)0) n += 100;\n    if (s != (1 - \
+         1)) n += 1000;\n    p = f;\n    if (p != (void *)0) n += 2;\n    if (q == 0) n += 20;\n    \
+         return n;\n}\n",
+        123,
+    );
+    returned(
+        "int f(int x) { return x + 1; }\nstatic int (*sp)(int) = (1 - 1);\nstatic int (*sv)(int) \
+         = (void *)0;\nstatic int *so = (void *)0;\nstatic int (*tab[3])(int) = { f, (void *)0, \
+         (2 * 0) };\nint main(void) {\n    int n = 0;\n    if (sp == 0) n += 1;\n    if (sv == 0) \
+         n += 2;\n    if (so == 0) n += 4;\n    if (tab[1] == 0 && tab[2] == 0) n += 8;\n    \
+         return n + tab[0](1);\n}\n",
+        17,
+    );
+    returned(
+        "int twice(int x) { return 2 * x; }\nint apply(int (*g)(int), int v) {\n    if (g == (void \
+         *)0)\n        return -1;\n    return g(v);\n}\nint main(void) {\n    int c = 0;\n    int \
+         (*p)(int) = c ? twice : (1 - 1);\n    int (*q)(int) = c ? (void *)0 : twice;\n    return \
+         apply(p, 3) + apply(q, 4) + apply((void *)0, 5) + apply((0), 6);\n}\n",
+        5,
+    );
+    returned(
+        "int main(void) { int x = 3; int *q = &x; int n = 0; if (q != (1 - 1)) n += 1; q = (1 - \
+         1); if (q == (void *)0) n += 2; if (!q) n += 4; return n + (q ? 8 : 0); }",
+        7,
+    );
+    // A floating constant may be a cast's operand in an integer constant
+    // expression.
+    returned(
+        "int f(int x) { return x; } int main(void) { int (*p)(int) = (int)0.5; return p == 0; }",
+        1,
+    );
+    let states = stepped("int main(void) { int (*p)(int) = (void *)0; return p == 0; }");
+    let cast = step(&states, EventKind::Cast, "Cast to void *: a null pointer");
+    assert!(
+        cast.event
+            .summary
+            .contains("converts the null pointer constant 0 to void *"),
+        "{}",
+        cast.event.summary
+    );
+    assert_eq!(cast.event.clauses[1].id, "6.3.2.3p3");
+    for (source, needle) in [
+        (
+            "int main(void) { int (*p)(int) = (void *)1; return p == 0; }",
+            "only as the null pointer constant `(void *)0`",
+        ),
+        (
+            "int main(void) { int *p = 0; return p == (void *)0 + 1; }",
+            "`(void *)0` is in this subset only as a null pointer constant",
+        ),
+        // Floating arithmetic is no integer constant expression.
+        (
+            "int main(void) { int (*p)(int) = (int)(0.5 + 0.1); return p == 0; }",
+            "this is an int, where an int (*)(int) is needed",
+        ),
+        (
+            "int f(int x) { return x; } int main(void) { int x = 1; int (*p)(int) = f; return p \
+             == x - 1; }",
+            "or with a null pointer constant such as 0",
+        ),
+    ] {
+        let message = rejected(source);
+        assert!(message.contains(needle), "{source}: {message}");
+    }
+}
+
+// C99 §6.3.2.3p3, §6.5.3.2p4, §6.5.2.2p3, §4p2: a pointer that points to
+// a function never equals a null pointer, though a pointer to a function
+// may be one; `*` of a null pointer to a function, and a call through one,
+// stop for what C leaves undefined.
+#[test]
+fn a_null_pointer_to_a_function_is_told_apart_from_one_to_a_function() {
+    let states = finished(
+        "int f(int x) { return x; }\nint main(void) {\n    int (*a)(int) = f;\n    int (*b)(int) \
+         = 0;\n    int n = (a == b) + 2 * (a != b);\n    if (a) n += 4;\n    return n;\n}\n",
+        6,
+    );
+    let compare = step(
+        &states,
+        EventKind::Comparison,
+        "Compare pointers to functions: a == b",
+    );
+    assert!(
+        compare
+            .event
+            .explanation
+            .contains("A pointer that points to a function never compares equal to a null pointer")
+            && !compare.event.explanation.contains("never null"),
+        "{}",
+        compare.event.explanation
+    );
+    for state in &states {
+        assert!(
+            !state.event.explanation.contains("is never null"),
+            "{}: {}",
+            state.event.title,
+            state.event.explanation
+        );
+    }
+    let (cause, title) = undefined("int main(void) { int (*f)(int) = 0; return (*f)(1); }");
+    assert_eq!(cause, Some(super::Undefined::NullFunctionIndirection));
+    assert_eq!(
+        title,
+        "Undefined behavior: * of a null pointer to a function"
+    );
+    let session = run("int main(void) { int (*f)(int) = 0; return f(1); }");
+    let diagnostic = &session.state().diagnostics[0];
+    assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("4p2"));
+    assert!(
+        diagnostic.message.contains("(§6.5.2.2p3)") && diagnostic.message.contains("(§4p2)"),
+        "{}",
+        diagnostic.message
+    );
 }
 
 // C99 §6.6p2-4, p8, §6.7.8p4: a static initializer may be a constant

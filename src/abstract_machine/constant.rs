@@ -32,6 +32,56 @@ use super::{
 };
 
 impl Parser<'_> {
+    /// Whether `expression` is a null pointer constant: an integer constant
+    /// expression with the value 0, such as `0`, `'\0'` or `(1 - 1)`, or
+    /// such an expression cast to `void *`. Assigned to, compared with or
+    /// converted to a pointer, it becomes a null pointer.
+    ///
+    /// C99: §6.3.2.3 paragraph 3, p. 47; PDF p. 59.
+    pub(super) fn null_pointer_constant(&self, expression: usize) -> bool {
+        match self.expressions[expression].kind {
+            | ExprKind::Cast(Type::VoidPointer, child) => self.zero_integer_constant(child),
+            | _ => self.zero_integer_constant(expression),
+        }
+    }
+
+    /// Whether `expression` is an integer constant expression whose value
+    /// is 0.
+    fn zero_integer_constant(&self, expression: usize) -> bool {
+        self.integer_constant_expression(expression)
+            && matches!(
+                self.constant_value(expression),
+                Ok((Value::Integer(0), Arithmetic::Integer(_)))
+            )
+    }
+
+    /// Whether `expression` is an integer constant expression: integer and
+    /// character constants and `sizeof`, joined by operators, with a
+    /// floating constant only as the immediate operand of a cast to an
+    /// integer type. Whether it has a value, without a signed overflow or
+    /// a division by zero, is `constant_value`'s question.
+    ///
+    /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
+    fn integer_constant_expression(&self, expression: usize) -> bool {
+        let node = &self.expressions[expression];
+        node.ty.integer().is_some()
+            && match node.kind {
+                | ExprKind::Number(..) | ExprKind::Character(..) | ExprKind::Sizeof(..) => true,
+                | ExprKind::Cast(_, child) =>
+                    matches!(self.expressions[child].kind, ExprKind::Real(..))
+                        || self.integer_constant_expression(child),
+                | ExprKind::Unary(_, child) => self.integer_constant_expression(child),
+                | ExprKind::Binary(_, left, right) =>
+                    self.integer_constant_expression(left)
+                        && self.integer_constant_expression(right),
+                | ExprKind::Conditional(condition, then, otherwise) =>
+                    self.integer_constant_expression(condition)
+                        && self.integer_constant_expression(then)
+                        && self.integer_constant_expression(otherwise),
+                | _ => false,
+            }
+    }
+
     /// The value and type of the arithmetic constant expression
     /// `expression`, or why it is not one.
     pub(super) fn constant_value(

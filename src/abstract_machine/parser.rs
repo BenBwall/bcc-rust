@@ -701,10 +701,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Whether a block-scope declaration starts here.
+    /// Whether a block-scope declaration starts here. `void` starts only
+    /// a declaration there, which `base_type` refuses as outside the
+    /// subset.
     fn at_declaration(&self) -> bool {
         self.at_type()
-            || ["struct", "static", "const"]
+            || ["struct", "static", "const", "void"]
                 .iter()
                 .any(|keyword| self.at(keyword))
     }
@@ -1538,12 +1540,9 @@ impl<'a> Parser<'a> {
     }
 
     pub fn require_type(&self, expression: usize, expected: Type) -> Result<(), Diagnostic> {
+        let null = self.null_pointer_constant(expression);
         let expression = &self.expressions[expression];
-        if compatible(
-            expected,
-            expression.ty,
-            matches!(expression.kind, ExprKind::Number(0, ..)),
-        ) {
+        if compatible(expected, expression.ty, null) {
             Ok(())
         } else if let Some(name) = match (expected, expression.ty) {
             | (Type::Pointer(element, false), Type::Pointer(other, true)) if element == other =>
@@ -2847,7 +2846,13 @@ impl<'a> Parser<'a> {
             },
             // A function's name, or `&` and the name, is an address constant
             // (C99 §6.6p9): the function exists before the program runs.
-            | Type::FunctionPointer(signature) if !self.at("0") => {
+            | Type::FunctionPointer(signature)
+                if self.at("&")
+                    || self
+                        .function_signatures
+                        .iter()
+                        .any(|(function, _)| function == self.current().text) =>
+            {
                 let start = self.current();
                 let address = self.take("&");
                 let name = self.current();
@@ -2860,7 +2865,7 @@ impl<'a> Parser<'a> {
                         "unsupported",
                         name.range,
                         "a static pointer to a function takes a constant: a function's name, & \
-                         and a function's name, or 0, the null pointer constant",
+                         and a function's name, or a null pointer constant such as 0",
                     ));
                 };
                 if designated != signature {
@@ -2896,12 +2901,24 @@ impl<'a> Parser<'a> {
             | Type::Pointer(..)
             | Type::StructPointer(_)
             | Type::Indirect(..)
-            | Type::FunctionPointer(_) => {
-                if !self.take("0") {
-                    return Err(self.error(
-                        "a static pointer's initializer must be a constant; this subset takes 0, \
-                         the null pointer constant, or a string literal for a char pointer",
-                    ));
+            | Type::FunctionPointer(_)
+            | Type::VoidPointer => {
+                // A null pointer constant, such as `0`, `(1 - 1)` or
+                // `(void *)0`, converts to a null pointer (C99 §6.3.2.3p3).
+                let start = self.position;
+                let null = matches!(
+                    self.expression(0),
+                    Ok(expression) if self.null_pointer_constant(expression)
+                );
+                if !null {
+                    self.position = start;
+                    return Err(self.error(if matches!(ty, Type::FunctionPointer(_)) {
+                        "a static pointer to a function takes a constant: a function's name, & and \
+                         a function's name, or a null pointer constant such as 0"
+                    } else {
+                        "a static pointer's initializer must be a constant; this subset takes a \
+                         null pointer constant such as 0, or a string literal for a char pointer"
+                    }));
                 }
                 leaves[offset] = Value::null();
                 Ok(())
@@ -3091,7 +3108,8 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 /// Whether a value of type `actual` may be stored in an object of type
-/// `expected` (as assignment converts it), `null` when it is the constant 0:
+/// `expected` (as assignment converts it), `null` when it is a null pointer
+/// constant (C99 §6.3.2.3p3), which converts to any pointer type:
 /// any arithmetic value converts to any arithmetic type, and a `T *` to a
 /// `const T *`, never the reverse (C99 §6.5.16.1p1).
 pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
@@ -3101,7 +3119,7 @@ pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
             (expected, actual),
             (Type::Pointer(element, true), Type::Pointer(other, false)) if element == other
         )
-        || (expected.is_pointer() && matches!(actual, Type::Integer(_)) && null)
+        || (expected.is_pointer() && matches!(actual, Type::Integer(_) | Type::VoidPointer) && null)
 }
 
 /// Set each node's full-expression root. A parent follows its children, so a
