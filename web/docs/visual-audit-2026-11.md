@@ -3512,3 +3512,150 @@ not.
   1440 px, so the existing lessons' trailing comments, and three lines of
   code in each new lesson, wrap; the new lessons keep their comments short
   instead.
+
+### Review, round 1
+
+The review of the branch at `cd04dd1b2` found three blockers, all in what
+the machine said about C's sequence points, and five small things. Every
+value, output, exit status and stop it checked was right. The probe
+programs and their engine dumps are in the review's scratch directory; the
+fixes below are checked against the same programs (82 across its three
+probe directories), 27 more of my own for the cases the fixes open, and
+GCC 14 (`-std=c99`).
+
+#### 1. An update's store was placed at the end of the condition
+
+In `while (i-- > 0 && n < 5)`, the update's step said the store into `i`
+completes "by the next sequence point, the end of the condition". The next
+sequence point is the end of `i-- > 0`, `&&`'s first operand (C99
+§6.5.13p4, p. 89, PDF p. 101), as the very next `&&` step says. The text
+predates this part; letting `&&`, `||` and `?:` into a condition made it
+reachable.
+
+**Fixed.** The update now records the sequence point that next follows it,
+and its step names it: the end of the first operand of `&&`, `||` or `?:`
+(§6.5.14p4, §6.5.15p4), the end of a comma operator's left operand
+(§6.5.17p2, p. 94, PDF p. 106), the point just before a call whose
+argument it is in (§6.5.2.2p10, p. 72, PDF p. 84), or, everywhere else,
+the end of the condition, a full expression (§6.8p4, p. 131, PDF p. 143).
+Nested operators take the nearest: in `(x && i++ == 2) && x` it is the end
+of the outer `&&`'s first operand. Each step cites the paragraph it names.
+A new engine test runs eight conditions, one per context, and checks that
+the next step marked as a sequence point is the one the update named: the
+`&&` or `||` test, the `?:` test, the comma, the call or the condition.
+
+#### 2. The comma operator's note said declarations give no order
+
+"The commas between a call's arguments or in a declaration only separate,
+so they give no order and no sequence point." That is right for
+arguments, and wrong for declarations: C99 §6.8p3 evaluates a block's
+initializers "in the order that declarators appear", and each initializer
+is a full expression (§6.8p4; Annex C also lists the end of a full
+declarator).
+
+**Fixed.** The note now names three commas: the comma operator, a
+sequence point; the commas between a call's arguments, which give the
+arguments no order and no sequence point between them; and the commas
+between declarators, where in `int a = 1, b = a + 1;` inside a function
+each initializer is a full expression, evaluated in declarator order, so b
+is 2. (The machine still takes one declarator per declaration.) An engine
+test pins the note.
+
+#### 3. Refusals of valid conditions said there was no sequence point
+
+`if (i++ && i++)`, `if (i++ == 0 && i == 1)`, `while (i++ < 3 && i != 2)`
+and `while (i-- > 0 && f(1))` are all defined, but the machine refused
+them "without a sequence point between them". Looking at why, I found the
+opposite hole too: an update in a call's argument was not checked at all,
+so `while (f(i--) > i)`, which is undefined, ran until the step limit.
+
+**Fixed, by running them.** The machine makes an update's store at once,
+and `&&`, `||`, `?:` and the comma operator already evaluate in their
+order, so it runs any condition in which a sequence point separates each
+update from every other access that could reach its variable. The check
+walks the condition: the operands of `&&`, `||` and the comma operator are
+separated, the first operand of `?:` from the other two (and those two
+are never both evaluated), and a call's arguments from the call; every
+other operator's operands are unsequenced with each other (C99 §6.5p2-3,
+Annex C). Two variables may each be updated, as in `i++ < j--`. What
+remains is refused with a reason that is true:
+
+- a read or second update of the variable that no sequence point
+  separates from the update, as in `i++ + i` or `f(i--) > i`: "this
+  condition updates `i` and also reads or updates it with no sequence
+  point between the two; C99 makes that undefined whenever both are
+  evaluated (§6.5p2)";
+- a `*`, `[]`, `->` or call that no sequence point separates from it, as in
+  `i++ == *p` or `i-- > f(1)`: "this machine does not track which objects
+  *, [], -> and calls reach, so in a condition that updates `i` it accepts
+  them only where a sequence point separates them from the update". That
+  is a limit of the model and says so.
+
+The update's own step keeps "Nothing else in the condition touches `i`"
+when that is so, and otherwise says every other access that could reach
+`i` is separated from it by a sequence point or never evaluated with it.
+All six review probes the old check refused for a false reason now run,
+with GCC's output and exit status; `i++ < f()` with `f` reading the
+global `i` stays refused as the model's limit.
+
+#### 4. Small things
+
+- **`*pp++` on a `char **`** was refused "use (*p)++ to increment the
+  pointed-to int". The message now says `*p++` means `*(p++)`, an
+  increment nested in an operand, and offers `(*p)++` for the object `p`
+  points to or `p++` to move `p`.
+- **Limits of this model** said a condition "may update one variable". It
+  now says a condition may update variables, as in `i-- > 0 && n < 5`, if
+  a sequence point separates each update from every other use of its
+  variable, from `*`, `[]` and `->`, and from any call it is not an
+  argument of. The limits test runs the new claim and refuses its
+  counterexamples.
+- **The comma step** said a plain read like `j` in `(j, i < 3)` "was
+  evaluated only for its side effects". It now says its value is thrown
+  away, "so only its side effects, if it has any, matter".
+- **Figure 2** chose "choose the second" or "choose the third" for `?:` by
+  looking for ": true" in the step's English title. It now reads the first
+  operand's value, as the "counts as true" label beside it does.
+- **The Annex C gloss** read as a complete list of sequence points but
+  left some out. It now lists them all: each call after its arguments, the
+  first operands of `&&`, `||`, `?:` and the comma operator, the end of
+  each full declarator and full expression, and the library's (before a
+  function returns, after each printf or scanf conversion, around a qsort
+  or bsearch comparison).
+
+The search the brief asked for, of every narration and refusal sentence
+about sequence points or evaluation order, against C99 §5.1.2.3, §6.5p2-3
+and Annex C, found one more overstatement: the `&&` and `||` test said the
+left operand's effects are complete "before anything else happens". In
+`g() + (a && b)`, `g()` may run first; the sentence now says "before
+anything after it is evaluated". The rest hold: the full-expression
+sentences, the call's "in an order C leaves unspecified … a sequence point
+follows", the unspecified order of `+`'s and `=`'s operands, and the
+sequence-point note.
+
+#### Checks
+
+- **The notes:** the 14 existing lessons' engine dumps are byte-identical
+  to `origin/main`'s; none of their notes made one of the false claims
+  (Unsigned's `k-- > 0` is an update whose next sequence point is the end
+  of the condition, and nothing else touches `k`). Bits is identical to
+  the review's dump. Short-circuit evaluation differs in 5 notes, the
+  explanation of each `&&` test: "before anything else happens" became
+  "before anything after it is evaluated". Nothing else in either lesson
+  changed.
+- **The corpus:** all 32 programs give the same result as before (30 run
+  to GCC's result, the 2 with function pointers are refused), with the
+  same step counts.
+- **The probes:** of the review's 82 programs and my 27, every one the
+  machine runs gives GCC 14's output and exit status, and every step's
+  "what comes next" named the step that followed it. Against the review's
+  dumps, 8 programs changed outcome: the 6 above now run, and `i++ < f()`
+  and `*pp++` are refused with their new messages.
+- **Tests:** as `pages.yml` runs them, the engine's tests (132, 3 of them
+  new and 3 updated for the wider rule and the new messages) and its
+  clippy pass, as do the site's tests (164, and the prerender's 2), the
+  WebAssembly stepper's (79) and the site's four clippy runs; the worker
+  run prints the engine's existing unfulfilled lint expectation in
+  `src/abstract_machine/parser.rs`, as before. `cargo +nightly fmt
+  --check` passes for the engine and the site, and `git diff --check` is
+  clean.
