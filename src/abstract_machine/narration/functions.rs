@@ -155,8 +155,9 @@ impl Machine {
         result(event, Operand::Value(pointer))
     }
 
-    /// `event`, a call's, retold as a call through the pointer `callee`
-    /// evaluated to, which points to the function `function`.
+    /// `event`, a call's, retold as a call through the pointer the
+    /// expression `callee` evaluated to, which points to the function
+    /// `function`.
     ///
     /// C99: §6.5.2.2 paragraphs 1 and 3, p. 71; PDF p. 83.
     pub(in crate::abstract_machine) fn called_through(
@@ -165,7 +166,6 @@ impl Machine {
         program: &Program,
         function: usize,
         callee: &str,
-        pointer: Value,
     ) -> Event {
         let (name, ty, line) = self.function_facts(program, function);
         event.title = event.title.replacen(
@@ -195,7 +195,8 @@ impl Machine {
         if event.note.is_empty() {
             event = noted(event, Topic::FunctionPointer);
         }
-        event.operands.insert(0, Operand::Value(pointer));
+        // The arguments stay the event's operands, one per parameter; the
+        // pointer is named in the explanation.
         event
     }
 

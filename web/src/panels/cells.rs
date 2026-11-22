@@ -280,7 +280,7 @@ const BYTE_CELLS: usize = 8;
 /// values.
 fn parts(object: &Object, open: bool) -> Vec<Part> {
     let mut parts = Vec::new();
-    let ty = object.ty.split('[').next().unwrap_or_default().trim().to_owned();
+    let ty = element_type(&object.ty);
     let folded = text(object)
         .map(|glyphs| (glyphs, false))
         .or_else(|| values(object).map(|glyphs| (glyphs, true)));
@@ -341,8 +341,8 @@ fn collect(
         | Value::Struct { members, .. } =>
             for member in members {
                 let path = format!("{name}.{}", member.name);
-                let ty = member.ty.split('[').next().unwrap_or_default().trim();
-                collect(&member.value, &path, ty, member.size, leaf, parts);
+                let ty = element_type(&member.ty);
+                collect(&member.value, &path, &ty, member.size, leaf, parts);
                 if member.padding > 0 {
                     parts.push(Part::Padding {
                         bytes: member.padding,
@@ -363,13 +363,28 @@ fn collect(
     }
 }
 
+/// The type of an element of the array type spelled `ty`, which is the
+/// type without its length: `int` for `int[3]`, `char *` for `char *[2]`,
+/// and `int (*)(int)` for a table of pointers to functions, `int
+/// (*[2])(int)`, whose length C writes inside the parentheses. A type that
+/// is not an array is returned as it is.
+fn element_type(ty: &str) -> String {
+    match (ty.find('['), ty.find(']')) {
+        | (Some(open), Some(close)) if open < close =>
+            format!("{}{}", ty[..open].trim_end(), &ty[close + 1..])
+                .trim()
+                .to_owned(),
+        | _ => ty.trim().to_owned(),
+    }
+}
+
 /// The characters of `object` when it shows as one wide cell: a string
 /// literal's array, or a char array of more than [`BYTE_CELLS`] bytes.
 fn text(object: &Object) -> Option<Vec<Option<String>>> {
     let Value::Array { elements } = &object.value else {
         return None;
     };
-    let element = object.ty.split('[').next().unwrap_or_default().trim();
+    let element = element_type(&object.ty);
     let element = element.trim_start_matches("const ").trim_start_matches("volatile ");
     if !matches!(element, "char" | "signed char" | "unsigned char")
         || object.size != elements.len()
@@ -927,6 +942,16 @@ mod tests {
             Command,
         },
     };
+
+    // A table of pointers to functions writes its length inside the
+    // parentheses, so its elements' type is the rest of it.
+    #[test]
+    fn an_array_type_gives_its_element_type() {
+        assert_eq!(element_type("int[3]"), "int");
+        assert_eq!(element_type("const char *[2]"), "const char *");
+        assert_eq!(element_type("int (*[2])(int, int)"), "int (*)(int, int)");
+        assert_eq!(element_type("int (*)(int)"), "int (*)(int)");
+    }
 
     /// The objects at the end of a lesson's run.
     fn objects(key: &str) -> Vec<Object> {

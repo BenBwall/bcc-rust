@@ -653,7 +653,7 @@ impl Machine {
                     return Err(self.error("unknown function"));
                 };
                 let arguments = self.arguments(types)?;
-                self.call(program, instruction, function, types, &arguments, None)?
+                self.call(program, instruction, function, types, &arguments, false)?
             },
             | &Op::Return(from) => {
                 let value = self.pop_value()?;
@@ -983,14 +983,7 @@ impl Machine {
                 let arguments = self.arguments(types)?;
                 let pointer = self.pop_value()?;
                 let function = self.called_function(program, instruction, &pointer, *signature)?;
-                self.call(
-                    program,
-                    instruction,
-                    function,
-                    types,
-                    &arguments,
-                    Some(pointer),
-                )?
+                self.call(program, instruction, function, types, &arguments, true)?
             },
             | _ => return Err(self.error("expected an operation on a pointer to a function")),
         })
@@ -1075,7 +1068,7 @@ impl Machine {
         function: usize,
         types: &[Type],
         arguments: &[Value],
-        through: Option<Value>,
+        through_pointer: bool,
     ) -> Result<Event, Diagnostic> {
         if self.activations.len() >= MAX_FRAMES {
             return Err(Diagnostic::limit(
@@ -1126,8 +1119,8 @@ impl Machine {
             types,
             parameters,
         );
-        if let Some(pointer) = through {
-            event = self.called_through(event, program, function, callee_source, pointer);
+        if through_pointer {
+            event = self.called_through(event, program, function, callee_source);
         }
         Ok(event)
     }
