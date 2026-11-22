@@ -177,25 +177,30 @@ mod tests {
         ]);
         assert!(output.status.success(), "{}", text(&output.stderr));
         assert_eq!(text(&output.stderr), "");
-        let source = temporary("refused.c");
-        std::fs::write(
-            &source,
+        // Also as an operand of `?:`, `sizeof` and `_Alignof`.
+        for body in [
             "int f(void) { return __builtin_stack_save() != 0; }\n",
-        )
-        .unwrap();
-        let output = bcc(&[
-            "-c",
-            source.to_str().unwrap(),
-            "-o",
-            temporary("refused.o").to_str().unwrap(),
-        ]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            text(&output.stderr)
-                .contains("error: not yet supported by lowering: `__builtin_stack_save`"),
-            "{}",
-            text(&output.stderr)
-        );
+            "int f(int x) { return x ? __builtin_stack_save() != 0 : 1; }\n",
+            "void *f(int x) { return x ? __builtin_stack_save() : 0; }\n",
+            "unsigned long f(void) { return sizeof(__builtin_stack_save()); }\n",
+            "unsigned long f(void) { return _Alignof(__builtin_stack_save()); }\n",
+        ] {
+            let source = temporary("refused.c");
+            std::fs::write(&source, body).unwrap();
+            let output = bcc(&[
+                "-c",
+                source.to_str().unwrap(),
+                "-o",
+                temporary("refused.o").to_str().unwrap(),
+            ]);
+            assert_eq!(output.status.code(), Some(1), "{body}");
+            assert!(
+                text(&output.stderr)
+                    .contains("error: not yet supported by lowering: `__builtin_stack_save`"),
+                "{body}: {}",
+                text(&output.stderr)
+            );
+        }
     }
 
     fn linux_x86_64() -> bool {

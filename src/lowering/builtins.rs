@@ -350,6 +350,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     work.push(right_expression);
                     work.push(left_expression);
                 },
+                // `x ? __builtin_stack_save () : 0`, and an operand whose
+                // type `sizeof` or `_Alignof` asks for.
+                | E::Conditional(conditional) | E::OmittedConditional(conditional) => {
+                    work.push(conditional.else_expression);
+                    work.push(conditional.then_expression);
+                    work.push(conditional.condition_expression);
+                },
+                | E::SizeofExpr(operand) | E::AlignofExpr(operand) => work.push(operand),
                 | _ =>
                     if let Some(refusal) = self.opaque_builtin_call(e) {
                         return Some(refusal);
