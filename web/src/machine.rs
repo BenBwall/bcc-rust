@@ -1509,6 +1509,30 @@ mod tests {
         assert_eq!(oversized.status, "error");
     }
 
+    // A switch's value flow says where it jumped, not what its value counts
+    // as: a switch compares, it does not test for truth.
+    #[test]
+    fn a_switch_flows_to_the_label_it_jumps_to() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, include_str!("../docs/corpus/e02_enum_switch.c"));
+        let chips = |title: &str| {
+            states
+                .iter()
+                .find(|state| state.event.title.starts_with(title))
+                .unwrap_or_else(|| panic!("{title}"))
+                .event
+                .flow
+                .iter()
+                .map(|part| part.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            chips("switch on 1"),
+            ["1", "jumps to", "case SQUARE"]
+        );
+        assert_eq!(chips("switch on 2"), ["2", "jumps to", "default"]);
+    }
+
     // An object of an enumeration reaches the page with the name of the
     // constant it holds, as a member of one does; a value no constant has
     // reads as its number alone.
@@ -1551,6 +1575,15 @@ mod tests {
             .find(|state| state.event.kind == "enumeration")
             .expect("the enumeration's step");
         assert_eq!(declared.event.category, "lifetime");
+        assert_eq!(
+            declared
+                .event
+                .flow
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>(),
+            ["enum color", "declares", "RED = 0, GREEN = 5, BLUE = 6"]
+        );
         assert_eq!(declared.objects, [] as [Object; 0]);
     }
 

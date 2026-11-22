@@ -1675,13 +1675,26 @@ fn function_marks(snapshot: &Snapshot) -> Vec<Decoration> {
             }
         }
     };
-    for object in snapshot.objects.iter().filter(|object| object.alive) {
-        match &object.value {
+    // Every scalar of every live object, named as the source would name it:
+    // `f`, `ops[1]`, `s.apply`, `o.in.f`, `c.ops[0]`.
+    let mut pending: Vec<(&Value, String)> = snapshot
+        .objects
+        .iter()
+        .filter(|object| object.alive)
+        .map(|object| (&object.value, object.name.clone()))
+        .collect();
+    pending.reverse();
+    while let Some((value, label)) = pending.pop() {
+        match value {
             | Value::Array { elements } =>
-                for (index, element) in elements.iter().enumerate() {
-                    note(element, format!("{}[{index}]", object.name));
+                for (index, element) in elements.iter().enumerate().rev() {
+                    pending.push((element, format!("{label}[{index}]")));
                 },
-            | value => note(value, object.name.clone()),
+            | Value::Struct { members, .. } =>
+                for member in members.iter().rev() {
+                    pending.push((&member.value, format!("{label}.{}", member.name)));
+                },
+            | value => note(value, label),
         }
     }
     targets
