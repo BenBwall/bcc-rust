@@ -10,6 +10,10 @@ docs/research/compiler-personalities-data/**/*.txt whitespace=-trailing-space,-b
 # GCC-format diagnostic goldens end with the blank line that separates
 # rendered diagnostics, as GCC's format has no closing summary line.
 
+# TCC words its unsupported `__mode__` warning with a newline of its own, so
+# the golden that ends with one ends with a blank line.
+tests/fixtures/diagnostics/sema-tcc-mode-attribute.stderr whitespace=-blank-at-eof
+
 # PDFs are binary, even linearized ones that Git would detect as text: never
 # convert their line endings or diff them as text.
 *.pdf binary
