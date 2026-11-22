@@ -56,6 +56,7 @@ use super::{
         self,
         Topic,
     },
+    sequencing::STANDARD_OUTPUT,
 };
 
 /// What one piece of a format did, for the narration.
@@ -106,6 +107,32 @@ impl Machine {
             arguments.push(self.pop_value()?);
         }
         arguments.reverse();
+        // The call writes standard output and reads the strings it is
+        // given, all within its own body (see `sequencing.rs`).
+        self.access(
+            program,
+            instruction.node,
+            (STANDARD_OUTPUT, 0, 1),
+            true,
+            true,
+        )?;
+        for argument in &arguments {
+            if let &Value::Pointer {
+                target: Some(target),
+                first,
+                length,
+                ..
+            } = argument
+            {
+                self.access(
+                    program,
+                    instruction.node,
+                    (target, first, length),
+                    false,
+                    true,
+                )?;
+            }
+        }
         let texts = self.argument_texts(program, instruction);
         let text = |index: usize| texts.get(index).map_or("", String::as_str);
         let range = instruction.range;

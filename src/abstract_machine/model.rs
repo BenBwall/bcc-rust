@@ -677,6 +677,15 @@ pub enum Undefined {
     /// An invalid `printf` conversion specification (C99 §7.19.6.1p9,
     /// §7.19.6.1p6).
     InvalidConversion,
+    /// Two accesses to one object, at least one a store, with no sequence
+    /// point between them (C99 §6.5p2).
+    Unsequenced,
+    /// `p - q` of pointers that do not point into the same array (C99
+    /// §6.5.6p9).
+    PointerDifference,
+    /// `p < q` (or `>`, `<=`, `>=`) of pointers that do not point into the
+    /// same object (C99 §6.5.8p5).
+    PointerOrder,
 }
 
 impl Diagnostic {
@@ -869,26 +878,35 @@ pub(super) enum Op {
         from:            Type,
         /// The structure type, for a store that copies a whole structure.
         structure:       Option<usize>,
+        /// Set when the assignment is an operand of a larger expression,
+        /// which then uses its value: the value stored (C99 §6.5.16p3).
+        nested:          Option<Nested>,
     },
     Increment {
         delta:           i32,
         prefix:          bool,
-        /// Set when the increment is an operand of a larger expression, in
-        /// a condition, which then uses its value; `None` when it is a
-        /// whole expression statement, or an operand of a comma operator
-        /// there.
+        /// Set when the increment is an operand of a larger expression,
+        /// which then uses its value; `None` when it is a whole expression
+        /// statement, or an operand of a comma operator there.
         nested:          Option<Nested>,
         /// Whether this ends a full expression (C99 §6.8p4): a statement's
         /// increment that is not the left operand of a comma operator.
         full_expression: bool,
     },
-    /// `E1 op= E2` as a statement: read the object the address below the
-    /// value on the stack designates, apply `op` in `common` (the type the
-    /// operator computes in; `None` for pointer arithmetic), store the
-    /// result. The last type is `E2`'s, promoted when both are integers.
-    /// The flag says whether it ends a full expression, as it does unless
-    /// it is the left operand of a comma operator.
-    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>, bool),
+    /// `E1 op= E2`: read the object the address below the value on the
+    /// stack designates, apply `op` in `common` (the type the operator
+    /// computes in; `None` for pointer arithmetic), store the result. The
+    /// last type is `E2`'s, promoted when both are integers. The flag says
+    /// whether it ends a full expression, as a statement's does unless it
+    /// is the left operand of a comma operator; `Nested` is set when it is
+    /// an operand of a larger expression, which uses the value stored.
+    Compound(
+        &'static str,
+        Option<Arithmetic>,
+        Option<Arithmetic>,
+        bool,
+        Option<Nested>,
+    ),
     /// The test after the first operand of `&&`, `||` or `?:`, whose
     /// evaluation a sequence point ends: pop its value. `&&` of a zero
     /// operand, or `||` of a nonzero one, has its result already: push it
@@ -948,16 +966,35 @@ pub(super) enum Op {
     Fallthrough,
 }
 
-/// Where a `++` or `--` inside a condition sits: the sequence point that
-/// next follows it, by which C completes its store, and whether anything
-/// else in the condition could reach the object it updates.
+/// Where a `++`, `--` or assignment inside a larger expression sits: the
+/// sequence point that next follows it, by which C completes its store,
+/// whether anything else in the expression could reach the object it
+/// updates, and whether the expression is a condition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Nested {
-    pub next:   SequencePoint,
-    /// Whether the condition also reads the variable, updates it again, or
-    /// uses `*`, `[]`, `->` or a call that might reach it; `check_update`
-    /// has made sure a sequence point separates each from the update.
-    pub shared: bool,
+    pub next:      SequencePoint,
+    pub clash:     Clash,
+    /// Whether the full expression is the controlling expression of an
+    /// `if`, `while` or `for`.
+    pub condition: bool,
+}
+
+/// What else in a full expression could reach the object an update
+/// modifies, as `check_update` found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Clash {
+    /// Nothing else reads or updates the variable, and the expression has
+    /// no `*`, `[]`, `->` or call.
+    None,
+    /// The expression also reads the variable, updates it again, or uses
+    /// `*`, `[]`, `->` or a call, and a sequence point separates each of
+    /// them from the update, or the two are never both evaluated.
+    Separated,
+    /// A `*`, `[]`, `->` or call that no sequence point separates from the
+    /// update reaches an object only the run decides, or the update itself
+    /// goes through one: the machine compares the objects each access
+    /// actually reaches as it makes them.
+    Checked,
 }
 
 /// The sequence point that next follows an operand inside a condition.
@@ -967,6 +1004,9 @@ pub(super) struct Nested {
 pub(super) enum SequencePoint {
     /// The end of the condition, a full expression (C99 §6.8p4).
     Condition,
+    /// The end of the full expression of an expression statement, a
+    /// `return` or an initializer (C99 §6.8p4).
+    Full,
     /// The end of `first`, the first operand of `&&`, `||` or `?:`, or the
     /// left operand of a comma operator (C99 §6.5.13p4, §6.5.14p4,
     /// §6.5.15p4, §6.5.17p2).

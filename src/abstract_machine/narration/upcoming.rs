@@ -585,13 +585,21 @@ impl Machine {
         let pointers = self
             .top_values()
             .map(|values| values.map(|value| matches!(value, Value::Pointer { .. })));
+        let both = pointers == Some([true, true]);
         if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
-            let clause = if matches!(operator, "==" | "!=") {
-                clauses::EQUALITY
-            } else {
-                clauses::RELATIONAL
+            let clause = match operator {
+                | "==" | "!=" => clauses::EQUALITY,
+                | _ if both => clauses::POINTER_ORDER,
+                | _ => clauses::RELATIONAL,
             };
             return (EventKind::Comparison, format!("compare {whole}"), clause);
+        }
+        if both && operator == "-" {
+            return (
+                EventKind::PointerArithmetic,
+                format!("count the elements between the pointers: {whole}"),
+                clauses::POINTER_SUBTRACTION,
+            );
         }
         if let Some([left, right]) = pointers
             && left != right

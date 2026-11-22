@@ -161,19 +161,20 @@ fn loops_branches_recursion_and_argument_values_are_executed() {
 }
 
 #[test]
-fn dereference_increment_precedence_is_preserved_or_explicitly_rejected() {
-    for operation in ["*p++", "*p--", "*(p)++", "*(p)--"] {
-        let mut source = String::from("int main(void) { int a[2] = {3, 7}; int *p = a; ");
+fn dereference_increment_precedence_is_preserved() {
+    // `*p++` is `*(p++)`: it reads the element p pointed to and moves p.
+    for operation in ["*p++", "*(p)++"] {
+        let mut source = String::from("int main(void) { int a[2] = {3, 7}; int *p = a; int x = ");
         source.push_str(operation);
-        source.push_str("; return a[0]; }");
-        let diagnostic =
-            compile(&source).expect_err("unparenthesized postfix dereference must be rejected");
-        assert!(
-            diagnostic
-                .message
-                .contains("an increment nested in an operand"),
-            "precise subset limitation"
-        );
+        source.push_str("; return x * 10 + *p; }");
+        returned(&source, 37);
+    }
+    for operation in ["*p--", "*(p)--"] {
+        let mut source =
+            String::from("int main(void) { int a[2] = {3, 7}; int *p = a + 1; int x = ");
+        source.push_str(operation);
+        source.push_str("; return x * 10 + *p; }");
+        returned(&source, 73);
     }
     returned(
         "int main(void) { int a[2] = {3, 7}; int *p = a; (*p)++; return a[0]; }",
@@ -606,9 +607,7 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { double d = 1.0; return (int)d % 2.0; }",
         "int main(void) { return 99999999999999999999; }",
         "int main(void) { return 1lul; }",
-        "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
-        "int main(void) { int i = 0; int *p = &i; while (i++ < *p) {} return 0; }",
         "int main(void) { int i = 0; while (i++ < i++) {} return 0; }",
         "int main(void) { unsigned short long x; return 0; }",
         "int main(void) { signed unsigned x; return 0; }",
@@ -3211,8 +3210,10 @@ fn compound_assignments_update_once_and_stop_where_the_operator_would() {
             Some("6.5.16.2p1")
         );
     }
-    assert!(
-        rejected("int main(void) { int x = 1; int y = x += 1; return y; }").contains("expected")
+    // As an operand, a compound assignment yields the value it stored.
+    returned(
+        "int main(void) { int x = 1; int y = x += 1; return y * 10 + x; }",
+        22,
     );
 }
 
@@ -4088,10 +4089,15 @@ fn a_condition_may_count_down_with_a_postfix_decrement() {
          * 100 + i * 10 + j + 1; }",
         121,
     );
+    // An update whose value a statement discards, and one through a
+    // subscript, run.
+    returned("int main(void) { int i = 0; i++ > 0; return i; }", 1);
+    returned(
+        "int main(void) { int a[2] = {0, 0}; int i = 0; while (a[i]++ < 1) {} return a[0]; }",
+        2,
+    );
     for source in [
-        "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
-        "int main(void) { int a[2] = {0, 0}; int i = 0; while (a[i]++ < 1) {} return 0; }",
         "int main(void) { const int i = 1; while (i--) {} return 0; }",
     ] {
         assert!(compile(source).is_err(), "{source}");
@@ -5584,22 +5590,21 @@ fn a_condition_may_reuse_an_updated_variable_across_a_sequence_point() {
             diagnostic.message
         );
     }
-    // What the machine cannot see through is refused as its own limit.
-    for source in [
-        "int main(void) { int i = 0; int *p = &i; if (i++ == *p) {} return 0; }",
-        "int f(int x) { return x; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
-        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
-    ] {
-        let diagnostic = compile(source).expect_err(source);
-        assert!(
-            diagnostic
-                .message
-                .starts_with("this machine does not track which objects"),
-            "{source}: {}",
-            diagnostic.message
-        );
-        assert!(!diagnostic.message.contains("undefined"), "{source}");
-    }
+    // What `*`, `[]` and calls reach is decided by the objects the run
+    // reaches: a call that never touches `i`, and a subscript of another
+    // array, run; `*p` reaching `i` itself stops as undefined.
+    returned(
+        "int f(int x) { return x; } int main(void) { int i = 3; int n = 0; while (i-- > f(1)) \
+         n++; return n * 10 + i; }",
+        20,
+    );
+    returned(
+        "int main(void) { int i = 0; int v[3] = {0, 0, 1}; while (v[i++] < 1) {} return i; }",
+        3,
+    );
+    let (cause, _) =
+        undefined("int main(void) { int i = 0; int *p = &i; if (i++ == *p) {} return 0; }");
+    assert_eq!(cause, Some(super::Undefined::Unsequenced));
 }
 
 // C99 §6.4.4.1p3-5: an octal or hexadecimal constant is computed in its
@@ -5846,9 +5851,41 @@ fn the_limits_the_site_states_hold() {
         "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
         "int f(int n) { return n; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && f(i) \
          && n < 5) n = n + 1; while (f(i++) < 2) {} return i == 3 && n == 2; }",
+        // Subtracting and ordering pointers into one array or object.
+        "struct s { int x; int y; }; int main(void) { int v[3] = {1, 2, 3}; int *p = v; int *q = \
+         v + 3; struct s a = {1, 2}; return (q - p) + (p < q) + (&a.x < &a.y); }",
+        // Assignments, compound assignments, ++ and -- anywhere in an
+        // expression.
+        "int main(void) { int x; int y; char s[3] = \"ab\"; char t[3]; char *d = t; const char *c \
+         = s; x = y = 0; while ((*d++ = *c++) != 0) {} return x + (y += 2) + t[1]; }",
+        "int k = 0; int next(void) { return k < 3 ? ++k : 0; } int main(void) { int c; int n = 0; \
+         while ((c = next()) != 0) n += c; return n; }",
     ] {
         let session = run(source);
         assert_eq!(session.state().status, "finished", "{source}");
+    }
+    // The run stops where C's sequencing rules break, where a store reads
+    // where it stores, and where an open order would decide the result.
+    for (source, status) in [
+        (
+            "int main(void) { int i = 0; int *p = &i; *p = i++; return i; }",
+            "undefined_behavior",
+        ),
+        (
+            "int main(void) { int a[2] = {0, 5}; a[a[0]] = 1; return a[0]; }",
+            "error",
+        ),
+        (
+            "int g = 0; int f(void) { g = 1; return 1; } int main(void) { return g + f(); }",
+            "error",
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { return printf(\"a\") + printf(\"b\"); }",
+            "error",
+        ),
+    ] {
+        let session = run(source);
+        assert_eq!(session.state().status, status, "{source}");
     }
     for source in [
         "int main(void) { switch (0) {} return 0; }",
@@ -5863,14 +5900,9 @@ fn the_limits_the_site_states_hold() {
          return f(1, 2); }",
         "struct s { int x; }; int main(void) { struct s v[2]; return 0; }",
         "int main(void) { int v[2][2]; return 0; }",
-        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return q - p; }",
-        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return p < q; }",
-        "int main(void) { int a = 0; int b = 1; a = b++; return a; }",
-        "int f(int n) { return n; } int main(void) { int i = 0; return f(i++); }",
-        "int f(int n) { return n; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
-        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
+        "int main(void) { int i = 0; int a[2] = {i++, 0}; return a[0]; }",
         "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
-        "int main(void) { int a; int b; a = b = 0; return a; }",
+        "int main(void) { int i = 0; i = i++; return i; }",
         "#include <string.h>\nint main(void) { return 0; }",
     ] {
         let _diagnostic = compile(source).expect_err(source);

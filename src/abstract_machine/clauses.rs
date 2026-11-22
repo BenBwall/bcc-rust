@@ -387,6 +387,21 @@ clauses! {
     POINTER_ARITHMETIC = "6.5.6p8", "p. 83; PDF p. 95", "Additive operators",
         "Adding n to a pointer moves it n elements within its array. Pointing one past the last \
          element is allowed, but dereferencing that position or going further is undefined.";
+    /// C99: §6.5.6 paragraph 3, pp. 82-83; PDF pp. 94-95.
+    SUBTRACTION_CONSTRAINT = "6.5.6p3", "pp. 82-83; PDF pp. 94-95", "Additive operators",
+        "For -, both operands are numbers, or both are pointers to the same type, or the left is \
+         a pointer and the right an integer.";
+    /// C99: §6.5.6 paragraph 9, pp. 83-84; PDF pp. 95-96.
+    POINTER_SUBTRACTION = "6.5.6p9", "pp. 83-84; PDF pp. 95-96", "Additive operators",
+        "Subtracting two pointers into the same array gives how many elements apart they are, a \
+         ptrdiff_t; for pointers into different arrays it is undefined.";
+    /// C99: §6.5.8 paragraph 2, p. 85; PDF p. 97.
+    RELATIONAL_CONSTRAINT = "6.5.8p2", "p. 85; PDF p. 97", "Relational operators",
+        "<, >, <= and >= compare two numbers, or two pointers to the same type.";
+    /// C99: §6.5.8 paragraph 5, pp. 85-86; PDF pp. 97-98.
+    POINTER_ORDER = "6.5.8p5", "pp. 85-86; PDF pp. 97-98", "Relational operators",
+        "Pointers into one array order like their subscripts, and pointers to one structure's \
+         members like the members; ordering pointers to different objects is undefined.";
     /// C99: §6.5.8 paragraph 6, p. 86; PDF p. 98.
     RELATIONAL = "6.5.8p6", "p. 86; PDF p. 98", "Relational operators",
         "<, >, <= and >= yield the int 1 when the relation is true and 0 when it is false.";
@@ -400,6 +415,10 @@ clauses! {
     POINTER_ASSIGNMENT = "6.5.16.1p1", "p. 92; PDF p. 104", "Simple assignment",
         "A pointer may be assigned to one whose pointed-to type has all its qualifiers: a \
          pointer to const never converts to a pointer to non-const without a cast.";
+    /// C99: §6.5.16 paragraph 3, p. 91; PDF p. 103.
+    ASSIGNMENT_VALUE = "6.5.16p3", "p. 91; PDF p. 103", "Assignment operators",
+        "An assignment expression has the value stored in its left operand, and that store is a \
+         side effect C completes by the next sequence point.";
     /// C99: §6.5.16 paragraph 2, p. 91; PDF p. 103.
     ASSIGNMENT_CONSTRAINT = "6.5.16p2", "p. 91; PDF p. 103", "Assignment operators",
         "The left operand of =, += and the other assignment operators must be a modifiable \

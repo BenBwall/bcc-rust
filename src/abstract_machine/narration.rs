@@ -35,6 +35,7 @@ use super::{
     memory::article,
     model::{
         Arithmetic,
+        Clash,
         Diagnostic,
         DirectiveKind,
         Event,
@@ -791,6 +792,31 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             ),
             Some(Topic::IndeterminateRead),
         ),
+        | "unsupported" if diagnostic.clause == Some(&clauses::EVALUATION_ORDER) => (
+            "Stopped: the result depends on an open order",
+            sentence(&diagnostic.message),
+            String::from(
+                "C leaves the order of most operands unspecified, and a call's body runs as a \
+                 whole, before or after the others. When the call and another operand use the \
+                 same object and one of them changes it, each order gives a different result, and \
+                 a compiler may pick either, so the same program can print different things under \
+                 different compilers. This machine always evaluates left to right, so rather than \
+                 show one answer as if it were C's, it stops. Store the call's result in a \
+                 variable first, so that a sequence point orders the two.",
+            ),
+            Some(Topic::SequencePoint),
+        ),
+        | "unsupported" if diagnostic.clause == Some(&clauses::UNSEQUENCED) => (
+            "Stopped: a store that reads where it stores",
+            sentence(&diagnostic.message),
+            String::from(
+                "C99 lets an object that an expression stores into be read only to compute the \
+                 value stored. Reading it to find where to store, as here, is a case its wording \
+                 does not settle, so this machine stops rather than guess. Compute the place into \
+                 a variable first.",
+            ),
+            None,
+        ),
         | "limit" => (
             "Engine limit reached",
             sentence(&diagnostic.message),
@@ -1032,6 +1058,22 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: invalid conversion specification",
             "printf's format must spell each conversion as the standard defines it, and this one \
              is not one of them.",
+        ),
+        | Some(Undefined::Unsequenced) => (
+            "Undefined behavior: unsequenced accesses",
+            "Between two sequence points C lets an object be stored into at most once, and read \
+             only to compute the value stored; here a store and another access to the same object \
+             have no sequence point between them, so C gives no order to rely on.",
+        ),
+        | Some(Undefined::PointerDifference) => (
+            "Undefined behavior: subtracting unrelated pointers",
+            "Subtracting pointers counts the elements between them, which has a meaning only \
+             inside one array.",
+        ),
+        | Some(Undefined::PointerOrder) => (
+            "Undefined behavior: ordering unrelated pointers",
+            "C orders pointers only within one object; separate objects have no order in the \
+             abstract machine, wherever a real compiler happens to put them.",
         ),
         | None => (
             "Undefined behavior",
@@ -2919,6 +2961,9 @@ impl Machine {
             self.short_value(&output),
         );
         let mut event = match (&left, &right) {
+            | (Value::Pointer { .. }, Value::Pointer { .. })
+                if matches!(operator, "-" | "<" | "<=" | ">" | ">=") =>
+                self.pointer_order(range, source, operator, &left, &right, &output),
             | (Value::Pointer { .. }, Value::Pointer { .. }) => noted(
                 explained(
                     Event::new(
@@ -3186,17 +3231,158 @@ impl Machine {
                 )
             },
         };
-        event.result_type = ty.map(|ty| {
-            if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
-                String::from("int")
-            } else {
-                String::from(ty.spelling())
-            }
+        if matches!(
+            (&left, &right),
+            (Value::Pointer { .. }, Value::Pointer { .. })
+        ) && operator == "-"
+        {
+            event.result_type = Some(String::from("long"));
+        }
+        event.result_type = event.result_type.or_else(|| {
+            ty.map(|ty| {
+                if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
+                    String::from("int")
+                } else {
+                    String::from(ty.spelling())
+                }
+            })
         });
         event
             .operands
             .extend([Operand::Value(left), Operand::Value(right)]);
         result(event, Operand::Value(output))
+    }
+
+    /// `left - right` or `left < right` (or `<=`, `>`, `>=`) of two
+    /// pointers into one object, which gave `output`: the count of elements
+    /// between them, or whether the relation holds.
+    ///
+    /// C99: §6.5.6 paragraph 9, pp. 83-84; PDF pp. 95-96.
+    /// C99: §6.5.8 paragraph 5, pp. 85-86; PDF pp. 97-98.
+    fn pointer_order(
+        &self,
+        range: SourceRange,
+        source: &str,
+        operator: &str,
+        left: &Value,
+        right: &Value,
+        output: &Value,
+    ) -> Event {
+        let written = snippet(source, range);
+        let shown = self.short_value(output);
+        // Each pointer's subscript in the array it moves in; one past the
+        // end is the array's length.
+        let subscript = |value: &Value| match *value {
+            | Value::Pointer {
+                target: Some(_),
+                offset,
+                first,
+                ..
+            } => Some(offset - first),
+            | _ => None,
+        };
+        let array_of = |value: &Value| match *value {
+            | Value::Pointer {
+                target,
+                first,
+                length,
+                ..
+            } => Some((target, first, length)),
+            | _ => None,
+        };
+        let same_array = array_of(left) == array_of(right);
+        let array = match *left {
+            | Value::Pointer {
+                target: Some(target),
+                first,
+                ..
+            } => self.array_name(target, first),
+            | _ => String::new(),
+        };
+        let (i, j) = (subscript(left).unwrap_or(0), subscript(right).unwrap_or(0));
+        if operator == "-" {
+            let text = format!(
+                "Subtracting two pointers into the same array counts the elements between them, \
+                 not the bytes: the left is {} and the right is {}, at subscripts {i} and {j} of \
+                 {array}, so the result is {i} - {j} = {shown}. Its type is ptrdiff_t, the signed \
+                 integer type <stddef.h> names for this, which is long on x86-64. C defines the \
+                 difference only for two pointers into the same array, or one past its end; for \
+                 any others it is undefined.{UNORDERED}",
+                self.value_text(left),
+                self.value_text(right),
+            );
+            return noted(
+                explained(
+                    Event::new(
+                        EventKind::PointerArithmetic,
+                        range,
+                        format!("Pointer difference: {written} = {shown}"),
+                    ),
+                    &format!(
+                        "`{written}` counts the elements from the right pointer's place to the \
+                         left's in {array}: {i} - {j} = {shown}, a ptrdiff_t."
+                    ),
+                    &text,
+                    &[clauses::POINTER_SUBTRACTION, clauses::EVALUATION_ORDER],
+                ),
+                Topic::PointerArithmetic,
+            );
+        }
+        let truth = if *output == Value::Integer(1) {
+            "holds"
+        } else {
+            "does not hold"
+        };
+        let (summary, rule) = if same_array {
+            (
+                format!(
+                    "Both point into {array}, at subscripts {i} and {j}, so `{written}` {truth}: \
+                     {shown}."
+                ),
+                format!(
+                    "Pointers into the same array compare like their subscripts, and one past the \
+                     end counts as the array's length, so a loop can stop there: the left is {}, \
+                     the right is {}, and {i} {operator} {j} {truth}.",
+                    self.value_text(left),
+                    self.value_text(right),
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "Both point into the same structure, whose members are laid out in \
+                     declaration order, so `{written}` {truth}: {shown}."
+                ),
+                format!(
+                    "Pointers to members of the same structure compare by the members' order of \
+                     declaration, later ones greater: the left is {}, the right is {}, so the \
+                     relation {truth}.",
+                    self.value_text(left),
+                    self.value_text(right),
+                ),
+            )
+        };
+        noted(
+            explained(
+                Event::new(
+                    EventKind::Comparison,
+                    range,
+                    format!("Compare pointers: {written} → {shown}"),
+                ),
+                &summary,
+                &format!(
+                    "{rule} The comparison yields the int {shown}. C orders pointers only within \
+                     one object; ordering pointers to different objects is undefined, wherever a \
+                     real compiler puts them.{UNORDERED}"
+                ),
+                &[
+                    clauses::POINTER_ORDER,
+                    clauses::RELATIONAL,
+                    clauses::EVALUATION_ORDER,
+                ],
+            ),
+            Topic::Comparison,
+        )
     }
 
     /// `left operator right` for a bitwise `&`, `^` or `|`, computed in
@@ -3765,11 +3951,16 @@ impl Machine {
         } else {
             current.clone()
         };
-        let summary = if nested.is_some() {
+        let summary = if let Some(nested) = nested {
             let which = if prefix { "new" } else { "old" };
+            let to = if nested.condition {
+                "the condition"
+            } else {
+                "the expression around it"
+            };
             format!(
-                "`{form}` yields {location}'s {which} value, {}, to the condition, and changes \
-                 {location} from {old} to {new}.",
+                "`{form}` yields {location}'s {which} value, {}, to {to}, and changes {location} \
+                 from {old} to {new}.",
                 self.short_value(&yielded)
             )
         } else if topic == Topic::Unsigned {
@@ -3781,7 +3972,7 @@ impl Machine {
         } else {
             format!("`{form}` {verb} {location}, so it changes from {old} to {new}.")
         };
-        if let Some(Nested { next, shared }) = nested {
+        if let Some(nested) = nested {
             let (which, why) = if prefix {
                 ("new", "a prefix operator yields the value after the update")
             } else {
@@ -3790,43 +3981,16 @@ impl Machine {
                     "a postfix operator yields the value before the update",
                 )
             };
-            // The nearest sequence point after the update (C99 Annex C).
-            let point = match next {
-                | SequencePoint::Condition => String::from("the end of the condition"),
-                | SequencePoint::Operand {
-                    operator: ",",
-                    first,
-                } => format!(
-                    "the end of `{}`, the left operand of a comma operator",
-                    snippet(source, first)
-                ),
-                | SequencePoint::Operand { operator, first } => format!(
-                    "the end of `{}`, the first operand of `{operator}`",
-                    snippet(source, first)
-                ),
-                | SequencePoint::Call(call) => format!(
-                    "the one just before the call `{}`, once its arguments are evaluated",
-                    snippet(source, call)
-                ),
-            };
-            let clash = if shared {
-                format!(
-                    "Every other access in the condition that could reach {location} is separated \
-                     from this update by a sequence point, or is never evaluated with it, so none \
-                     can clash with it."
-                )
+            let operand = if nested.condition {
+                "As an operand of the condition"
             } else {
-                format!(
-                    "Nothing else in the condition touches {location}, so no other access can \
-                     clash with it."
-                )
+                "As an operand"
             };
             let _ = write!(
                 text,
-                " As an operand of the condition, `{form}` yields the {which} value, {}: {why}. \
-                 The store into {location} is a side effect, which C completes by the next \
-                 sequence point, {point}; this machine makes it now. {clash}",
-                self.short_value(&yielded)
+                " {operand}, `{form}` yields the {which} value, {}: {why}. {}",
+                self.short_value(&yielded),
+                completion(source, nested, &location)
             );
         } else if full_expression {
             text.push_str(" The full expression ends here, a sequence point.");
@@ -3842,18 +4006,8 @@ impl Machine {
             | (false, false) => clauses::POSTFIX_DECREMENT,
         };
         cited.insert(0, increment);
-        if let Some(Nested { next, .. }) = nested {
-            match next {
-                | SequencePoint::Condition => {},
-                | SequencePoint::Operand { operator, .. } => cited.push(match operator {
-                    | "&&" => clauses::LOGICAL_AND,
-                    | "||" => clauses::LOGICAL_OR,
-                    | "?:" => clauses::CONDITIONAL,
-                    | _ => clauses::COMMA,
-                }),
-                | SequencePoint::Call(_) => cited.push(clauses::CALL_SEQUENCE_POINT),
-            }
-            cited.push(clauses::UNSEQUENCED);
+        if let Some(nested) = nested {
+            cited.extend(completion_clauses(nested));
         } else if full_expression {
             cited.push(clauses::FULL_EXPRESSION);
         }
@@ -3888,6 +4042,48 @@ impl Machine {
             return result(event, Operand::Value(yielded));
         }
         result(event, Operand::Value(stored))
+    }
+
+    /// The event of a store, `stored` into the scalar or structure at leaf
+    /// `offset` of `target`, completed for an assignment nested in a larger
+    /// expression: its value is the value stored, which the expression
+    /// uses, and the store is a side effect that the next sequence point
+    /// completes. A whole statement's store is unchanged.
+    ///
+    /// C99: §6.5.16 paragraph 3, p. 91; PDF p. 103.
+    pub(super) fn nested_store(
+        &self,
+        mut event: Event,
+        source: &str,
+        nested: Option<Nested>,
+        target: usize,
+        offset: i32,
+        stored: &Value,
+    ) -> Event {
+        let Some(nested) = nested else {
+            return event;
+        };
+        let location = self.location(target, offset);
+        let form = snippet(source, event.range);
+        let shown = self.short_value(stored);
+        let to = if nested.condition {
+            "the condition"
+        } else {
+            "the expression around it"
+        };
+        let _ = write!(
+            event.summary,
+            " As an operand, `{form}` yields that value, {shown}, to {to}."
+        );
+        let _ = write!(
+            event.explanation,
+            " As an operand, an assignment yields the value its left operand holds after the \
+             store, {shown}, though it is no lvalue itself. {}",
+            completion(source, nested, &location)
+        );
+        event.clauses.push(clauses::ASSIGNMENT_VALUE);
+        event.clauses.extend(completion_clauses(nested));
+        event
     }
 
     /// `(to) value`: the cast at `range` converted `value`, of type
@@ -5810,6 +6006,79 @@ fn movement(delta: i128, noun: &str) -> String {
         | _ => "",
     };
     format!("{count} {noun}{plural}{direction}")
+}
+
+/// When C completes the store of an update or assignment nested in a
+/// larger expression, at the nearest sequence point after it (C99 Annex
+/// C), and why nothing else in the full expression clashes with it, or how
+/// the machine makes sure.
+///
+/// C99: §6.5 paragraph 2, p. 67; PDF p. 79.
+fn completion(source: &str, nested: Nested, location: &str) -> String {
+    let point = match nested.next {
+        | SequencePoint::Condition => String::from("the end of the condition"),
+        | SequencePoint::Full => String::from("the end of the full expression"),
+        | SequencePoint::Operand {
+            operator: ",",
+            first,
+        } => format!(
+            "the end of `{}`, the left operand of a comma operator",
+            snippet(source, first)
+        ),
+        | SequencePoint::Operand { operator, first } => format!(
+            "the end of `{}`, the first operand of `{operator}`",
+            snippet(source, first)
+        ),
+        | SequencePoint::Call(call) => format!(
+            "the one just before the call `{}`, once its arguments are evaluated",
+            snippet(source, call)
+        ),
+    };
+    let whole = if nested.condition {
+        "the condition"
+    } else {
+        "the full expression"
+    };
+    let clash = match nested.clash {
+        | Clash::None => format!(
+            "Nothing else in {whole} touches {location}, so no other access can clash with it."
+        ),
+        | Clash::Separated => format!(
+            "Every other access in {whole} that could reach {location} is separated from this \
+             update by a sequence point, or is never evaluated with it, so none can clash with it."
+        ),
+        | Clash::Checked => format!(
+            "Which object a `*`, `[]`, `->` or call reaches is known only as the program runs, so \
+             this machine compares every access in {whole} that no sequence point separates from \
+             this update with the object it actually reaches: another one that reaches {location} \
+             would be undefined, or for a call would make the result depend on an order C leaves \
+             open, and the run stops if one comes."
+        ),
+    };
+    format!(
+        "The store into {location} is a side effect, which C completes by the next sequence \
+         point, {point}; this machine makes it now. {clash}"
+    )
+}
+
+/// The paragraphs `completion` relies on: the one that places the next
+/// sequence point, when it is not the end of a full expression, and the
+/// rule for unsequenced accesses.
+fn completion_clauses(nested: Nested) -> Vec<Clause> {
+    let mut cited = Vec::new();
+    match nested.next {
+        | SequencePoint::Condition => {},
+        | SequencePoint::Full => cited.push(clauses::FULL_EXPRESSION),
+        | SequencePoint::Operand { operator, .. } => cited.push(match operator {
+            | "&&" => clauses::LOGICAL_AND,
+            | "||" => clauses::LOGICAL_OR,
+            | "?:" => clauses::CONDITIONAL,
+            | _ => clauses::COMMA,
+        }),
+        | SequencePoint::Call(_) => cited.push(clauses::CALL_SEQUENCE_POINT),
+    }
+    cited.push(clauses::UNSEQUENCED);
+    cited
 }
 
 fn snippet(source: &str, range: SourceRange) -> &str {
