@@ -117,7 +117,7 @@ fn an_enumeration_declares_constants_that_take_no_storage() {
 // compatible with unsigned int, and one with a negative constant with int.
 #[test]
 fn an_enumerations_objects_compute_in_its_compatible_type() {
-    finished(
+    let _compared = finished(
         "enum e { A, B }; enum n { M = -1, N }; int main(void) { enum e x = A; enum n y = N; \
          return (x - 1 > 0) * 10 + (y - 1 > 0); }",
         10,
@@ -470,5 +470,42 @@ fn indirection_says_whether_its_operand_holds_or_yields_the_pointer() {
         inner.event.explanation.starts_with("`*pp` holds a pointer"),
         "{}",
         inner.event.explanation
+    );
+}
+
+// C99 §6.7.5.3p7-8: a parameter of array type is adjusted to a pointer,
+// whether `[N]` follows its name or a typedef name gives it the array type.
+// The subset asks for the pointer as written, and a typedef cannot name a
+// function type, so neither reaches a call unadjusted.
+#[test]
+fn a_typedef_of_an_array_is_no_parameter_type() {
+    for source in [
+        "typedef int row[3];\nint first(row r) { return r[0]; }\nint main(void) { int (*fp)(int \
+         *) = first; int t[3] = { 7, 8, 9 }; return fp(t); }\n",
+        "typedef int row[3];\nint first(row r) { return r[0]; }\nint main(void) { int t[3] = { 7, \
+         8, 9 }; return first(t); }\n",
+        "typedef int row[3];\nint size(row r) { return sizeof r; }\nint main(void) { return 0; }\n",
+        "typedef int row[3];\nint first(row);\nint main(void) { return 0; }\n",
+        "typedef char *names[2];\nint count(names n) { return 0; }\nint main(void) { return 0; }\n",
+        "typedef int row[3];\nint main(void) { int (*fp)(row); return 0; }\n",
+        "int first(int r[3]) { return r[0]; }\nint main(void) { return 0; }\n",
+    ] {
+        let message = refused(source, "unsupported");
+        assert!(
+            message.starts_with("array parameters are outside this subset"),
+            "{source}: {message}"
+        );
+    }
+    let message = refused(
+        "typedef int fn(int);\nint apply(fn f, int x) { return f(x); }\nint main(void) { return \
+         0; }\n",
+        "unsupported",
+    );
+    assert!(message.contains("typedef of a function type"), "{message}");
+    // The pointer the parameter adjusts to runs.
+    let _adjusted = finished(
+        "typedef int row[3];\nint first(int *r) { return r[0]; }\nint main(void) { row t = { 7, \
+         8, 9 }; return first(t); }\n",
+        7,
     );
 }

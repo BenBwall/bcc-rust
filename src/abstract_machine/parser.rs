@@ -2012,7 +2012,10 @@ impl<'a> Parser<'a> {
 
     /// One parameter's declaration in a parameter list: its name, absent
     /// when the declaration omits it, and its type. A parameter may be a
-    /// pointer to a function, as in `int (*f)(int)`.
+    /// pointer to a function, as in `int (*f)(int)`; one of array or
+    /// function type is refused, since C adjusts it to a pointer.
+    ///
+    /// C99: §6.7.5.3 paragraphs 7-8, p. 119; PDF p. 131.
     fn parameter(&mut self) -> Result<Parameter<'a>, Diagnostic> {
         if self.at("...") {
             return Err(self.error(
@@ -2042,8 +2045,19 @@ impl<'a> Parser<'a> {
                 )),
             | _ => self.declared_type(base, depth, None, range)?,
         };
-        if self.at("[") {
-            return Err(self.error(
+        // C99 §6.7.5.3p7 adjusts a parameter of array type to a pointer to
+        // its element type, whether `[N]` follows its name or a typedef
+        // name gives it the array type, as `row r` does after `typedef int
+        // row[3];`. The subset asks for the pointer as written.
+        if self.at("[") || ty.is_array() {
+            let at = if self.at("[") {
+                self.current().range
+            } else {
+                range
+            };
+            return Err(Diagnostic::new(
+                "unsupported",
+                at,
                 "array parameters are outside this subset; write the pointer they adjust to, such \
                  as `char *s`",
             ));
