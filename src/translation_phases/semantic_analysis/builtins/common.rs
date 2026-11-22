@@ -502,7 +502,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::DebugTrap
             | CommonBuiltin::Annotation
             | CommonBuiltin::Semantic(_)
-            | CommonBuiltin::Family(_) => {},
+            | CommonBuiltin::Family(_)
+            | CommonBuiltin::Powi(_) => {},
             | CommonBuiltin::Assume => self.check_assumption(args[0]),
         }
         Some(info)

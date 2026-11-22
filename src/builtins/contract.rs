@@ -317,6 +317,13 @@ pub(crate) enum BuiltinOperation {
     GenericBit(GenericBit),
     Float(FloatOperation, Option<Scalar>),
     Bswap(u32),
+    /// GCC and Clang `__builtin_powi`, `__builtin_powif` and
+    /// `__builtin_powil`: the base, of this type, raised to the `int`
+    /// exponent by repeated squaring, as libgcc's `__powidf2` and LLVM's
+    /// `llvm.powi` compute it, a negative exponent giving the reciprocal.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    Powi(Scalar),
     /// Clang rotate builtins reduce the count modulo the unsigned operand
     /// width.
     Rotate(u32, bool),

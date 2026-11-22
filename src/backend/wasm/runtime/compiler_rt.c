@@ -1,6 +1,7 @@
 /* The compiler-rt routines the WebAssembly back end calls: 128-bit integer
    multiplication, division and shifts, conversions between __int128 and
-   the floating types, binary128 arithmetic, and the __fp16 conversions,
+   the floating types, binary128 arithmetic, the powers __builtin_powi
+   computes, and the __fp16 conversions,
    written on 64-bit halves so that none of them calls itself. Their names
    and signatures are compiler-rt's, as Clang calls them on wasm32 (an
    __int128 result is returned through a pointer passed first). */
@@ -671,6 +672,24 @@ long double __floattitf(ti_int a) {
     return negative(a) ? q_from_unsigned(negate((tu_int)a), 1) : q_from_unsigned((tu_int)a, 0);
 }
 long double __floatuntitf(tu_int a) { return q_from_unsigned(a, 0); }
+
+/* x raised to the power m by repeated squaring, the reciprocal for a
+   negative m, as libgcc's __powidf2 and its relatives compute it: an odd m
+   starts from x itself. */
+#define POWI(type, name)                                                     \
+    type name(type x, int m) {                                               \
+        unsigned n = m < 0 ? 0u - (unsigned)m : (unsigned)m;                 \
+        type y = n % 2 ? x : 1;                                              \
+        while (n >>= 1) {                                                    \
+            x = x * x;                                                       \
+            if (n % 2)                                                       \
+                y = y * x;                                                   \
+        }                                                                    \
+        return m < 0 ? 1 / y : y;                                            \
+    }
+POWI(float, __powisf2)
+POWI(double, __powidf2)
+POWI(long double, __powitf2)
 
 /* fmodl, exactly, by aligned subtraction of the significands. */
 long double fmodl(long double x, long double y) {

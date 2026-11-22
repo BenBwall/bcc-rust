@@ -245,8 +245,12 @@ impl<'r> Function<'r> {
     }
 
     /// Whether the function may run `intrinsic`: the interpreter computes
-    /// it, and a 32-byte operand needs AVX.
+    /// it, and a 32-byte operand needs AVX. `powi` calls the runtime, whose
+    /// routines the generated programs do not exercise here.
     fn allowed(&self, intrinsic: Intrinsic) -> bool {
+        if intrinsic.powi_routine().is_some() {
+            return false;
+        }
         let signature = intrinsic.signature();
         let wide = signature
             .operands

@@ -1206,11 +1206,18 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         if let Some(ty) = signature.immediate {
             values.push(api.bits(ty, u128::from(immediate)));
         }
-        let overloads = match signature.result {
+        let result = match signature.result {
             | Some(IntrinsicOperand::Scalar(ty)) if signature.overloaded => Some(api.ty(ty)),
             | _ => None,
         };
-        let call = self.intrinsic(signature.llvm, &values, overloads.as_slice());
+        let operand = match signature.operands.last() {
+            | Some(&IntrinsicOperand::Scalar(ty)) if signature.overloaded_operand =>
+                Some(api.ty(ty)),
+            | _ => None,
+        };
+        let mut overloads = ArenaVec::with_capacity_in(2, self.emitter.arena);
+        overloads.extend([result, operand].into_iter().flatten());
+        let call = self.intrinsic(signature.llvm, &values, &overloads);
         match (signature.result, destination) {
             | (Some(IntrinsicOperand::Vector(..)), Some(destination)) => {
                 let store = api.store(call, self.value(destination)?);

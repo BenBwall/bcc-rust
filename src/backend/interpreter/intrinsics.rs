@@ -59,6 +59,13 @@ impl Machine<'_, '_, '_> {
                 | _ => Ok(Some(RuntimeValue::Poison)),
             };
         }
+        if let Some((_, ty)) = intrinsic.powi_routine() {
+            return Ok(Some(super::arithmetic::powi(
+                ty,
+                self.value(operands[0]),
+                self.value(operands[1]),
+            )));
+        }
         if let Intrinsic::SqrtF32 | Intrinsic::SqrtF64 = intrinsic {
             return Ok(Some(match self.value(operands[0]) {
                 | RuntimeValue::F32(x) => RuntimeValue::F32(x.sqrt()),
@@ -94,8 +101,13 @@ impl Machine<'_, '_, '_> {
             | Intrinsic::RcpPs256 | Intrinsic::RsqrtPs256 =>
                 return Err(Fault::Unsupported(Unsupported::Intrinsic(intrinsic))),
             | Intrinsic::Vzeroupper | Intrinsic::Vzeroall => return Ok(None),
-            | Intrinsic::SqrtF32 | Intrinsic::SqrtF64 | Intrinsic::Xgetbv =>
-                unreachable!("computed above"),
+            | Intrinsic::SqrtF32
+            | Intrinsic::SqrtF64
+            | Intrinsic::Xgetbv
+            | Intrinsic::PowiF32
+            | Intrinsic::PowiF64
+            | Intrinsic::PowiF80
+            | Intrinsic::PowiF128 => unreachable!("computed above"),
             | Intrinsic::AesEnc => aes_round(&a, &b, Direction::Encrypt, true),
             | Intrinsic::AesEncLast => aes_round(&a, &b, Direction::Encrypt, false),
             | Intrinsic::AesDec => aes_round(&a, &b, Direction::Decrypt, true),

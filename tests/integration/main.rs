@@ -56,6 +56,7 @@ mod overloadable_abi;
 mod pedantic_options_cli;
 mod personality_cli;
 mod pointer_diagnostics;
+mod powi;
 mod preprocessing_cli;
 mod reachable_functions;
 mod semantic_cli;

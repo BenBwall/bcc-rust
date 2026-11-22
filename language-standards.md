@@ -2818,7 +2818,9 @@ was run):
   `__builtin_choose_expr` only their selected operand's, `sizeof` and
   `__builtin_offsetof` none, and `va_arg` one; such an operand is evaluated
   for `llvm.assume`, as Clang does, unless it runs an `asm` statement or a
-  variable length array's size. `__assume(&x)` draws Clang's
+  variable length array's size, or calls a builtin bcc knows but does not
+  implement, which would stop the compilation where the promise can simply
+  be dropped. `__assume(&x)` draws Clang's
   `-Wpointer-bool-conversion`.
   `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
   Microsoft's debug-information annotation with Microsoft extensions: its
@@ -3914,14 +3916,46 @@ of a constant fold, as GCC folds them and Clang does not.
 Still refused, now by name ("not yet supported by lowering:
 `__builtin_apply_args`"): `__builtin_apply`, `__builtin_apply_args`,
 `__builtin_return`, `__builtin_call_with_static_chain`,
-`__builtin_powi{,f,l}`,
-`__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`;
+`__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`,
+also as an operand of an operator (`__builtin_stack_save () != 0`);
 any other unregistered `__builtin_` name is "a builtin this compiler does
 not know". `__auto_type` and C23 `auto` inference are implemented since
 (see "Type inference"). GCC's `_FloatN` aliases of the math
 functions (`__builtin_acoshf32`, …) stay unregistered: `floatN-builtin.c`
 needs them folded in static initializers with MPFR's correctly rounded
 results, which bcc has no evaluator for.
+
+## `__builtin_powi` (2026-11-22)
+
+`__builtin_powi`, `__builtin_powif` and `__builtin_powil` raise a `double`,
+`float` or `long double` base to an `int` exponent, under every identity
+that has GCC's builtins, as GCC 14 and Clang 23 provide them (not TCC's).
+Both compute the power with the runtime's `__powidf2`, `__powisf2`,
+`__powixf2` or `__powitf2` (libgcc's or compiler-rt's): the base squared
+once for each bit of the exponent's magnitude, the squares its set bits
+select multiplied in from the lowest, and the reciprocal taken for a
+negative exponent. bcc lowers the call to the IR's `powi` intrinsic, which
+the LLVM back end emits as `llvm.powi`, the native and WebAssembly back
+ends as a call of the routine, and the interpreter computes as libgcc does;
+the bundled WebAssembly runtime defines the routines. On Windows, whose C
+runtimes lack them, LLVM calls `pow`, `powf` or `powl` of the exponent
+converted to the base's type for Clang's `llvm.powi`, while MinGW-w64's GCC
+calls libgcc's routine; bcc makes the same call there under each identity,
+on both back ends (`cl` has no such builtin; its identity takes `pow`). The
+Microsoft target needs `clang_rt.builtins` for a GCC-identity call, as for
+the other runtime routines.
+
+Over 27 bases (zeros, ±1, ±2, subnormals, the largest finite value,
+infinities, NaNs) and 31 exponents (0, ±1, ±2, up to ±1,000,000, `INT_MAX`,
+`INT_MIN` and `INT_MIN + 1`), each of the three forms gives the bits GCC
+14 and Clang 23 give at `-O0` and `-O2` on x86-64 Linux, on both back ends
+at `-O0` and `-O2` and in the interpreter, and `wasm32-wasip1`'s binary128
+`__builtin_powil` gives the bits of libgcc's algorithm on `__float128`. A
+constant exponent and base may fold or expand to multiplications instead:
+GCC folds `__builtin_powi (1.1, 15)` in its own extended precision at every
+level, and Clang and bcc at `-O2` through LLVM, where at `-O0` both call
+the runtime, whose last bit differs. GCC also folds a constant call in a
+static initializer, which Clang and bcc refuse as no constant.
 
 ## Variably modified members (2026-10-31)
 

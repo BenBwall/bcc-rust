@@ -44,6 +44,7 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
+        Intrinsic,
         Opcode,
         Type,
         Value,
@@ -798,6 +799,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .ok_or_else(|| LoweringError::unsupported(super::Construct::Builtin, source))?;
                 Operand::Value(self.fconst(ty, bits))
             },
+            | CommonBuiltin::Powi(_) => {
+                let base = self.value(items[0], source)?;
+                let exponent = self.value(items[1], source)?;
+                Operand::Value(self.powi(base, exponent, source)?)
+            },
             | CommonBuiltin::Rotate(width, right) => {
                 let value = self.value(items[0], source)?;
                 let count = self.value(items[1], source)?;
@@ -1251,6 +1257,93 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | Some(value) => Operand::Value(value),
             | None => Operand::Void,
         })
+    }
+
+    /// `__builtin_powi` and its `float` and `long double` forms: the base
+    /// raised to the `int` exponent as the claimed compiler computes it.
+    /// Clang emits `llvm.powi`, which LLVM's code generator makes a call of
+    /// the runtime's `__powidf2` or its relative, or on Windows, whose
+    /// runtimes lack them, of the C library's `pow`, `powf` or `powl` with
+    /// the exponent converted to the base's type; GCC calls libgcc's
+    /// `__powidf2` on every target, MinGW-w64's too. Off Windows the IR's
+    /// `powi` intrinsic says so, which every back end and the interpreter
+    /// compute alike; on Windows the call is made here, so that they all call
+    /// the same function. GNU extension: GCC manual, "Other Builtins".
+    fn powi(
+        &mut self,
+        base: Value,
+        exponent: Value,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let ty = self.draft.value_type(base);
+        let intrinsic = match ty {
+            | Type::F32 => Intrinsic::PowiF32,
+            | Type::F64 => Intrinsic::PowiF64,
+            | Type::F80 => Intrinsic::PowiF80,
+            | Type::F128 => Intrinsic::PowiF128,
+            | _ =>
+                return Err(LoweringError::unsupported(
+                    super::Construct::Builtin,
+                    source,
+                )),
+        };
+        let configuration = self.unit.context.configuration;
+        if !matches!(
+            configuration.target(),
+            crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+        ) {
+            let args = self.scratch.alloc_slice_copy(&[base, exponent]);
+            return Ok(self
+                .draft
+                .push(Op::Intrinsic(intrinsic, 0, args), Some(ty))
+                .expect("a power has a result"));
+        }
+        // `cl` has no such builtin; its C runtime has `pow`.
+        let gcc = configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc;
+        let (name, exponent) = if !gcc {
+            let name = match ty {
+                | Type::F32 => "powf",
+                | Type::F64 => "pow",
+                | _ => "powl",
+            };
+            (name, self.convert(Opcode::Sitofp, ty, exponent))
+        } else {
+            let (name, _) = intrinsic.powi_routine().expect("a powi intrinsic");
+            (name, exponent)
+        };
+        let params = self
+            .scratch
+            .alloc_slice_copy(&[ty, self.draft.value_type(exponent)]);
+        let signature = self.unit.module.intern(crate::ir::Signature {
+            params,
+            aggregates: &[],
+            noundef: &[],
+            result: Some(ty),
+            variadic: false,
+            variadic_fixed: None,
+            extensions: &[],
+            result_extension: None,
+            result_noundef: false,
+            variadic_noundef: false,
+            chain: false,
+        });
+        let function = match self.unit.module.symbol(name) {
+            | Some(crate::ir::Symbol::Function(function)) => function,
+            | Some(_) =>
+                return Err(LoweringError::missing(
+                    "a power routine is not a function",
+                    source,
+                )),
+            | None =>
+                self.unit
+                    .module
+                    .declare_function(name, signature, crate::ir::Linkage::External),
+        };
+        let args = self.scratch.alloc_slice_copy(&[base, exponent]);
+        Ok(self
+            .draft
+            .push(Op::Call(function, args), Some(ty))
+            .expect("a power has a result"))
     }
 
     /// `__builtin_cpu_supports` (`processor` false) and `__builtin_cpu_is`:

@@ -664,6 +664,11 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         ],
         2,
     ),
+    // GCC's and Clang's `double __builtin_powi(double, int)` and its
+    // `float` and `long double` forms.
+    powi_descriptor(Id::Powi, "__builtin_powi", S::Double),
+    powi_descriptor(Id::Powif, "__builtin_powif", S::Float),
+    powi_descriptor(Id::Powil, "__builtin_powil", S::LongDouble),
     descriptor(
         Id::Ctz,
         "__builtin_ctz",
@@ -2353,6 +2358,41 @@ const fn sign_contract(parameters: &'static [T], rules: &'static [A]) -> (Signat
     )
 }
 
+/// A `__builtin_powi` form: the base of type `base` raised to an `int`
+/// power. GNU extension: GCC manual, "Other Builtins".
+const fn powi_descriptor(id: Id, spelling: &'static str, base: S) -> BuiltinDescriptor {
+    const FLOAT: &[A] = &[
+        A::value(C::Parameter(T::Scalar(S::Float))),
+        A::value(C::Parameter(T::Scalar(S::Int))),
+    ];
+    const DOUBLE: &[A] = &[
+        A::value(C::Parameter(T::Scalar(S::Double))),
+        A::value(C::Parameter(T::Scalar(S::Int))),
+    ];
+    const LONG_DOUBLE: &[A] = &[
+        A::value(C::Parameter(T::Scalar(S::LongDouble))),
+        A::value(C::Parameter(T::Scalar(S::Int))),
+    ];
+    let (parameters, arguments): (&[T], &[A]) = match base {
+        | S::Float => (&[T::Scalar(S::Float), T::Scalar(S::Int)], FLOAT),
+        | S::LongDouble => (&[T::Scalar(S::LongDouble), T::Scalar(S::Int)], LONG_DOUBLE),
+        | _ => (&[T::Scalar(S::Double), T::Scalar(S::Int)], DOUBLE),
+    };
+    descriptor(
+        id,
+        spelling,
+        B::Powi(base),
+        Signature {
+            result: T::Scalar(base),
+            parameters,
+            prototype: true,
+            variadic: false,
+        },
+        arguments,
+        2,
+    )
+}
+
 const fn descriptor(
     id: Id,
     spelling: &'static str,
@@ -2503,9 +2543,6 @@ pub(crate) const UNIMPLEMENTED: &[&str] = &[
     "__builtin_apply",
     "__builtin_apply_args",
     "__builtin_call_with_static_chain",
-    "__builtin_powi",
-    "__builtin_powif",
-    "__builtin_powil",
     "__builtin_return",
     "__builtin_speculation_safe_value",
     "__builtin_stack_restore",
