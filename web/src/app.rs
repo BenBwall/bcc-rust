@@ -1751,7 +1751,7 @@ fn Hero(state: State) -> impl IntoView {
 /// while a mouse is over it or the keyboard focus is on it (Escape hides
 /// it). A touch screen has no hover, so a first tap shows the definition,
 /// with a link to the entry in it, and a second tap on the word follows the
-/// link; a tap elsewhere hides it. A screen reader reads the definition as
+/// link; a tap elsewhere, or Escape, hides it. A screen reader reads the definition as
 /// the link's description.
 #[component]
 fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
@@ -1789,6 +1789,16 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
         });
         let _handle = window_event_listener(ev::focusin, move |event| {
             if kept.get_value() && !within(word, event.target()) {
+                kept.set_value(false);
+                open.set(false);
+            }
+        });
+        // Escape hides the definition wherever the focus is: a tap on its
+        // text keeps it open with the focus on the page, out of the word's
+        // own key handler's reach.
+        let _handle = window_event_listener(ev::keydown, move |event| {
+            if event.key() == "Escape" && open.get_untracked() {
+                held.set_value(false);
                 kept.set_value(false);
                 open.set(false);
             }
