@@ -15073,6 +15073,194 @@ warn.c:34: warning: cast between pointer and integer of different size
         assert_eq!(stderr(&clang).matches("[-Wconstant-conversion]").count(), 5);
     }
 
+    /// TCC keeps the first linkage of a redeclaration, and warns where C
+    /// would give the identifier both (`patch_type` in `tccgen.c`); bcc
+    /// refused these. The function and object stay external, so another
+    /// unit links with them, and the object first declared `static` stays
+    /// internal. `-w` silences the warnings, and under `-Werror` the first
+    /// is the error TCC stops at, with no object written. Ubuntu's TCC
+    /// 0.9.27 prints the same and builds a program that exits with 0.
+    #[test]
+    fn tcc_keeps_the_first_linkage_of_a_redeclaration() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(void);\nstatic int f(void) { return 3; }\nint x;\nstatic int x = 4;\nstatic \
+             int s;\nint s = 5;\nint get_s(void) { return s; }\n",
+        );
+        directory.write(
+            "b.c",
+            "int f(void);\nextern int x;\nint get_s(void);\nint main(void) { return f() + x + \
+             get_s() == 12 ? 0 : 1; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["a.c", "b.c", "-o", "p"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "a.c:2: warning: static storage ignored for redefinition of 'f'\na.c:4: warning: \
+             storage mismatch for redefinition of 'x'\na.c:6: warning: storage mismatch for \
+             redefinition of 's'\n"
+        );
+        let run = Command::new(directory.path("p")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        let quiet = directory.bcc("--tcc-mode", &["-w", "-c", "a.c", "-o", "w.o"]);
+        succeeds(&quiet);
+        assert_eq!(stderr(&quiet), "");
+        assert!(directory.path("w.o").exists());
+        let strict = directory.bcc("--tcc-mode", &["-Werror", "-c", "a.c", "-o", "e.o"]);
+        assert_eq!(strict.status.code(), Some(1));
+        assert_eq!(
+            stderr(&strict),
+            "a.c:2: error: static storage ignored for redefinition of 'f'\n"
+        );
+        assert!(!directory.path("e.o").exists());
+        // The other identities keep refusing them.
+        let gcc = directory.bcc("--gcc-mode", &["-c", "a.c", "-o", "g.o"]);
+        assert_eq!(gcc.status.code(), Some(1));
+    }
+
+    /// What TCC 0.9.27 accepts with a warning where bcc refused it runs as
+    /// under TCC: a `__mode__` it does not know leaves the type alone, a
+    /// known one applies among the specifiers (`__word__` is `int`), a
+    /// constant past 64 bits wraps, a section on a typedef is ignored,
+    /// and multi-character constants take TCC's values. Ubuntu's TCC prints
+    /// the same warnings, the mode's with its trailing newline, and output.
+    #[test]
+    fn tcc_compiles_what_it_warns_of_as_tcc_does() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "int printf(const char *, ...);\ntypedef unsigned __attribute__((__mode__(__QI__))) \
+             u8;\ntypedef int bad __attribute__((__mode__(__foo__)));\ntypedef int \
+             __attribute__((__mode__(__word__))) word;\ntypedef int T \
+             __attribute__((section(\".foo\")));\nT t = 7;\nstatic inline int twice(int x) { \
+             return 2 * x; }\nint main(void) {\n  u8 c = 255; c++;\n  unsigned long long big = \
+             18446744073709551617;\n  printf(\"%d %d %d %d %llu %x %x %d\\n\", (int)sizeof(u8), \
+             c, (int)sizeof(bad), (int)sizeof(word), big, 'ab', L'ab', t + twice(1));\n  return \
+             0;\n}\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-run", "c.c"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "1 0 4 4 1 6162 62 9\n");
+        assert_eq!(
+            stderr(&output),
+            "c.c:3: warning: __mode__(__foo__) not supported\n\nc.c:10: warning: integer constant \
+             overflow\nc.c:11: warning: multi-character character constant\nc.c:11: warning: \
+             multi-character character constant\n"
+        );
+    }
+
+    /// TCC sees glibc's declarations with their attributes removed, as
+    /// `<sys/cdefs.h>` defines `__attribute__` away without `__GNUC__`, so a
+    /// function that ends in `exit` draws its warning; and it compiles a
+    /// `static inline` function only once something uses it, after the rest
+    /// of the unit, naming the line before its closing brace, which
+    /// `-Werror` makes the error it stops at. Ubuntu's TCC 0.9.27 prints the
+    /// same.
+    #[test]
+    fn tcc_return_flow_follows_tcc() {
+        let directory = Directory::new();
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            directory.write(
+                "d.c",
+                "#include <stdlib.h>\nint f(void) { exit(0); }\nint main(void) { return f(); }\n",
+            );
+            let output = directory.bcc("--tcc-mode", &["-run", "d.c"]);
+            assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+            assert_eq!(
+                stderr(&output),
+                "d.c:2: warning: function might return no value: 'f'\n"
+            );
+        }
+        directory.write(
+            "e.c",
+            "static inline int f(int x) {\n  if (x) return 1;\n}\nstatic inline int g(int x) { if \
+             (x) return 1; }\nint main(void) { return f(1) - 1; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "e.c", "-o", "e.o"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "e.c:2: warning: function might return no value: 'f'\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "e.c", "-o", "w.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "e.c:2: error: function might return no value: 'f'\n"
+        );
+        assert!(!directory.path("w.o").exists());
+    }
+
+    /// A `static inline` definition after an external declaration keeps
+    /// TCC's `inline` flag, which makes the function internal: TCC emits it
+    /// as a local symbol, which the calls before it bind to too
+    /// (`patch_type` and `update_storage` in `tccgen.c`). So a unit that
+    /// replaces `rand` this way leaves the C library's alone, and a header
+    /// that does it links into two units. A declaration that clears the
+    /// flag again would make the function external once more, which bcc
+    /// refuses, as the other identities refuse them all. Ubuntu's TCC
+    /// 0.9.27 emits the same bindings, and its program exits with 0.
+    #[test]
+    fn tcc_makes_a_static_inline_redeclaration_internal() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "h.h",
+            "int helper(void);\nstatic inline int helper(void) { return 7; }\n",
+        );
+        directory.write(
+            "a.c",
+            "#include <stdlib.h>\n#include \"h.h\"\nstatic inline int rand(void) { return 4; \
+             }\nint g(void);\nint early(void) { return g(); }\nstatic inline int g(void) { return \
+             3; }\nint mine(void) { return rand() + helper() + early(); }\n",
+        );
+        directory.write(
+            "b.c",
+            "#include <stdlib.h>\n#include \"h.h\"\nint mine(void);\nint g(void) { return 30; \
+             }\nint main(void) {\n  srand(1);\n  int r = rand();\n  return mine() == 14 && \
+             helper() == 7 && g() == 30 && r != rand() ? 0 : 1;\n}\n",
+        );
+        let ir = directory.bcc("--compiler-identity=tcc", &["--emit=ir", "a.c"]);
+        succeeds(&ir);
+        let functions = stdout(&ir)
+            .lines()
+            .filter(|line| line.starts_with("function @"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            functions,
+            "function @helper() -> i32 internal {\nfunction @rand() -> i32 internal {\nfunction \
+             @early() -> i32 external {\nfunction @g() -> i32 internal {\nfunction @mine() -> i32 \
+             external {"
+        );
+        let output = directory.bcc("--tcc-mode", &["a.c", "b.c", "-o", "p"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("p")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        directory.write(
+            "c.c",
+            "int h(void);\nstatic inline int h(void) { return 1; }\nint h(void);\n",
+        );
+        let cleared = directory.bcc("--tcc-mode", &["-c", "c.c", "-o", "c.o"]);
+        assert_eq!(cleared.status.code(), Some(1));
+        assert_eq!(
+            stderr(&cleared),
+            "c.c:3: error: identifier has both internal and external linkage: `h`\n"
+        );
+        let gcc = directory.bcc("--gcc-mode", &["-c", "a.c", "-o", "g.o"]);
+        assert_eq!(gcc.status.code(), Some(1));
+    }
+
     /// The text of `cl /E` as the real `cl.exe` 19.44 writes it, compared
     /// under Wine: a line for each source line, `#line` markers on the
     /// first line, after a skipped group's `#endif`, after an `#elif` that

@@ -1,0 +1,8 @@
+sema-tcc-mode-attribute.c:3: warning: __mode__(__foo__) not supported
+
+sema-tcc-mode-attribute.c:4: warning: __mode__(__V4SF__) not supported
+
+sema-tcc-mode-attribute.c:5: warning: __mode__(__TI__) not supported
+
+sema-tcc-mode-attribute.c:6: warning: __mode__(QI) not supported
+

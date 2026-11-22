@@ -848,14 +848,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Work::TypeofDone(syntax) => self.finish_typeof(syntax),
-            | Work::VectorAttributes(chain, storage_alignment) => {
-                self.work
-                    .push(Work::VectorAttributesDone(chain, storage_alignment));
+            | Work::VectorAttributes(chain, site) => {
+                self.work.push(Work::VectorAttributesDone(chain, site));
                 self.attribute_chain_operands(chain);
             },
-            | Work::VectorAttributesDone(chain, storage_alignment) => {
+            | Work::VectorAttributesDone(chain, site) => {
                 let base = self.take_type();
-                let ty = self.vector_attribute_chain(base, chain, storage_alignment);
+                let ty = self.vector_attribute_chain(base, chain, site);
                 self.values.push(ty);
             },
             | Work::DeclaredAlignment(alignment) => {
@@ -867,7 +866,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let mut ty = self.take_type();
                 for direct in list {
                     if let DirectDeclarator::Attributes(a) = direct {
-                        ty = self.mode_attribute(ty, a);
+                        ty = self.mode_attribute(ty, a, false);
                     }
                 }
                 for construction in [true, false] {
@@ -1054,7 +1053,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let mut chain = level.attributes;
                     while let Some(item) = chain {
                         if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
-                            base = self.mode_attribute(base, attribute);
+                            base = self.mode_attribute(base, attribute, false);
                             base = self.vector_attribute(base, attribute, true);
                         }
                         chain = item.next;
@@ -1413,8 +1412,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     self.check_extension_chain(member.extensions);
                     self.work.push(Work::RecordMemberBase(tag, member, members));
-                    self.work
-                        .push(Work::VectorAttributes(member.extensions, false));
+                    self.work.push(Work::VectorAttributes(
+                        member.extensions,
+                        vectors::AttributeSite::Specifiers {
+                            type_after: member.type_after_attributes,
+                        },
+                    ));
                     _ = self.misplaced_inference(
                         member.type_specifiers,
                         inference::InferenceFault::NotAllowedHere,
@@ -1512,7 +1515,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     can_weaken: packed || self.types.tags[tag].packed.get(),
                     microsoft_object: false,
                 }));
-                self.work.push(Work::VectorAttributes(d.attributes, true));
+                self.work.push(Work::VectorAttributes(
+                    d.attributes,
+                    vectors::AttributeSite::MemberDeclarator,
+                ));
                 if let Some(decl) = d.declarator {
                     self.work.push(Work::Declarator(decl, base, false, true));
                 } else {
@@ -2123,8 +2129,8 @@ enum Work<'tu, 's> {
     RuntimeBound(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
     DiscardType,
-    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>, bool),
-    VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
+    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>, vectors::AttributeSite),
+    VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, vectors::AttributeSite),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType(UnmodeledType),
     /// Checks a `_BitInt` width once its expression is typed: the width,

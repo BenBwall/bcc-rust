@@ -1,0 +1,8 @@
+sema-tcc-warning-order.c:2: warning: pointer type mismatch in conditional expression ('int *' and 'char *')
+sema-tcc-warning-order.c:2: warning: assignment makes integer from pointer without a cast
+sema-tcc-warning-order.c:2: warning: cast between pointer and integer of different size
+sema-tcc-warning-order.c:3: warning: pointer type mismatch in conditional expression ('int *' and 'char *')
+sema-tcc-warning-order.c:3: warning: assignment makes integer from pointer without a cast
+sema-tcc-warning-order.c:3: warning: cast between pointer and integer of different size
+sema-tcc-warning-order.c:5: warning: pointer type mismatch in conditional expression ('int *' and 'char *')
+sema-tcc-warning-order.c:5: warning: assignment makes integer from pointer without a cast

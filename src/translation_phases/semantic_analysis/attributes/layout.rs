@@ -21,7 +21,11 @@ use super::super::{
     },
 };
 use crate::{
-    configuration::RuleSet,
+    configuration::{
+        CompilerIdentity,
+        DiagnosticGroup,
+        RuleSet,
+    },
     translation_phases::SourceVectors,
 };
 
@@ -329,16 +333,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC mode selects an integer representation, preserving signedness, or
     /// a real or complex floating representation. Vector modes
-    /// belong to the vector subsystem.
+    /// belong to the vector subsystem. TCC applies the modes it knows only
+    /// among the declaration specifiers, where it reads them, so a type
+    /// specifier after the attribute replaces the mode: `tcc_applies` says
+    /// the attribute is among them with none after it (`parse_btype` in
+    /// `tccgen.c`). It refuses no mode ([`Self::tcc_mode`]).
     /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
     pub(in crate::translation_phases::semantic_analysis) fn mode_attribute(
         &mut self,
         mut ty: TypeId,
         a: &AttributeSpecifier<'tu>,
+        tcc_applies: bool,
     ) -> TypeId {
+        let tcc = self.context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         let mut invalid = false;
-        for (index, name) in super::known_names(a, self.context) {
-            if name != "mode" {
+        let mut modes = ArenaVec::new_in(self.scratch);
+        modes.extend(
+            super::known_names(a, self.context)
+                .filter(|&(_, name)| name == "mode")
+                .map(|(index, _)| index),
+        );
+        for index in modes {
+            if tcc && (!self.tcc_mode(a, index) || !tcc_applies) {
                 continue;
             }
             let mode = a.tokens.get(index + 2).map(|token| {
@@ -356,6 +372,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some("QI" | "byte") => Some(8),
                 | Some("HI") => Some(16),
                 | Some("SI") => Some(32),
+                // TCC's word is `int` (`TOK_MODE_word` in `tccgen.c`).
+                | Some("word") if tcc => Some(32),
                 | Some("DI" | "word" | "pointer") => Some(64),
                 | Some("TI") => Some(128),
                 | _ => None,
@@ -385,7 +403,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None
             };
             let Some(selected) = selected else {
-                invalid = true;
+                invalid = !tcc;
                 break;
             };
             ty = self
@@ -404,6 +422,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.types.unknown();
         }
         ty
+    }
+
+    /// Whether TCC applies the mode attribute whose name is token `index`
+    /// of `a`. TCC knows the attribute only as `__mode__`, and ignores
+    /// `mode` as an attribute it does not know; it applies `__QI__`,
+    /// `__HI__`, `__SI__`, `__DI__` and `__word__`, and warns of any other
+    /// mode, which it then ignores, in words that end in a newline
+    /// (`parse_attribute` in `tccgen.c`).
+    fn tcc_mode(&mut self, a: &AttributeSpecifier<'tu>, index: usize) -> bool {
+        let spelling = |token: Option<&crate::translation_phases::preprocessing::Token>| {
+            token.map(|token| self.context.string_cache.at(token.contents))
+        };
+        if spelling(a.tokens.get(index)) != Some("__mode__") {
+            return false;
+        }
+        let Some(token) = a.tokens.get(index + 2) else {
+            return false;
+        };
+        let mode = self.context.string_cache.at(token.contents);
+        if matches!(mode, "__QI__" | "__HI__" | "__SI__" | "__DI__" | "__word__") {
+            return true;
+        }
+        let text = crate::diagnostics::format_in!(self.scratch, "__mode__({mode}) not supported\n");
+        let text = self.context.string_cache.intern(text);
+        let group = DiagnosticGroup::TccWarning;
+        self.group_diagnostic(
+            group,
+            SemanticErrorKind::ExceptionalConstant(group, text),
+            token.source_vectors,
+            None,
+            None,
+        );
+        false
     }
 
     /// The floating scalar a GNU real (`SF`, `DF`, `XF`, `TF`, `KF`) or

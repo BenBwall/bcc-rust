@@ -1298,6 +1298,9 @@ diagnostic_groups! {
     MissingDeclarations => Some("missing-declarations"), Warning, false;
     /// GCC's report of the same, which no option controls but `-w`.
     GccEmptyDeclaration => None, Warning, false;
+    /// A warning TCC gives where bcc itself says nothing, which no option
+    /// controls but `-w` (`tcc_warning` in TCC's `tccgen.c`).
+    TccWarning => None, Warning, false;
     /// GCC's word for a zero divisor, which also sets Clang's
     /// [`Self::DivisionByZero`], as Clang takes it as an alias.
     DivByZero => Some("div-by-zero"), Warning, false;

@@ -401,6 +401,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
                         let character = self.parse_character(token);
+                        if matches!(character, super::CharacterTokenType::MultiChar(_))
+                            && self.context.configuration.compiler_identity() == crate::configuration::CompilerIdentity::Tcc
+                        {
+                            self.context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::TccMulticharacterConstant,
+                                source_vectors: token.source_vectors,
+                            });
+                        }
                         // Plain `char`'s signedness follows `-f[un]signed-char`.
                         let layout = self.context.configuration.layout();
                         let value = character.target_value(&layout);

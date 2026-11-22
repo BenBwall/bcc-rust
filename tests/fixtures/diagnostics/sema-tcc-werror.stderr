@@ -1,0 +1,1 @@
+sema-tcc-werror.c:3: error: static storage ignored for redefinition of 'f'

@@ -1,5 +1,31 @@
 # Diagnostic golden corpus
 
+TCC 0.9.27's warnings (2026-11-22): the `*-tcc-*` fixtures run with the
+options `--tcc-mode` passes bcc (`.args`) and match Ubuntu's TCC 0.9.27
+(`tcc -c`) byte for byte, exit status included.
+`sema-tcc-storage-redefinition` pins `static storage ignored for
+redefinition` and `storage mismatch for redefinition`, `extern` after
+`static` and a block's `extern` included, and an `inline` one left silent;
+`sema-tcc-werror` pins `-Werror` stopping at the first as an error, and
+`sema-tcc-werror-phases` the first by place, a semantic warning before a
+parser's. `sema-tcc-mode-attribute` pins `__mode__(X) not supported` with
+its empty line, `mode` ignored, a known mode applied among the specifiers
+only, where a later type specifier replaces it, and `__word__` as `int`
+(checked by `_Static_assert`). `pp-tcc-integer-overflow`
+pins `integer constant overflow` and the wrapped values and types.
+`sema-tcc-empty-declarations`, `sema-tcc-empty-declaration-error` and
+`sema-tcc-empty-typedef-error` pin `decl0`'s warning and `identifier
+expected`, and silence for a `section` on a typedef, a member or a local.
+`sema-tcc-return-flow` pins `function might return no value` after `exit`,
+`abort` and `longjmp` declared without attributes, after a statement
+expression's `return`, and for deferred `inline` functions after the unit,
+at the line before the closing brace (`sema-tcc-return-flow.h:0`), in
+TCC's order of generation. `parser-tcc-label-at-block-end` pins
+`deprecated use of label at end of compound statement` at each `}`;
+`sema-tcc-warning-order` pins one line's warnings in TCC's order; and
+`pp-tcc-wording` pins `tccpp.c`'s words and the multi-character constants
+of `#if` and wide constants, with their values.
+
 `cl`'s numbered warnings and errors (2026-11-21):
 `sema-cl-numbered-warnings-msvc` (the `cl` identity at level 4) pins C4100,
 C4101 and C4189 at the end of the function, the parameters and outermost
@@ -437,6 +463,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `InvalidOctalIntegerLiteral` | rendered | [pp-invalid-octal-integer-literal.c](pp-invalid-octal-integer-literal.c) |
 | `InvalidDecimalIntegerLiteral` | rendered | [pp-invalid-decimal-integer-literal.c](pp-invalid-decimal-integer-literal.c) |
 | `IntegerLiteralOverflow` | rendered | [pp-integer-literal-overflow.c](pp-integer-literal-overflow.c) |
+| `TccIntegerOverflow` | rendered | [pp-tcc-integer-overflow.c](pp-tcc-integer-overflow.c) |
+| `TccMulticharacterConstant` | rendered | [pp-tcc-wording.c](pp-tcc-wording.c) |
 | `ForcedSignedToUnsignedConversion` | rendered | [pp-forced-signed-to-unsigned-conversion.c](pp-forced-signed-to-unsigned-conversion.c) |
 | `ForcedUnsignedPromotion` | rendered | [pp-forced-unsigned-promotion.c](pp-forced-unsigned-promotion.c) |
 | `ForcedSignedPromotion` | rendered | [pp-forced-signed-promotion.c](pp-forced-signed-promotion.c) |
@@ -606,6 +634,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedWhileAfterDoBody` | rendered | [parser-expected-while-after-do-body.c](parser-expected-while-after-do-body.c) |
 | `ExpectedDeclaratorInTypedef` | rendered | [parser-expected-declarator-in-typedef.c](parser-expected-declarator-in-typedef.c) |
 | `TypedefDeclaresNoName` | rendered | [parser-typedef-declares-no-name.c](parser-typedef-declares-no-name.c) |
+| `TccLabelAtBlockEnd` | rendered | [parser-tcc-label-at-block-end.c](parser-tcc-label-at-block-end.c) |
 | `ExpectedDeclaratorInDeclaration` | reached; folded | [parser-expected-declarator-in-declaration-include.c](parser-expected-declarator-in-declaration-include.c), [parser-expected-declarator-in-declaration.c](parser-expected-declarator-in-declaration.c) |
 | `ExpectedDeclarationContinuationAfterDeclarator` | rendered | [parser-expected-declaration-continuation-after-declarator-long-double.c](parser-expected-declaration-continuation-after-declarator-long-double.c), [parser-expected-declaration-continuation-after-declarator-missing-semicolon.c](parser-expected-declaration-continuation-after-declarator-missing-semicolon.c), [parser-expected-declaration-continuation-after-declarator-tab.c](parser-expected-declaration-continuation-after-declarator-tab.c), [parser-expected-declaration-continuation-after-declarator.c](parser-expected-declaration-continuation-after-declarator.c) |
 | `UnexpectedEndBeforeDeclarationSpecifier` | believed unreachable from normal dispatch | Owners only push declaration-specifier parsing after recognizing a declaration starter, or after a token has already been consumed. EOF without a starter is handled by the owner; EOF after consumed specifiers uses UnexpectedEndBeforeTypeSpecifier. |

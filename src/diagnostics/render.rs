@@ -154,7 +154,13 @@ impl Renderer {
                     }
                     Ok(())
                 }),
-                | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
+                // A TCC warning its code generator gives after the unit
+                // names the line before (`Diagnostic::back_end`).
+                | DiagnosticFormat::Tcc => write!(
+                    out,
+                    "{file}:{}: ",
+                    vector.line.saturating_sub(u32::from(diagnostic.back_end))
+                ),
                 | _ => Self::write_compiler_location(
                     &mut out,
                     file,

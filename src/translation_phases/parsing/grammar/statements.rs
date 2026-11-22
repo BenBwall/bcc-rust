@@ -607,6 +607,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 "label at end of compound statement",
                 token.expect("closing brace exists").source_vectors,
             );
+            if self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Tcc
+            {
+                self.report(ParserErrorType::TccLabelAtBlockEnd, token);
+            }
             let child = self.alloc_syntax(Statement {
                 kind:           StatementType::Null,
                 source_vectors: s.source.unwrap_or_default(),

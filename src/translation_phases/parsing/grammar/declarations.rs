@@ -291,7 +291,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 TokenType::Operator(OperatorTokenType::Semicolon)
             )
         }) {
-            if specifiers.storage_class == Some(StorageClass::Typedef) {
+            // TCC warns of an unnamed structure and refuses a type with no
+            // name in semantic analysis, as of any empty declaration.
+            if specifiers.storage_class == Some(StorageClass::Typedef)
+                && self.context.configuration.compiler_identity()
+                    != crate::configuration::CompilerIdentity::Tcc
+            {
                 let error = if specifiers.type_specifiers.may_declare_tag_or_enumerators() {
                     ParserErrorType::TypedefDeclaresNoName
                 } else {

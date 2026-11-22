@@ -64,7 +64,8 @@ pub(crate) struct Diagnostic<'d> {
     /// which reading of a file read twice it is in.
     pub(crate) reading:          Option<SourceVectors>,
     /// `cl`'s code generator reported it, which `cl` leads with the file's
-    /// full path and the line alone: `C:\src\a.c(3) : warning C4715: ...`.
+    /// full path and the line alone: `C:\src\a.c(3) : warning C4715: ...`;
+    /// or TCC's, after the unit, which names the line before.
     pub(crate) back_end:         bool,
     /// `cl`'s notes, which the MSVC formats write after the message, each
     /// on a line of its own led by its place: `file(line): note: text`.

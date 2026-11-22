@@ -208,6 +208,14 @@ pub(super) struct UnusedState<'s> {
     /// its closing brace, and whether it has no `return` with a value
     /// (C4716).
     cl_return_flow: ArenaVec<'s, (usize, SourceVectors, bool)>,
+    /// TCC's `inline` flag of each function, by name, as its declarations
+    /// so far merge it, and whether its first declaration was `static`
+    /// (`patch_type` in `tccgen.c`).
+    pub(super) tcc_inline: ArenaMap<'s, StringCacheId, (bool, bool)>,
+    /// The definitions TCC keeps as tokens to compile after the unit if
+    /// anything uses them, in order: each one's binding, and the closing
+    /// brace of a reachable end it warns of (`gen_inline_functions`).
+    pub(super) tcc_deferred: ArenaVec<'s, (usize, Option<SourceVectors>)>,
     /// The binding that defines each internal function, where GCC's symbol
     /// table gains the function.
     function_symbols: ArenaMap<'s, StringCacheId, usize>,
@@ -328,6 +336,8 @@ impl<'s> UnusedState<'s> {
             local_typedefs: ArenaVec::new_in(scratch),
             late_return_flow: ArenaVec::new_in(scratch),
             cl_return_flow: ArenaVec::new_in(scratch),
+            tcc_inline: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            tcc_deferred: ArenaVec::new_in(scratch),
             function_symbols: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             cl_pending: ArenaVec::new_in(scratch),
         }
@@ -1199,6 +1209,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn report_late_return_flow(&mut self) {
         if self.unused.cl {
             self.report_cl_return_flow();
+            return;
+        }
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+            let outer = std::mem::replace(&mut self.report_order, ReportOrder::UnitEnd);
+            self.report_tcc_deferred_return_flow();
+            self.report_order = outer;
             return;
         }
         for i in 0..self.unused.late_return_flow.len() {

@@ -20,7 +20,8 @@
 //! modes, `_exit` always; `longjmp` (and `_longjmp` in GNU modes) only when
 //! a file-scope `jmp_buf` typedef precedes its first declaration, and
 //! `siglongjmp` only after `sigjmp_buf`, since Clang cannot build their
-//! builtin types otherwise. A freestanding unit has no library builtins.
+//! builtin types otherwise. A freestanding unit has no library builtins, and
+//! nor does TCC's identity.
 //! C11: §6.7.4 paragraph 8, p. 126; PDF p. 144 (`_Noreturn`).
 //! C99: §6.5.2.2 paragraph 1, p. 71; PDF p. 83; §6.5.15 paragraph 6,
 //! pp. 90-91; PDF pp. 102-103 (composite types); §7.20.4.1 paragraph 2,
@@ -302,7 +303,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// declaration instead ([`Self::record_noreturn`]).
     fn library_does_not_return(&self, binding: usize) -> bool {
         let data = self.bindings[binding];
-        if !self.context.configuration.hosted() || data.linkage != Linkage::External {
+        if !self.context.configuration.hosted()
+            || data.linkage != Linkage::External
+            || self.tcc_library()
+        {
             return false;
         }
         match self.context.string_cache.at(data.name.name) {
@@ -404,12 +408,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether the library functions are TCC's: it has no builtin library
+    /// functions, and the C library's headers lose their attributes without
+    /// `__GNUC__` (glibc's `<sys/cdefs.h>` defines `__attribute__` away), so
+    /// that only a declaration that says so does not return.
+    fn tcc_library(&self) -> bool {
+        self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Tcc
+    }
+
     /// Whether `binding` is a first, hosted declaration of the `longjmp`
     /// family that Clang merges with its builtin, which needs its buffer
     /// typedef declared first at file scope.
     fn builtin_longjmp(&self, binding: usize) -> bool {
         let data = self.bindings[binding];
-        if !self.context.configuration.hosted() || data.linkage != Linkage::External {
+        if !self.context.configuration.hosted()
+            || data.linkage != Linkage::External
+            || self.tcc_library()
+        {
             return false;
         }
         let emission = &self.functions.emission;
