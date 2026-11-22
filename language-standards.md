@@ -247,7 +247,8 @@ LLVM build where GCC already folds (GCC folds `isnan` to 0 under
 `-ffinite-math-only -O0`, Clang and bcc only from `-O1`). The MSVC and TCC
 identities accept the options with no macro; TCC's personality ignores
 them as TCC does, and the MSVC personality still accepts `/fp:fast` with
-IEC 60559 semantics, which it permits. Because GCC 7 and later
+IEC 60559 semantics, which it permits (clang-cl's gives up the math
+functions' `errno`, as Clang's `-ffast-math` does). Because GCC 7 and later
 name the TS 18661-3 types as keywords, glibc's headers then stop declaring
 them, so this identity turns on `-ffloatn-types` unless `-fno-floatn-types`
 is given; with that, it defines `_Float32`, `_Float64`, `_Float32x`,
@@ -2811,7 +2812,9 @@ was run):
   count side effects as Clang's `Expr::HasSideEffects` does: a call of a
   function declared `const` or `pure`, or of a builtin Clang's tables mark
   so (`src/builtins/clang_purity.rs`, a math function's only under
-  `-fno-math-errno`), has only its operands', `_Generic` and
+  `-fno-math-errno`, `-ffast-math` or clang-cl's `/fp:fast`, but `fma`'s
+  also where the C library never sets `errno` from it: glibc, MinGW-w64's
+  and the UCRT), has only its operands', `_Generic` and
   `__builtin_choose_expr` only their selected operand's, `sizeof` and
   `__builtin_offsetof` none, and `va_arg` one; such an operand is evaluated
   for `llvm.assume`, as Clang does, unless it runs an `asm` statement or a

@@ -546,6 +546,9 @@ const PURE: &[&str] = &[
     "isspace",
     "isupper",
     "isxdigit",
+    "nan",
+    "nanf",
+    "nanl",
     "tolower",
     "toupper",
 ];

@@ -1862,8 +1862,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `const` or `pure`, through parentheses, `*` and `&`
     /// (`Expr::getReferencedDeclOfCallee`): one declared so, or a builtin
     /// Clang's tables mark ([`crate::builtins::clang_purity`]), a math
-    /// function's only under `-fno-math-errno`. A call through a pointer
-    /// object names no function.
+    /// function's only under `-fno-math-errno`, or `fma` where the C library
+    /// never sets `errno` from it, which Clang takes a GNU environment's
+    /// and Microsoft's C runtime to be (`Sema::AddKnownFunctionAttributes`).
+    /// A call through a pointer object names no function.
     fn clang_pure_callee(&self, mut callee: &'tu Expression<'tu>) -> bool {
         use crate::builtins::ClangPurity;
         while let ExpressionType::Parenthesized { expression: inner }
@@ -1898,10 +1900,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         match crate::builtins::clang_purity(spelling) {
             | Some(ClangPurity::Const | ClangPurity::Pure) => true,
-            | Some(ClangPurity::ConstWithoutErrno) => self
-                .context
-                .configuration
-                .relaxes_floating_point(crate::configuration::RelaxedFloatingPoint::NoMathErrno),
+            | Some(ClangPurity::ConstWithoutErrno) => {
+                let configuration = self.context.configuration;
+                configuration
+                    .relaxes_floating_point(crate::configuration::RelaxedFloatingPoint::NoMathErrno)
+                    || (matches!(
+                        spelling.strip_prefix("__builtin_").unwrap_or(spelling),
+                        "fma" | "fmaf" | "fmal"
+                    ) && configuration.target().gnu_or_microsoft_c_runtime())
+            },
             | None => false,
         }
     }

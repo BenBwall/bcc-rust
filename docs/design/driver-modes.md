@@ -953,7 +953,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stdout (to stderr under `/E`, `/EP` and `/P`), the path absolute (see "Preprocessed text" for where `cl` keeps it relative) |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
-| `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
+| `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect (clang-cl's `/fp:` options set the math functions' `errno`, see "clang-cl") |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
@@ -1435,7 +1435,11 @@ clang-cl`, about a `cl` option clang-cl knows and bcc does not, and about
 the bare Clang options clang-cl ignores. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
-bare `-fsigned-char` or `-funsigned-char` with the same warning. The
+bare `-fsigned-char` or `-funsigned-char` with the same warning. Its
+`/fp:fast` gives up the math functions' `errno`, as clang-cl's
+`-ffast-math` does, so a call of `sqrt` has no side effect for `-Wassume`,
+and `/fp:precise` restores the target's default, as `-ffp-model=precise`
+does; bcc takes none of the rest of `-ffast-math`, nor its macros. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names. As Clang's driver does, it refuses a
 command line without inputs (`clang-cl: error: no input files`, status 1),

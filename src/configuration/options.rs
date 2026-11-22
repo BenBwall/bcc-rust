@@ -645,6 +645,14 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Forgets that the math functions' `errno` was given, so the target's
+    /// default for it applies again ([`Self::with_default_math_errno`]), as
+    /// Clang's `-fno-fast-math` and `-ffp-model=precise` restore it.
+    pub(crate) const fn with_default_math_errno_restored(mut self) -> Self {
+        self.given_floating_point &= !super::RelaxedFloatingPoint::NoMathErrno.bit();
+        self
+    }
+
     /// Gives up (or keeps) part of IEC 60559 semantics as an option that
     /// implies it does (`-ffast-math`), without recording it as given.
     pub(crate) const fn with_implied_floating_point(
@@ -661,18 +669,11 @@ impl CompilerConfiguration {
     }
 
     /// Gives up `errno` from the math functions unless an option decided
-    /// it, where the identity's compiler does by default: Clang on musl and
-    /// WebAssembly, whose C libraries leave `errno` alone there
-    /// (`ToolChain::IsMathErrnoDefault`). GCC sets it on every target bcc
-    /// has.
+    /// it, where the identity's compiler does by default
+    /// ([`crate::target::Target::clang_math_errno`]).
     pub(crate) const fn with_default_math_errno(self) -> Self {
         let clang = matches!(self.identity.rules(), super::RuleSet::Clang);
-        let quiet = matches!(
-            self.target,
-            crate::target::Target::LinuxMusl
-                | crate::target::Target::Wasm32Unknown
-                | crate::target::Target::Wasm32Wasi
-        );
+        let quiet = !self.target.clang_math_errno();
         if clang && quiet && !self.gives_floating_point(super::RelaxedFloatingPoint::NoMathErrno) {
             self.with_implied_floating_point(super::RelaxedFloatingPoint::NoMathErrno, true)
         } else {

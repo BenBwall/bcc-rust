@@ -9085,6 +9085,61 @@ mod tests {
         assert!(!text.contains("does not return a value"), "{text}");
     }
 
+    /// clang-cl's `/fp:fast` gives up the math functions' `errno`, so a call
+    /// of `sqrt` has no side effect for `-Wassume`, and `/fp:precise`
+    /// restores the target's default, as Clang's `-fno-fast-math` does:
+    /// `errno` on Windows, none on musl, whatever chose it before.
+    #[test]
+    fn floating_point_models_decide_math_errno_for_assumptions() {
+        let directory = Directory::new();
+        directory.write(
+            "math.c",
+            "double sqrt(double);
+void f(double d)
+{
+    __assume(sqrt(d) > 0);
+}
+",
+        );
+        let warns = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, &[args, &["math.c"]].concat());
+            succeeds(&output);
+            stderr(&output).contains("[-Wassume]")
+        };
+        for (args, expected) in [
+            (&[][..], true),
+            (&["/fp:fast"], false),
+            (&["/fp:precise"], true),
+            (&["/fp:fast", "/fp:precise"], true),
+            (&["/fp:precise", "/fp:fast"], false),
+            (&["/fp:fast", "-fmath-errno"], true),
+            (&["-fno-math-errno", "/fp:precise"], true),
+        ] {
+            assert_eq!(
+                warns("--clang-cl-mode", &[&["/c", "/Zs"], args].concat()),
+                expected,
+                "{args:?}"
+            );
+        }
+        let musl = [
+            "--target=x86_64-unknown-linux-musl",
+            "-fms-extensions",
+            "-fsyntax-only",
+        ];
+        for (args, expected) in [
+            (&[][..], false),
+            (&["-fmath-errno"], true),
+            (&["-fmath-errno", "-fno-fast-math"], false),
+            (&["-fmath-errno", "-ffp-model=precise"], false),
+        ] {
+            assert_eq!(
+                warns("--clang-mode", &[&musl[..], args].concat()),
+                expected,
+                "{args:?}"
+            );
+        }
+    }
+
     /// A jump out of a `__finally` block is `cl`'s level 1 C4532, which its
     /// number controls, and Clang's `-Wjump-seh-finally`, which its option
     /// controls; a jump into a SEH block is `cl`'s error C2705, as `cl`

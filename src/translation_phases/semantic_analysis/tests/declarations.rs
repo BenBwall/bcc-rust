@@ -1178,7 +1178,8 @@ fn microsoft_assumptions_count_side_effects_as_clang_does() {
         .with_msvc_extensions(true);
     let declarations = "__attribute__((const)) int fc(int);\n__attribute__((pure)) int \
                         fp(int);\nint f(void);\nint abs(int);\n__attribute__((const)) int \
-                        (*pointer)(int);\nvolatile int v;\n";
+                        (*pointer)(int);\nvolatile int v;\ndouble nan(const char *);\ndouble \
+                        fma(double, double, double);\n";
     let quiet = [
         "fc(i)",
         "fp(i)",
@@ -1187,6 +1188,9 @@ fn microsoft_assumptions_count_side_effects_as_clang_does() {
         "__builtin_expect(i, 1)",
         "__builtin_popcount(i)",
         "__builtin_nan(\"\") != 0",
+        "nan(\"\") != 0",
+        "fma(1.0, 2.0, 3.0) > 0",
+        "__builtin_fmaf(1, 2, 3) > 0",
         "_Generic(i, int: 1, default: f())",
         "__builtin_choose_expr(1, i, f())",
         "({ int t = 1; t; })",
@@ -1230,6 +1234,29 @@ fn microsoft_assumptions_count_side_effects_as_clang_does() {
         true,
     );
     assert_eq!(kinds(source, relaxed), []);
+    // `fma` everywhere but where the C library may set `errno` from it.
+    let source =
+        "double fma(double, double, double);\nvoid m(void) { __assume(fma(1.0, 2.0, 3.0) > 0); }\n";
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::WindowsGnu,
+    ] {
+        assert_eq!(
+            kinds(source, microsoft.with_target(target)),
+            [],
+            "{target:?}"
+        );
+    }
+    for target in [
+        crate::target::Target::LinuxMusl,
+        crate::target::Target::Wasm32Wasi,
+    ] {
+        assert_eq!(
+            kinds(source, microsoft.with_target(target)),
+            [assume],
+            "{target:?}"
+        );
+    }
     let source = "int x;\nvoid p(void) { __assume(&x); }\n";
     assert_eq!(
         kinds(source, microsoft),

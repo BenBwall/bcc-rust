@@ -33,6 +33,24 @@ impl Target {
         matches!(self, Self::Wasm32Unknown | Self::Wasm32Wasi)
     }
 
+    /// Whether Clang's math functions report errors in `errno` here unless
+    /// an option says otherwise (`ToolChain::IsMathErrnoDefault`): not on
+    /// musl and WebAssembly, whose C libraries leave `errno` alone there.
+    /// GCC sets it on every target bcc has.
+    pub(crate) const fn clang_math_errno(self) -> bool {
+        !matches!(
+            self,
+            Self::LinuxMusl | Self::Wasm32Unknown | Self::Wasm32Wasi
+        )
+    }
+
+    /// Whether the C library is a GNU environment's or Microsoft's C
+    /// runtime, as LLVM's `Triple::isGNUEnvironment` and `isOSMSVCRT` ask:
+    /// glibc, MinGW-w64's and the UCRT, but not musl or WebAssembly's.
+    pub(crate) const fn gnu_or_microsoft_c_runtime(self) -> bool {
+        matches!(self, Self::LinuxGnu | Self::WindowsGnu | Self::WindowsMsvc)
+    }
+
     /// Preserve the original default-target inspection spelling.
     pub(crate) const fn inspection_name(self) -> &'static str {
         match self {

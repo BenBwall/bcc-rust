@@ -1112,9 +1112,14 @@ impl FloatingPointGroup {
         // GCC's `-ffast-math` also turns `-fsignaling-nans` off and makes
         // excess precision fast (`set_fast_math_flags`), unless a later
         // `-fno-fast-math` cancels it; Clang ignores both options.
+        // Clang's `-fno-fast-math` also restores the target's default
+        // `errno` from the math functions, whatever option chose it before
+        // (`RenderFloatingPointOptions`); only Clang's targets differ.
         let configuration = match (self, relaxed) {
             | (Self::Fast, true) => configuration.with_fast_math_side_effects(),
-            | (Self::Fast, false) => configuration.with_fast_math_cancelled(),
+            | (Self::Fast, false) => configuration
+                .with_fast_math_cancelled()
+                .with_default_math_errno_restored(),
             | _ => configuration,
         };
         let configuration = match self {

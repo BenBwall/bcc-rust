@@ -1146,6 +1146,22 @@ impl State {
             // An unsigned plain `char`, which also defines `_CHAR_UNSIGNED`.
             | "J" => self.bcc.push("-funsigned-char".into()),
             | "Zs" => self.syntax_only = true,
+            // clang-cl's `/fp:fast` is Clang's `-ffast-math`, which gives up
+            // the math functions' `errno` among the rest, and `/fp:precise`
+            // is `-ffp-model=precise`, which restores Clang's default
+            // semantics, the target's `errno` among them, as the Clang
+            // personality reads it (Clang's `CLCompatOptions.td` and
+            // `RenderFloatingPointOptions`). bcc keeps the rest of IEC 60559
+            // semantics, and `cl` keeps `errno` under both.
+            | "fp:fast" | "fp:precise" if invocation.personality == Personality::ClangCl =>
+                self.bcc.push(
+                    if option == "fp:fast" {
+                        "-fno-math-errno"
+                    } else {
+                        "-fno-fast-math"
+                    }
+                    .into(),
+                ),
             | "diagnostics:classic" => self.diagnostics = "msvc-classic",
             | "diagnostics:column" => self.diagnostics = "msvc",
             | "diagnostics:caret" => self.diagnostics = "msvc-caret",

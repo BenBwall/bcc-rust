@@ -45,7 +45,7 @@ def bcc_spellings(root):
                            re.MULTILINE))
     for shard in ("library.rs", "math.rs", "checked.rs"):
         text = (builtins / shard).read_text(encoding="utf-8")
-        names.update(re.findall(r'"__builtin_\w+",\s*"(\w+)"', text))
+        names.update(re.findall(r'"__builtin_\w+",\s*(?:Some\()?"(\w+)"', text))
     return names
 
 
