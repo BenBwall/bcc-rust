@@ -19,7 +19,7 @@
 //! A compound assignment `E1 op= E2` is `E1 = E1 op (E2)` with `E1`
 //! evaluated once, so its node stands for a read of `E1` as well as the
 //! store: that read is an operand of `op`, and a sequence point inside `E2`
-//! does not order a store in `E2` before it.
+//! does not order a store in `E2` before it, not even a call's.
 //!
 //! A call's body is separated from the expression that calls it, but C
 //! leaves the order of a call and the other operands unspecified (C99
@@ -259,7 +259,18 @@ impl Machine {
         } else {
             ("operand", &clauses::EVALUATION_ORDER)
         };
-        let second = if other.call && other_text == call_text {
+        // A compound assignment around the call reads its left operand as
+        // an operand of its operator.
+        let enclosing = nodes
+            .get(other.node)
+            .filter(|node| !other.call && compound(node))
+            .filter(|_| common_ancestor(nodes, call.node, other.node) == Some(other.node));
+        let second = if let Some(enclosing) = enclosing {
+            format!(
+                "`{other_text}` reads it as the left operand of its `{}` (§6.5.16.2p3)",
+                enclosing.label.trim_end_matches('=')
+            )
+        } else if other.call && other_text == call_text {
             format!("the other call `{other_text}` {} it too", verb(other))
         } else if other.call {
             format!("the call `{other_text}` {} it too", verb(other))
@@ -422,9 +433,10 @@ fn order(nodes: &[ExpressionNode], a: &Access, b: &Access) -> Order {
         // `E1 op= E2` is `E1 = E1 op (E2)` with `E1` evaluated once: its
         // read of `E1` is an operand of `op`, unsequenced with all of `E2`,
         // so a sequence point inside `E2` does not order a store there
-        // before that read. A call's body is a single evaluation of its own.
+        // before that read. Nor do a call's: in C99 the read may come
+        // before or after a call in `E2` that stores into `E1`'s object, so
+        // `g += bump()` stops as an open order when `bump` changes `g`.
         if inner.write
-            && !inner.call
             && compound(operator)
             && first.is_some()
             && operator.children.get(1) == first.as_ref()

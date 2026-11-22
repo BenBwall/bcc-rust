@@ -6288,7 +6288,8 @@ fn an_order_c_leaves_open_stops_the_run() {
 // C99 §6.5.16.2p3: `E1 op= E2` is `E1 = E1 op (E2)` with `E1` evaluated
 // once, so its read of `E1` is an operand of `op`, unsequenced with all of
 // `E2` (§6.5p3): an update of `E1`'s object inside `E2` is undefined even
-// behind a sequence point there (§6.5p2), as the spelled-out form is.
+// behind a sequence point there (§6.5p2), as the spelled-out form is,
+// and a call there that stores into it leaves the order open.
 #[test]
 fn a_compound_assignment_reads_its_left_operand_unsequenced_with_its_right() {
     // By name: refused before the first step.
@@ -6351,8 +6352,7 @@ fn a_compound_assignment_reads_its_left_operand_unsequenced_with_its_right() {
         );
     }
     // Defined: another object updated, the left operand's object only
-    // read, a sequence point inside the left operand, a call that touches
-    // the object only in its body, and a plain update.
+    // read, a sequence point inside the left operand, and a plain update.
     returned(
         "int main(void) { int x = 1; int y = 0; x += (y++, 5); return x * 10 + y; }",
         61,
@@ -6366,12 +6366,46 @@ fn a_compound_assignment_reads_its_left_operand_unsequenced_with_its_right() {
         "int main(void) { int x = 1; *(x++, &x) += 1; return x; }",
         3,
     );
-    returned(
-        "int g = 10; int bump(void) { g = g + 1; return 0; } int main(void) { g += bump(); return \
-         g; }",
-        11,
-    );
     returned("int main(void) { int x = 1; x += 1; return x; }", 2);
+    // A call in the right operand that stores into the left operand's
+    // object: C99 lets the read come before or after the call, 6 or 15
+    // here, so the run stops as an open order rather than show GCC's 15.
+    for source in [
+        "int g = 1; int bump(void) { g = g * 10; return 5; } int main(void) { g += bump(); return \
+         g; }",
+        "int g = 1; int bump(void) { g = g * 10; return 5; } int main(void) { int *p = &g; *p += \
+         (bump(), 1); return g; }",
+    ] {
+        let session = run(source);
+        let state = session.state();
+        assert_eq!(state.status, "error", "{source}");
+        assert_eq!(
+            state.diagnostics[0].clause.map(|clause| clause.id),
+            Some("6.5p3"),
+            "{source}"
+        );
+        assert_eq!(
+            state.event.title,
+            "Stopped: the result can depend on an open order"
+        );
+        assert!(
+            state.diagnostics[0]
+                .message
+                .contains("` reads it as the left operand of its `+` (§6.5.16.2p3)"),
+            "{source}: {}",
+            state.diagnostics[0].message
+        );
+    }
+    // A call that only reads the object, or stores into another, runs.
+    returned(
+        "int g = 1; int get(void) { return g; } int main(void) { g += get(); return g; }",
+        2,
+    );
+    returned(
+        "int g = 1; int h = 0; int bump(void) { h = 7; return 5; } int main(void) { g += bump(); \
+         return g + h; }",
+        13,
+    );
 }
 
 // C99 §6.5p2 with §6.5.16p3: an update the right operand completes at a
