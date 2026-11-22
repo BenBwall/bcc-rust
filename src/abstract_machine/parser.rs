@@ -38,6 +38,7 @@ use super::{
         Op,
         Place,
         Program,
+        SequencePoint,
         SourceRange,
         Static,
         Structure,
@@ -71,6 +72,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         declaration_macros: Vec::new(),
         returns: Type::INT,
         updates: false,
+        next_point: SequencePoint::Condition,
         blocks: Vec::new(),
         loop_body: false,
     };
@@ -279,8 +281,11 @@ pub(super) struct Parser<'a> {
     /// The return type of the function being compiled.
     pub returns:            Type,
     /// Whether the expression being parsed is a condition, which may
-    /// contain one `++` or `--` (see `check_update`).
+    /// contain `++` and `--` (see `check_update`).
     pub updates:            bool,
+    /// The sequence point that next follows the operand being emitted, in
+    /// a condition: where an update there completes its store.
+    pub next_point:         SequencePoint,
     /// The `Enter` instruction of each open block, innermost last, which
     /// lists the automatic objects the block declares.
     pub blocks:             Vec<usize>,
@@ -495,7 +500,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The controlling expression of an `if`, `while` or `for`: a scalar,
-    /// which may update one variable with `++` or `--` (`i-- > 0`).
+    /// which may update variables with `++` or `--` (`i-- > 0`).
     fn controlling_expression(&mut self) -> Result<usize, Diagnostic> {
         self.updates = true;
         let expression = self.expression(0);
@@ -1166,8 +1171,9 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
-                    "unparenthesized *p++ and *p-- contain nested side effects; use (*p)++ to \
-                     increment the pointed-to int",
+                    "unparenthesized *p++ and *p-- mean *(p++) and *(p--), an increment nested in \
+                     an operand, which is outside this subset; write (*p)++ to increment the \
+                     object p points to, or p++ to move p",
                 ));
             }
             let target = self.emit_expression(expression, true)?;
@@ -1181,7 +1187,7 @@ impl<'a> Parser<'a> {
                 Op::Increment {
                     delta,
                     prefix: prefix.is_some(),
-                    nested: false,
+                    nested: None,
                     full_expression: !self.at(","),
                 },
                 range,

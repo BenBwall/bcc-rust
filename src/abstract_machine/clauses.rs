@@ -275,7 +275,10 @@ clauses! {
     /// C99: §C paragraph 1, p. 439; PDF p. 451.
     SEQUENCE_POINTS = "Cp1", "p. 439; PDF p. 451", "Sequence points (Annex C)",
         "The sequence points: each call, after its arguments; the end of the first operand of &&, \
-         ||, ?: and the comma operator; and the end of each full expression.";
+         ||, ?: and the comma operator; the end of each full declarator and of each full \
+         expression; and in the library, just before a function returns, after the actions of \
+         each printf or scanf conversion, and around each call to a qsort or bsearch comparison \
+         function.";
     /// C99: §6.5.2.1 paragraph 1, p. 70; PDF p. 82.
     SUBSCRIPT_OPERANDS = "6.5.2.1p1", "p. 70; PDF p. 82", "Array subscripting",
         "One operand of [] must be a pointer to an object and the other an integer, in either \

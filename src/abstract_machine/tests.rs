@@ -169,7 +169,9 @@ fn dereference_increment_precedence_is_preserved_or_explicitly_rejected() {
         let diagnostic =
             compile(&source).expect_err("unparenthesized postfix dereference must be rejected");
         assert!(
-            diagnostic.message.contains("nested side effects"),
+            diagnostic
+                .message
+                .contains("an increment nested in an operand"),
             "precise subset limitation"
         );
     }
@@ -607,7 +609,7 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
         "int main(void) { int i = 0; int *p = &i; while (i++ < *p) {} return 0; }",
-        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
+        "int main(void) { int i = 0; while (i++ < i++) {} return 0; }",
         "int main(void) { unsigned short long x; return 0; }",
         "int main(void) { signed unsigned x; return 0; }",
         "// comment ending in a splice\\\nint main(void) { return 0; }",
@@ -4079,10 +4081,16 @@ fn a_condition_may_count_down_with_a_postfix_decrement() {
          {} return 0; }",
     );
     assert_eq!(cause, Some(super::Undefined::PointerOutside));
+    // Two variables may each be updated: they are different objects, so the
+    // order of the two stores does not matter (C99 §6.5p2-3).
+    returned(
+        "int main(void) { int i = 0; int j = 2; int n = 0; while (i++ < j--) n = n + 1; return n \
+         * 100 + i * 10 + j + 1; }",
+        121,
+    );
     for source in [
         "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
-        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
         "int main(void) { int a[2] = {0, 0}; int i = 0; while (a[i]++ < 1) {} return 0; }",
         "int main(void) { const int i = 1; while (i--) {} return 0; }",
     ] {
@@ -5397,6 +5405,203 @@ fn the_comma_operator_sequences_two_expressions() {
     );
 }
 
+// C99 Annex C, §6.5.2.2p10, §6.5.13p4, §6.5.14p4, §6.5.15p4, §6.5.17p2,
+// §6.8p4: an update inside a condition completes its store by the sequence
+// point that next follows it, and the next step that is a sequence point is
+// that one.
+#[test]
+fn an_update_in_a_condition_completes_by_the_next_sequence_point() {
+    let cases: [(&str, &str, EventKind, Option<&str>); 8] = [
+        (
+            "int main(void) { int i = 2; int n = 0; while (i-- > 0 && n < 5) n = n + 1; return n; \
+             }",
+            "the end of `i-- > 0`, the first operand of `&&`",
+            EventKind::Logical,
+            Some("6.5.13p4"),
+        ),
+        (
+            "int main(void) { int i = 2; int s = 1; while (i-- > 0 || s < 0) {} return i; }",
+            "the end of `i-- > 0`, the first operand of `||`",
+            EventKind::Logical,
+            Some("6.5.14p4"),
+        ),
+        (
+            "int main(void) { int i = 2; while (i-- ? 1 : 0) {} return i; }",
+            "the end of `i--`, the first operand of `?:`",
+            EventKind::Conditional,
+            Some("6.5.15p4"),
+        ),
+        (
+            "int main(void) { int i = 2; while ((i--, i >= 0)) {} return i; }",
+            "the end of `i--`, the left operand of a comma operator",
+            EventKind::Comma,
+            Some("6.5.17p2"),
+        ),
+        (
+            "int f(int x) { return x; } int main(void) { int i = 2; while (f(i--)) {} return i; }",
+            "the one just before the call `f(i--)`, once its arguments are evaluated",
+            EventKind::Call,
+            Some("6.5.2.2p10"),
+        ),
+        (
+            "int main(void) { int i = 2; int x = 1; if ((x && i++ == 2) && x) {} return i; }",
+            "the end of `(x && i++ == 2)`, the first operand of `&&`",
+            EventKind::Logical,
+            Some("6.5.13p4"),
+        ),
+        // In the second operand of `&&`, or alone, the next sequence point
+        // is the end of the condition.
+        (
+            "int main(void) { int i = 2; int x = 1; if (x && i++ == 2) {} return i; }",
+            "the end of the condition",
+            EventKind::Branch,
+            None,
+        ),
+        (
+            "int main(void) { int i = 2; while (i-- > 0) {} return i; }",
+            "the end of the condition",
+            EventKind::Branch,
+            None,
+        ),
+    ];
+    for (source, point, kind, clause) in cases {
+        let states = stepped(source);
+        let at = states
+            .iter()
+            .position(|state| state.event.kind == EventKind::Increment)
+            .expect(source);
+        let update = &states[at].event;
+        assert!(
+            update
+                .explanation
+                .contains(&format!("by the next sequence point, {point};")),
+            "{source}: {}",
+            update.explanation
+        );
+        assert!(!update.sequence_point, "{source}");
+        let next = states[at + 1..]
+            .iter()
+            .find(|state| state.event.sequence_point)
+            .expect(source);
+        assert_eq!(next.event.kind, kind, "{source}: {}", next.event.title);
+        let cited: Vec<&str> = update.clauses.iter().map(|clause| clause.id).collect();
+        if let Some(clause) = clause {
+            assert!(cited.contains(&clause), "{source}: {cited:?}");
+        }
+        assert!(cited.contains(&"6.5p2"), "{source}: {cited:?}");
+    }
+}
+
+// C99 §6.5.2.2p10, §6.8p3-4: the comma operator is a sequence point, the
+// commas between arguments give no order and no sequence point, and the
+// commas between declarators leave each initializer a full expression,
+// evaluated in order.
+#[test]
+fn the_comma_operator_s_note_tells_the_three_commas_apart() {
+    let states = stepped("int main(void) { int x = 2; int y = (x + 1, x * 10); return y; }");
+    let comma = step(&states, EventKind::Comma, "Comma: `x + 1` is done");
+    let note = &comma.event.note;
+    assert!(
+        note.contains(
+            "The commas between a call's arguments only separate them: C fixes no order among the \
+             arguments and puts no sequence point between them."
+        ),
+        "{note}"
+    );
+    assert!(
+        note.contains("each initializer is a full expression, evaluated in declarator order"),
+        "{note}"
+    );
+    assert!(!note.contains("in a declaration only separate"), "{note}");
+    // The left operand is a plain read: it has no side effects to keep.
+    assert!(
+        comma
+            .event
+            .explanation
+            .contains("only its side effects, if it has any, matter"),
+        "{}",
+        comma.event.explanation
+    );
+}
+
+// C99 §6.5p2, Annex C: a condition may update a variable and use it again,
+// or call a function, where a sequence point separates the two; without
+// one, the machine refuses, and says why without misstating C.
+#[test]
+fn a_condition_may_reuse_an_updated_variable_across_a_sequence_point() {
+    // GCC 14 gives each of these the same result.
+    returned(
+        "int main(void) { int i = 0; int r = 0; if (i++ && i++) r = 1; return i * 10 + r; }",
+        10,
+    );
+    returned(
+        "int main(void) { int i = 0; int n = 0; if (i++ == 0 && i == 1) n = 1; return n; }",
+        1,
+    );
+    returned(
+        "int main(void) { int i = 0; int n = 0; while (i++ < 3 && i != 2) n = n + 1; return i * \
+         10 + n; }",
+        21,
+    );
+    returned(
+        "int f(int x) { return x; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && \
+         f(1)) n = n + 1; return n; }",
+        3,
+    );
+    returned(
+        "int main(void) { int i = 1; int j = 5; int n = 0; while (i < 3 ? i++ : j--) n = n + 1; \
+         return n; }",
+        7,
+    );
+    // The read after `&&` sees the store, which the update says is
+    // separated from it.
+    let states = stepped(
+        "int main(void) { int i = 0; int n = 0; if (i++ == 0 && i == 1) n = 1; return n; }",
+    );
+    let update = step(&states, EventKind::Increment, "Update `i`: 0 → 1");
+    assert!(
+        update
+            .event
+            .explanation
+            .contains("separated from this update by a sequence point"),
+        "{}",
+        update.event.explanation
+    );
+    let read = step(&states, EventKind::LvalueConversion, "Read `i`");
+    assert_eq!(read.event.title, "Read `i` → 1");
+    // Unsequenced with the update: undefined in C, refused.
+    for source in [
+        "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
+        "int main(void) { int i = 0; if (i++ == i++) {} return 0; }",
+        "int f(int x) { return x; } int main(void) { int i = 3; while (f(i--) > i) {} return 0; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert!(
+            diagnostic
+                .message
+                .contains("with no sequence point between the two"),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+    // What the machine cannot see through is refused as its own limit.
+    for source in [
+        "int main(void) { int i = 0; int *p = &i; if (i++ == *p) {} return 0; }",
+        "int f(int x) { return x; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
+        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert!(
+            diagnostic
+                .message
+                .starts_with("this machine does not track which objects"),
+            "{source}: {}",
+            diagnostic.message
+        );
+        assert!(!diagnostic.message.contains("undefined"), "{source}");
+    }
+}
+
 // C99 §6.4.4.1p3-5: an octal or hexadecimal constant is computed in its
 // base, and its type list includes the unsigned types.
 #[test]
@@ -5636,8 +5841,11 @@ fn the_limits_the_site_states_hold() {
          *v[1]; }",
         // Calls anywhere in an expression.
         "int f(int n) { return n + 1; } int main(void) { return f(f(1)) * f(0) + (f(1) ? 2 : 3); }",
-        // A statement's commas, and one update in a condition.
+        // A statement's commas, and updates in a condition that sequence
+        // points separate from other uses of the variable and from calls.
         "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
+        "int f(int n) { return n; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && f(i) \
+         && n < 5) n = n + 1; while (f(i++) < 2) {} return i == 3 && n == 2; }",
     ] {
         let session = run(source);
         assert_eq!(session.state().status, "finished", "{source}");
@@ -5659,6 +5867,9 @@ fn the_limits_the_site_states_hold() {
         "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return p < q; }",
         "int main(void) { int a = 0; int b = 1; a = b++; return a; }",
         "int f(int n) { return n; } int main(void) { int i = 0; return f(i++); }",
+        "int f(int n) { return n; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
+        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
+        "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
         "int main(void) { int a; int b; a = b = 0; return a; }",
         "#include <string.h>\nint main(void) { return 0; }",
     ] {

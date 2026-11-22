@@ -596,7 +596,7 @@ impl Machine {
                 };
                 let sum = self.binary_value(operator, ty, current.clone(), one)?;
                 let stored = self.store(target, offset, sum.clone())?;
-                if nested {
+                if nested.is_some() {
                     let value = if prefix { &stored } else { &current };
                     self.push(Operand::Value(value.clone()))?;
                 }

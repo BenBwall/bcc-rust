@@ -24,8 +24,10 @@ use super::{
         MAX_ARGUMENTS,
         MAX_CODE,
         MAX_DEPTH,
+        Nested,
         Op,
         Place,
+        SequencePoint,
         SourceRange,
         Type,
     },
@@ -55,12 +57,6 @@ impl Parser<'_> {
             let right = self.expression(precedence + 1)?;
             let lhs = &self.expressions[left];
             let rhs = &self.expressions[right];
-            if lhs.effect && rhs.effect {
-                return Err(self.error(
-                    "two ++ or -- in one condition are outside this subset: without a sequence \
-                     point between them their order is open",
-                ));
-            }
             let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
             let ty = match (operator, lhs.ty, rhs.ty) {
                 // The integer promotions apply to each operand of a shift on
@@ -186,17 +182,6 @@ impl Parser<'_> {
                 &super::clauses::CONDITIONAL_FIRST,
             ));
         }
-        if [first, second, third]
-            .iter()
-            .filter(|operand| operand.effect)
-            .count()
-            > 1
-        {
-            return Err(self.error(
-                "two ++ or -- in one condition are outside this subset: a condition may update \
-                 one variable",
-            ));
-        }
         let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
         let ty = match (second.ty, third.ty) {
             | (left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() => left
@@ -309,18 +294,14 @@ impl Parser<'_> {
             while self.take(",") {
                 let right = self.expression(0)?;
                 let [left_operand, right_operand] = [value, right].map(|at| &self.expressions[at]);
-                if left_operand.effect || right_operand.effect {
-                    return Err(self.error(
-                        "a ++ or -- in a comma operator's operand is outside this subset, except \
-                         in an expression statement such as `i++, j--`",
-                    ));
-                }
+                let effect = left_operand.effect || right_operand.effect;
                 let (ty, height) = (
                     right_operand.ty,
                     left_operand.height.max(right_operand.height) + 1,
                 );
                 let range = combined(left_operand.range, right_operand.range);
                 value = self.node(ExprKind::Comma(value, right), ty, false, range, height)?;
+                self.expressions[value].effect = effect;
             }
             let closing = self.current().range;
             self.expect(")")?;
@@ -420,13 +401,16 @@ impl Parser<'_> {
                 });
                 let closing = self.tokens[self.position - 1].range;
                 let returns = declared.unwrap_or(Type::INT);
-                self.node(
+                let effect = self.any_effect(&arguments);
+                let node = self.node(
                     ExprKind::Call(text, arguments),
                     returns,
                     true,
                     combined(range, closing),
                     height,
-                )?
+                )?;
+                self.expressions[node].effect = effect;
+                node
             } else {
                 let Some((declared, place, constant)) = binding else {
                     return Err(self.error("use of an undeclared identifier"));
@@ -538,6 +522,7 @@ impl Parser<'_> {
                 target: operand,
                 delta,
                 prefix,
+                shared: false,
             },
             ty,
             false,
@@ -548,81 +533,142 @@ impl Parser<'_> {
         Ok(node)
     }
 
-    /// Check a condition that contains a `++` or `--`: it may contain only
-    /// that one, of a variable named directly, and nothing else that could
-    /// read or write the variable (no other use of its name, no `*`, `[]`,
-    /// `->` or call), so that no other access can be unsequenced with the
-    /// update (C99 §6.5p2).
-    pub(super) fn check_update(&self, expression: usize) -> Result<(), Diagnostic> {
-        let mut names = Vec::new();
-        let mut updated = None;
-        let mut indirect = false;
-        self.walk(expression, &mut names, &mut updated, &mut indirect);
-        let Some((name, range)) = updated else {
-            return Ok(());
-        };
-        let message = if name.is_empty() {
-            "in a condition, ++ and -- may update only a variable named directly, such as `i--`"
-        } else if indirect || names.iter().filter(|other| **other == name).count() > 1 {
-            "a condition with ++ or -- may not otherwise use its variable, or use *, [], -> or a \
-             call, in this subset: without a sequence point between them, an access to the same \
-             object would be undefined (C99 §6.5p2)"
-        } else {
-            return Ok(());
-        };
-        Err(Diagnostic::new("unsupported", range, message))
+    /// Check the `++` and `--` in a condition, and record on each whether
+    /// anything else in the condition could reach its variable. Each must
+    /// update a variable named directly. Two accesses to that variable, the
+    /// update and another use of its name or another update of it, must be
+    /// separated by a sequence point: C99 makes them undefined otherwise. A
+    /// `*`, `[]`, `->` or call might reach any object, and this machine
+    /// does not track which, so it must be separated from the update too.
+    /// The sequence points inside a condition follow the first operand of
+    /// `&&`, `||` and `?:` and the left operand of a comma operator, and
+    /// precede a call, after its arguments; only one of the second and
+    /// third operands of `?:` is evaluated.
+    ///
+    /// C99: §6.5 paragraph 2, p. 67; PDF p. 79.
+    /// C99: Annex C paragraph 1, p. 439; PDF p. 451.
+    pub(super) fn check_update(&mut self, expression: usize) -> Result<(), Diagnostic> {
+        let reach = self.reach(expression)?;
+        for (name, node) in &reach.updates {
+            let shared = reach.opaque.is_some()
+                || reach.names.contains(name)
+                || reach
+                    .updates
+                    .iter()
+                    .filter(|(other, _)| other == name)
+                    .count()
+                    > 1;
+            if let ExprKind::Update { shared: field, .. } = &mut self.expressions[*node].kind {
+                *field = shared;
+            }
+        }
+        Ok(())
     }
 
-    /// Collect the names `expression` mentions, the variable an update in it
-    /// updates (empty when it is not a name), and whether it reaches an
-    /// object any other way.
-    fn walk(
-        &self,
-        expression: usize,
-        names: &mut Vec<String>,
-        updated: &mut Option<(String, SourceRange)>,
-        indirect: &mut bool,
-    ) {
+    /// What `expression` can reach, after checking that no two of its
+    /// operands that C leaves unsequenced clash over an updated variable.
+    fn reach(&self, expression: usize) -> Result<Reach, Diagnostic> {
         let node = &self.expressions[expression];
+        let mut reach = Reach::default();
         match &node.kind {
-            | ExprKind::Name(name, ..) => names.push(name.clone()),
+            | ExprKind::Name(name, ..) => reach.names.push(name.clone()),
             | ExprKind::Update { target, .. } => {
-                let name = match &self.expressions[*target].kind {
-                    | ExprKind::Name(name, ..) => name.clone(),
-                    | _ => String::new(),
+                let ExprKind::Name(name, ..) = &self.expressions[*target].kind else {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        node.range,
+                        "in a condition, ++ and -- may update only a variable named directly, \
+                         such as `i--`",
+                    ));
                 };
-                *updated = Some((name, node.range));
-                self.walk(*target, names, updated, indirect);
+                reach.updates.push((name.clone(), expression));
             },
+            // `&v` takes the address of `v` without accessing it (C99
+            // §6.5.3.2p3).
+            | ExprKind::Unary("&", child)
+                if matches!(self.expressions[*child].kind, ExprKind::Name(..)) => {},
             | ExprKind::Unary(operator, child) => {
-                *indirect |= *operator == "*";
-                self.walk(*child, names, updated, indirect);
+                reach = self.reach(*child)?;
+                if *operator == "*" {
+                    reach = self.unsequenced(reach, Reach::opaque(node.range))?;
+                }
             },
-            | ExprKind::Cast(_, child) => self.walk(*child, names, updated, indirect),
-            | ExprKind::Binary(_, left, right) | ExprKind::Comma(left, right) => {
-                self.walk(*left, names, updated, indirect);
-                self.walk(*right, names, updated, indirect);
-            },
-            | ExprKind::Conditional(condition, then, otherwise) => {
-                for operand in [condition, then, otherwise] {
-                    self.walk(*operand, names, updated, indirect);
+            | ExprKind::Cast(_, child) => reach = self.reach(*child)?,
+            | ExprKind::Member { base, arrow, .. } => {
+                reach = self.reach(*base)?;
+                if *arrow {
+                    reach = self.unsequenced(reach, Reach::opaque(node.range))?;
                 }
             },
             | ExprKind::Index(base, index) => {
-                *indirect = true;
-                self.walk(*base, names, updated, indirect);
-                self.walk(*index, names, updated, indirect);
+                let operands = self.unsequenced(self.reach(*base)?, self.reach(*index)?)?;
+                reach = self.unsequenced(operands, Reach::opaque(node.range))?;
             },
-            | ExprKind::Member { base, arrow, .. } => {
-                *indirect |= *arrow;
-                self.walk(*base, names, updated, indirect);
+            // A sequence point follows the first operand (C99 §6.5.13p4,
+            // §6.5.14p4, §6.5.17p2).
+            | ExprKind::Binary("&&" | "||", left, right) | ExprKind::Comma(left, right) => {
+                reach = self.reach(*left)?;
+                reach.join(self.reach(*right)?);
             },
-            | ExprKind::Call(..) | ExprKind::Library(..) => *indirect = true,
+            | ExprKind::Binary(_, left, right) =>
+                reach = self.unsequenced(self.reach(*left)?, self.reach(*right)?)?,
+            // A sequence point follows the first operand, and only one of
+            // the others is evaluated (C99 §6.5.15p4).
+            | ExprKind::Conditional(condition, then, otherwise) =>
+                for operand in [condition, then, otherwise] {
+                    reach.join(self.reach(*operand)?);
+                },
+            // The arguments are unsequenced with one another, and a sequence
+            // point precedes the call (C99 §6.5.2.2p10).
+            | ExprKind::Call(_, arguments) | ExprKind::Library(_, arguments) => {
+                for argument in arguments {
+                    reach = self.unsequenced(reach, self.reach(*argument)?)?;
+                }
+                reach.join(Reach::opaque(node.range));
+            },
             | ExprKind::Number(..)
             | ExprKind::Real(..)
             | ExprKind::Character(..)
             | ExprKind::Sizeof(..) => {},
         }
+        Ok(reach)
+    }
+
+    /// Join the reach of two operands that no sequence point separates,
+    /// refusing an update in one that the other could also reach.
+    fn unsequenced(&self, mut left: Reach, right: Reach) -> Result<Reach, Diagnostic> {
+        for (updates, other) in [(&left, &right), (&right, &left)] {
+            for (name, node) in &updates.updates {
+                let range = self.expressions[*node].range;
+                if other.names.contains(name) || other.updates.iter().any(|(it, _)| it == name) {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        range,
+                        &format!(
+                            "this condition updates `{name}` and also reads or updates it with no \
+                             sequence point between the two; C99 makes that undefined whenever \
+                             both are evaluated (§6.5p2). A sequence point follows the first \
+                             operand of &&, || and ?: and the left operand of a comma operator"
+                        ),
+                    ));
+                }
+                if other.opaque.is_some() {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        range,
+                        &format!(
+                            "this machine does not track which objects *, [], -> and calls reach, \
+                             so in a condition that updates `{name}` it accepts them only where a \
+                             sequence point separates them from the update: in another operand of \
+                             &&, || or ?:, or of a comma operator, or, for a call, when the \
+                             update is in its arguments"
+                        ),
+                    ));
+                }
+            }
+        }
+        left.join(right);
+        Ok(left)
     }
 
     /// `sizeof unary-expression` or `sizeof (type-name)`: the size in bytes
@@ -912,7 +958,8 @@ impl Parser<'_> {
         let offset = i32::try_from(member.first).map_err(|_| self.error("object too large"))?;
         let ty = declared.decayed();
         let (range, height) = (combined(operand.range, name.range), operand.height + 1);
-        self.node(
+        let effect = operand.effect;
+        let node = self.node(
             ExprKind::Member {
                 base,
                 name: String::from(name.text),
@@ -924,7 +971,9 @@ impl Parser<'_> {
             false,
             range,
             height,
-        )
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
     }
 
     /// `Struct(id)` when structure `id` is complete.
@@ -1060,13 +1109,37 @@ impl Parser<'_> {
                 return Err(Diagnostic::new("unsupported", expression.range, &message));
             }
         }
-        self.node(
+        let effect = self.any_effect(&arguments);
+        let node = self.node(
             ExprKind::Library(library, arguments),
             Type::INT,
             true,
             whole,
             height,
-        )
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
+    }
+
+    /// Whether any of `arguments` contains a `++` or `--`.
+    fn any_effect(&self, arguments: &[usize]) -> bool {
+        arguments
+            .iter()
+            .any(|&argument| self.expressions[argument].effect)
+    }
+
+    /// Emit `operand`, the first operand of `&&`, `||` or `?:` or the left
+    /// operand of a comma operator, which a sequence point ends (C99
+    /// §6.5.13p4, §6.5.14p4, §6.5.15p4, §6.5.17p2), and return its node.
+    fn emit_first(&mut self, operand: usize, operator: &'static str) -> Result<usize, Diagnostic> {
+        let after = self.next_point;
+        self.next_point = SequencePoint::Operand {
+            operator,
+            first: self.expressions[operand].range,
+        };
+        let node = self.emit_expression(operand, false);
+        self.next_point = after;
+        node
     }
 
     /// Emit `expression` (as an lvalue when `address` is set) and return its
@@ -1117,6 +1190,7 @@ impl Parser<'_> {
                 target,
                 delta,
                 prefix,
+                shared,
             } => {
                 let operand = self.emit_expression(target, true)?;
                 let label = if delta > 0 { "++" } else { "--" };
@@ -1125,7 +1199,10 @@ impl Parser<'_> {
                     Op::Increment {
                         delta,
                         prefix,
-                        nested: true,
+                        nested: Some(Nested {
+                            next: self.next_point,
+                            shared,
+                        }),
                         full_expression: false,
                     },
                     range,
@@ -1235,7 +1312,7 @@ impl Parser<'_> {
             // second only when the first leaves the result open (C99
             // §6.5.13p4, §6.5.14p4).
             | ExprKind::Binary(operator @ ("&&" | "||"), lhs, rhs) => {
-                let left = self.emit_expression(lhs, false)?;
+                let left = self.emit_first(lhs, operator)?;
                 let test = self.code.len();
                 self.emit(
                     Op::Test {
@@ -1261,7 +1338,7 @@ impl Parser<'_> {
             // The condition, a test that a sequence point ends, then one
             // operand, converted to the result's type (C99 §6.5.15p4-5).
             | ExprKind::Conditional(condition, then, otherwise) => {
-                let first = self.emit_expression(condition, false)?;
+                let first = self.emit_first(condition, "?:")?;
                 let test = self.code.len();
                 self.emit(
                     Op::Test {
@@ -1302,7 +1379,7 @@ impl Parser<'_> {
             // The left operand, discarded at a sequence point, then the
             // right one, which gives the result (C99 §6.5.17p2).
             | ExprKind::Comma(lhs, rhs) => {
-                let left = self.emit_expression(lhs, false)?;
+                let left = self.emit_first(lhs, ",")?;
                 let comma = self.code.len();
                 self.emit(Op::Comma { discard: true }, range)?;
                 let right = self.emit_expression(rhs, false)?;
@@ -1399,10 +1476,13 @@ impl Parser<'_> {
             | ExprKind::Call(name, arguments) => {
                 let mut children = Vec::new();
                 let mut types = Vec::new();
+                let after = self.next_point;
+                self.next_point = SequencePoint::Call(range);
                 for &argument in &arguments {
                     children.push(self.emit_expression(argument, false)?);
                     types.push(self.expressions[argument].ty);
                 }
+                self.next_point = after;
                 let tree = self.tree(&format!("{name}()"), range, children)?;
                 self.emit_node(Op::Call(name, types), range, tree)?;
                 tree
@@ -1410,6 +1490,8 @@ impl Parser<'_> {
             | ExprKind::Library(library, arguments) => {
                 let mut children = Vec::new();
                 let mut types = Vec::new();
+                let after = self.next_point;
+                self.next_point = SequencePoint::Call(range);
                 for (index, &argument) in arguments.iter().enumerate() {
                     let child = self.emit_expression(argument, false)?;
                     let ty = self.expressions[argument].ty;
@@ -1447,6 +1529,7 @@ impl Parser<'_> {
                     children.push(child);
                     types.push(passed);
                 }
+                self.next_point = after;
                 let tree = self.tree(&format!("{}()", library.name()), range, children)?;
                 self.emit_node(Op::Library(library, types), range, tree)?;
                 tree
@@ -1535,6 +1618,32 @@ pub(super) struct Expr {
     pub effect:        bool,
 }
 
+/// What part of a condition can reach, for `check_update`.
+#[derive(Debug, Default)]
+struct Reach {
+    /// The variables its `++` and `--` update, with the update's node.
+    updates: Vec<(String, usize)>,
+    /// The variables it names, other than as an update's operand.
+    names:   Vec<String>,
+    /// Its first `*`, `[]`, `->` or call, which might reach any object.
+    opaque:  Option<SourceRange>,
+}
+
+impl Reach {
+    fn opaque(range: SourceRange) -> Self {
+        Self {
+            opaque: Some(range),
+            ..Self::default()
+        }
+    }
+
+    fn join(&mut self, other: Self) {
+        self.updates.extend(other.updates);
+        self.names.extend(other.names);
+        self.opaque = self.opaque.or(other.opaque);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum ExprKind {
     /// An integer constant's value, type and spelling.
@@ -1545,11 +1654,13 @@ pub(super) enum ExprKind {
     Character(i128, String),
     /// `sizeof`: the size in bytes of the operand's type, and the type.
     Sizeof(usize, Type),
-    /// `++`/`--` of `target`, inside a condition.
+    /// `++`/`--` of `target`, inside a condition; `shared` when anything
+    /// else in the condition could reach the variable (see `check_update`).
     Update {
         target: usize,
         delta:  i32,
         prefix: bool,
+        shared: bool,
     },
     Name(String, Type, Place),
     /// `base.name` or `base->name`; `offset` is the member's first leaf and

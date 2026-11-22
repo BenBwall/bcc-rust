@@ -40,9 +40,11 @@ use super::{
         Event,
         EventKind,
         Macro,
+        Nested,
         Op,
         Operand,
         Program,
+        SequencePoint,
         SourceRange,
         Type,
         Undefined,
@@ -423,8 +425,10 @@ impl Topic {
             | Self::Comma =>
                 "The comma operator is mostly seen in for loops: `for (i = 0, j = n - 1; i < j; \
                  i++, j--)` runs two updates where C expects one expression. Not every comma is \
-                 one: the commas between a call's arguments or in a declaration only separate, so \
-                 they give no order and no sequence point.",
+                 one. The commas between a call's arguments only separate them: C fixes no order \
+                 among the arguments and puts no sequence point between them. The commas between \
+                 declarators separate too, but in `int a = 1, b = a + 1;` inside a function each \
+                 initializer is a full expression, evaluated in declarator order, so b is 2.",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -3670,7 +3674,7 @@ impl Machine {
         range: SourceRange,
         source: &str,
         delta: i32,
-        (prefix, nested, full_expression): (bool, bool, bool),
+        (prefix, nested, full_expression): (bool, Option<Nested>, bool),
         target: usize,
         offset: i32,
         current: Value,
@@ -3761,7 +3765,7 @@ impl Machine {
         } else {
             current.clone()
         };
-        let summary = if nested {
+        let summary = if nested.is_some() {
             let which = if prefix { "new" } else { "old" };
             format!(
                 "`{form}` yields {location}'s {which} value, {}, to the condition, and changes \
@@ -3777,7 +3781,7 @@ impl Machine {
         } else {
             format!("`{form}` {verb} {location}, so it changes from {old} to {new}.")
         };
-        if nested {
+        if let Some(Nested { next, shared }) = nested {
             let (which, why) = if prefix {
                 ("new", "a prefix operator yields the value after the update")
             } else {
@@ -3786,12 +3790,42 @@ impl Machine {
                     "a postfix operator yields the value before the update",
                 )
             };
+            // The nearest sequence point after the update (C99 Annex C).
+            let point = match next {
+                | SequencePoint::Condition => String::from("the end of the condition"),
+                | SequencePoint::Operand {
+                    operator: ",",
+                    first,
+                } => format!(
+                    "the end of `{}`, the left operand of a comma operator",
+                    snippet(source, first)
+                ),
+                | SequencePoint::Operand { operator, first } => format!(
+                    "the end of `{}`, the first operand of `{operator}`",
+                    snippet(source, first)
+                ),
+                | SequencePoint::Call(call) => format!(
+                    "the one just before the call `{}`, once its arguments are evaluated",
+                    snippet(source, call)
+                ),
+            };
+            let clash = if shared {
+                format!(
+                    "Every other access in the condition that could reach {location} is separated \
+                     from this update by a sequence point, or is never evaluated with it, so none \
+                     can clash with it."
+                )
+            } else {
+                format!(
+                    "Nothing else in the condition touches {location}, so no other access can \
+                     clash with it."
+                )
+            };
             let _ = write!(
                 text,
                 " As an operand of the condition, `{form}` yields the {which} value, {}: {why}. \
                  The store into {location} is a side effect, which C completes by the next \
-                 sequence point, the end of the condition; this machine makes it now. Nothing \
-                 else in the condition touches {location}, so no other access can clash with it.",
+                 sequence point, {point}; this machine makes it now. {clash}",
                 self.short_value(&yielded)
             );
         } else if full_expression {
@@ -3808,7 +3842,17 @@ impl Machine {
             | (false, false) => clauses::POSTFIX_DECREMENT,
         };
         cited.insert(0, increment);
-        if nested {
+        if let Some(Nested { next, .. }) = nested {
+            match next {
+                | SequencePoint::Condition => {},
+                | SequencePoint::Operand { operator, .. } => cited.push(match operator {
+                    | "&&" => clauses::LOGICAL_AND,
+                    | "||" => clauses::LOGICAL_OR,
+                    | "?:" => clauses::CONDITIONAL,
+                    | _ => clauses::COMMA,
+                }),
+                | SequencePoint::Call(_) => cited.push(clauses::CALL_SEQUENCE_POINT),
+            }
             cited.push(clauses::UNSEQUENCED);
         } else if full_expression {
             cited.push(clauses::FULL_EXPRESSION);
@@ -3826,7 +3870,7 @@ impl Machine {
             ),
             topic,
         );
-        event.sequence_point = !nested && full_expression;
+        event.sequence_point = nested.is_none() && full_expression;
         event.operands.extend([
             Operand::Address {
                 target,
@@ -3837,7 +3881,7 @@ impl Machine {
         ]);
         event.objects.push(target);
         event.result_type = leaf.map(|ty| String::from(ty.spelling()));
-        if nested {
+        if nested.is_some() {
             // The condition uses the yielded value; the object holds the
             // stored one.
             event.operands.push(Operand::Value(stored));
@@ -4542,8 +4586,9 @@ impl Machine {
         let text = format!(
             "`{operator}` evaluates its left operand first and compares it with 0: `{first}` is \
              {shown}, and {counts}. {why} A sequence point follows the left operand, so \
-             everything it did is complete before anything else happens. Unlike `+` or `&`, whose \
-             operands C may evaluate in either order, `{operator}` always goes left to right."
+             everything it did is complete before anything after it is evaluated. Unlike `+` or \
+             `&`, whose operands C may evaluate in either order, `{operator}` always goes left to \
+             right."
         );
         let mut cited = vec![order];
         if settled.is_some() {
@@ -4761,7 +4806,8 @@ impl Machine {
             || String::from("it was evaluated for its side effect"),
             |value| {
                 format!(
-                    "it was evaluated only for its side effects, and its value, {}, is thrown away",
+                    "its value, {}, is thrown away, so only its side effects, if it has any, \
+                     matter",
                     self.short_value(value)
                 )
             },

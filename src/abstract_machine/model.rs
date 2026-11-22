@@ -873,10 +873,11 @@ pub(super) enum Op {
     Increment {
         delta:           i32,
         prefix:          bool,
-        /// Whether the increment is an operand of a larger expression, a
-        /// condition's, which then uses its value; otherwise it is a whole
-        /// expression statement, or an operand of a comma operator there.
-        nested:          bool,
+        /// Set when the increment is an operand of a larger expression, in
+        /// a condition, which then uses its value; `None` when it is a
+        /// whole expression statement, or an operand of a comma operator
+        /// there.
+        nested:          Option<Nested>,
         /// Whether this ends a full expression (C99 §6.8p4): a statement's
         /// increment that is not the left operand of a comma operator.
         full_expression: bool,
@@ -945,6 +946,37 @@ pub(super) enum Op {
     /// function's return type.
     Return(Type),
     Fallthrough,
+}
+
+/// Where a `++` or `--` inside a condition sits: the sequence point that
+/// next follows it, by which C completes its store, and whether anything
+/// else in the condition could reach the object it updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Nested {
+    pub next:   SequencePoint,
+    /// Whether the condition also reads the variable, updates it again, or
+    /// uses `*`, `[]`, `->` or a call that might reach it; `check_update`
+    /// has made sure a sequence point separates each from the update.
+    pub shared: bool,
+}
+
+/// The sequence point that next follows an operand inside a condition.
+///
+/// C99: Annex C paragraph 1, p. 439; PDF p. 451.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SequencePoint {
+    /// The end of the condition, a full expression (C99 §6.8p4).
+    Condition,
+    /// The end of `first`, the first operand of `&&`, `||` or `?:`, or the
+    /// left operand of a comma operator (C99 §6.5.13p4, §6.5.14p4,
+    /// §6.5.15p4, §6.5.17p2).
+    Operand {
+        operator: &'static str,
+        first:    SourceRange,
+    },
+    /// The point just before the call `call`, after its function designator
+    /// and arguments are evaluated (C99 §6.5.2.2p10).
+    Call(SourceRange),
 }
 
 /// A function `<stdio.h>` declares that the machine runs itself.
