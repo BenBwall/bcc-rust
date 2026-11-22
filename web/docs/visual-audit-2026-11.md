@@ -4200,9 +4200,111 @@ warns on neither.
 
 - **A compound assignment and a call** that changes its left operand, as
   in `g += bump()`, runs, reading `g` after the call as GCC and Clang do.
-  C11 §6.5.16.2p3 makes the compound assignment "a single evaluation"
-  with respect to the call, which allows the read before the call too, so
-  the result can depend on an open order; C99 does not settle it. The
-  machine does not stop there as it does for `g + bump()`.
+  Only C99 leaves this open: the read of `g` is an operand of `+`
+  (§6.5.16.2p3), whose order with the call §6.5p3 leaves unspecified, so
+  the read may come before the call too. C11 settles it: §6.5.16.2p3 makes
+  the compound assignment "a single evaluation" with respect to the call,
+  and its store follows `E2`'s value, call included (§6.5.16p3), so the
+  read follows the call as well and the result is fixed. The machine does
+  not stop there as it does for `g + bump()`. (Round 2 makes it stop.)
 - **A member of a call's or an assignment's value**, `f().a` or `(s =
   t).a`, is still outside the subset.
+
+### Review, round 2
+
+The re-check of the branch at `da6231a0c` found the three blockers of round
+1 fixed, and two new ones, both about what the machine says rather than
+what it computes, and one small thing. Its 99 new probe programs (sets
+`q1` to `q7`, with GCC 14's and Clang 23's output beside them) and the 17
+lessons were dumped again before and after the fixes below, together with
+round 1's 453 probes, its 49 corpus programs and its 17 lessons: 635 runs
+in all.
+
+#### 1. A compound assignment's refusal called defined programs undefined
+
+Round 1's refusal of a compound assignment whose right operand updates its
+left operand's variable ended "the read may come before that update with
+no sequence point between them, which C99 makes undefined (§6.5p2)". In
+`x += (0 && x++)`, and in `x += (c ? 1 : x++)` with `c` 1, the update is
+never evaluated, so nothing breaks §6.5p2 and the programs are defined;
+GCC gives 1 and 2. The refusal of `=` already said C99 makes such a clash
+undefined "whenever both are evaluated", and round 1's rewording lost
+that.
+
+**Fixed.** The refusal stays, as a limit of the model, but now says
+"C99 makes that undefined whenever the update is evaluated (§6.5p2)".
+
+#### 2. The limits text said the engine stops where it ran
+
+Round 1's limits text says that when a call and another operand use the
+same object and one of them changes it, "the order can decide the result,
+so the engine stops wherever that could happen rather than choose". But
+`g += bump()`, where `bump` multiplies `g` by 10 and returns 5, ran to 15
+and did not stop. In C99 the compound assignment's read of `g` is an
+operand of `+` (§6.5.16.2p3), and §6.5p3 leaves its order with the call
+open, so the read may come before the call, giving 6, or after it, giving
+15. C11 settles it at 15 (see round 1's "Left for later", corrected
+above).
+
+**Fixed in the engine.** The run-time rule that a store in `E2` is
+unsequenced with the compound assignment's read of `E1` now covers a
+store a call in `E2` makes in its body. Such a run stops at the existing
+open-order stop, whose diagnostic now names the compound assignment's
+read: "the call `bump()` stores into `g`, and `g += bump()` reads it as
+the left operand of its `+` (§6.5.16.2p3); C99 leaves unspecified which
+of the two is evaluated first, and the result can depend on it". The
+limits text names `g += f()` beside `g + f()`. A call that only reads the
+object (`g += get()`), or stores into another one, still runs.
+
+#### 3. Small thing
+
+"What comes next" before leaving a block that ends no lifetimes cited
+§6.8.2p2, the compound statement's paragraph, even for a block without
+braces. It now cites the paragraph the step that entered the block cites:
+§6.8.5p5 for a for statement or a loop body, §6.8.4p3 for an if branch.
+
+#### What changed in the results
+
+- **All 635 runs:** 507 are byte for byte the same.
+- **The refusal's wording (item 1):** 108 refusals change only in that
+  sentence: 17 in `q1`, the 2 defined programs of `q3`, and 89 of round
+  1's probes. No run still says "which C99 makes undefined".
+- **The open-order stop (item 2):** 20 programs that ran now stop there,
+  and every earlier step of each is unchanged. They are `q4`'s `g +=
+  bump()`, `*p += bump()`, `g -= setg(5)`, `gs.a += bumps()`, `x +=
+  wr(&x)`, `g += (bump(), 1)`, `g += id(bump())` and `g *= bump()`;
+  round 1's `c19` and `g09`; and its ten `d_*_callbody` probes, one per
+  compound operator. `q4`'s `g = g + bump()` and `g += bump() + g`
+  stopped before and still do, and `g += readg()`, whose call only reads `g`,
+  still runs.
+- **"What comes next" (item 3):** the dumps record its text, which is
+  unchanged, but not its citation. A separate pass over all 635 runs
+  found 143 "leave the block" lines. The 75 at a closing brace still cite
+  §6.8.2p2. The 68 without braces each cite the paragraph their entry
+  step cites: §6.8.5p5 for 67 of them, §6.8.4p3 for one.
+- **Values, outcomes and step counts:** the same everywhere else,
+  lessons and corpus included.
+
+#### Checks
+
+- **Engine tests:** 140 pass, and the engine's clippy passes, as
+  `pages.yml` runs them. The compound-assignment test now checks the
+  refusal's caveat on both defined programs, the open-order stop for `g
+  += bump()` and `*p += (bump(), 1)`, and that `g += get()` and a call
+  that stores into another object still run; the review-fixes test checks
+  the citations of "what comes next" before leaving a loop body and an if
+  branch without braces.
+- **Site:** as `pages.yml` runs them, the site's tests (164, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs pass; the worker run prints the engine's existing
+  unfulfilled lint expectation in `src/abstract_machine/parser.rs`, as
+  before. CI builds the site; I did not build it locally.
+- **Formatting:** `cargo +nightly fmt --check` passes, and `git diff
+  --check` is clean.
+- **C11:** the reading in round 1's corrected "Left for later" was checked
+  against N1570 §6.5.16.2p3 (pp. 103-104; PDF pp. 121-122), §6.5.16p3
+  (p. 101; PDF p. 119) and §6.5.2.2p10 (p. 82; PDF p. 100).
+- **Browser:** not rerun. The page code is unchanged apart from the
+  example in one sentence of the limits text; the new wording reaches the
+  page through the engine's diagnostics and notes, which the dumps above
+  cover.
