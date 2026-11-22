@@ -252,6 +252,21 @@ impl Program {
         &self.enumerations
     }
 
+    /// The label a `goto` written at `goto` jumps to, `again:`, for the
+    /// steps that range covers: the blocks the goto leaves, and its jump.
+    #[must_use]
+    pub fn goto_label(&self, goto: SourceRange) -> Option<SourceRange> {
+        self.functions.iter().find_map(|function| {
+            function
+                .code
+                .iter()
+                .find_map(|instruction| match &instruction.op {
+                    | model::Op::Goto(jump) if instruction.range == goto => Some(jump.at),
+                    | _ => None,
+                })
+        })
+    }
+
     /// The name of function `function`, in definition order.
     #[must_use]
     pub fn function_name(&self, function: usize) -> Option<&str> {

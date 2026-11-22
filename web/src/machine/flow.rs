@@ -128,6 +128,7 @@ pub(super) fn flow(
         | EventKind::LibraryCall => chips.library_call(event, written),
         | EventKind::Directive => directive(event, program),
         | EventKind::Enumeration => enumeration(event, program),
+        | EventKind::Jump => goto(event, program),
         | EventKind::Return => vec![
             operand(first),
             Some(arrow(if exited { "exit status" } else { "returned" })),
@@ -135,6 +136,24 @@ pub(super) fn flow(
         | _ => Vec::new(),
     };
     parts.into_iter().flatten().collect()
+}
+
+/// A goto's jump: the goto, and the label it jumps to, with its line.
+/// Other jumps draw nothing.
+fn goto(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
+    let Some(label) = program.goto_label(event.range) else {
+        return Vec::new();
+    };
+    let source = program.source();
+    vec![
+        source
+            .get(event.range.start..event.range.end)
+            .map(|text| part("label", text.trim_end_matches(';'))),
+        Some(arrow("jumps to")),
+        source
+            .get(label.start..label.end)
+            .map(|text| part("value", &format!("{text} line {}", label.line))),
+    ]
 }
 
 /// A directive the machine ran in translation phase 4: `#include

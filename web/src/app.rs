@@ -1243,6 +1243,7 @@ impl State {
                 execution.push(boxed(next, "exec-next", 2));
             }
             objects.extend(function_marks(snapshot));
+            objects.extend(goto_mark(snapshot));
             self.source.with(|source| {
                 let names: Vec<&str> = snapshot
                     .objects
@@ -1722,6 +1723,33 @@ fn function_marks(snapshot: &Snapshot) -> Vec<Decoration> {
             }
         })
         .collect()
+}
+
+/// The listing's arrow for a jump: while a `goto` leaves blocks and
+/// jumps, its label is marked, with where the goto is written before it
+/// (`goto, line 7 →`), so the jump reads from the goto to its target.
+fn goto_mark(snapshot: &Snapshot) -> Option<Decoration> {
+    let label = snapshot.event.label?;
+    let from = snapshot.event.range?.start.line;
+    let direction = if from > label.start.line {
+        "back"
+    } else {
+        "ahead"
+    };
+    Some(Decoration {
+        start_line: label.start.line,
+        start_column: label.start.column,
+        end_line: label.end.line,
+        end_column: label.end.column,
+        inline_class: Some("jump-target".to_owned()),
+        hover: Some(format!(
+            "The goto on line {from} jumps {direction} to this label"
+        )),
+        before: Some(format!("goto, line {from} →")),
+        before_class: Some("jump-label".to_owned()),
+        z_index: 4,
+        ..Decoration::default()
+    })
 }
 
 fn boxed(range: Range, class: &str, z_index: i32) -> Decoration {

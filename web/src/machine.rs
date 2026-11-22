@@ -289,6 +289,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             range:          location,
             encoding:       None,
             conversion:     None,
+            label:          None,
             objects:        Vec::new(),
             sequence_point: false,
         },
@@ -354,6 +355,7 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             sequence_point: false,
             encoding: None,
             conversion: None,
+            label: None,
         },
         tree: None,
         stack: Vec::new(),
@@ -422,6 +424,9 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             sequence_point: event.sequence_point,
             encoding:       encoding(event),
             conversion:     conversion(event),
+            label:          program
+                .goto_label(event.range)
+                .and_then(|label| range(label, source)),
         },
         tree:         state
             .evaluation
@@ -914,9 +919,9 @@ mod tests {
         );
 
         for source in [
-            "int main(void) { do {} while (0); return 0; }\n",
-            "/*\n#define X 1\n*/\nint main(void) { do {} while (0); return 0; }\n",
-            "// a line \\\n#define X 1\nint main(void) { do {} while (0); return 0; }\n",
+            "int main(void) { int v[2][2]; return 0; }\n",
+            "/*\n#define X 1\n*/\nint main(void) { int v[2][2]; return 0; }\n",
+            "// a line \\\n#define X 1\nint main(void) { int v[2][2]; return 0; }\n",
             "int a = 1 & 2; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
             "int a = 1 & 2 /* a\n*/ #define\n;",
         ] {
@@ -1482,7 +1487,7 @@ mod tests {
             Err("Load a program before stepping.".into())
         );
         for source in [
-            "int main(void) { do {} while (0); return 0; }",
+            "int main(void) { int v[2][2]; return 0; }",
             "int main(void) { return later(); } int later(void) { return 7; }",
         ] {
             let rejected = machine.load(source.to_owned());
