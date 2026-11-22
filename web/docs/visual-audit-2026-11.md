@@ -4016,3 +4016,193 @@ and the [WebAssembly view](screenshots/part14/lesson-strings-wasm-1366-dark-afte
 - **The lessons' opening comments** still take a line of up to 75 columns,
   which wraps into a second row in the listing; only trailing comments were
   moved.
+
+### Review, round 1
+
+The review of the branch at `5970b2dc9` found three blockers, two of them
+false statements about C and one a hole in the sequencing check, and six
+small things. Its 161 probe programs (in its scratch directory, with every
+step of each dumped) are the base for the checks below, with 292 more of
+my own: 270 that put each of the ten compound assignment operators against
+an update of its left operand hidden behind a comma, `&&`, `||`, `?:`, a
+call's argument, a nested assignment or a pointer alias, with the defined
+neighbours of each, and 22 for the member stores of the third blocker.
+Every program the engine runs was compiled with GCC 14 (`-std=c99 -Wall
+-Wsequence-point`) and run; GCC's `-Wsequence-point` and Clang 23's
+`-Wunsequenced` were read as hints only.
+
+#### 1. A compound assignment ran undefined programs
+
+`x += (x++, 5)` ran and returned 7, as did `x += (x++ && 1)`, `x -= x++ ?
+1 : 2`, `x += id(x++)` and, through a pointer, `*p += (x++, 5)` with `p ==
+&x`. C99 §6.5.16.2p3 (p. 93, PDF p. 105) makes `E1 op= E2` the same as
+`E1 = E1 op (E2)` except that the lvalue `E1` is evaluated once, so the
+compound assignment's read of `E1` is an operand of `op`, and §6.5p3
+leaves the order of `op`'s operands unspecified: the read may come before
+`E2` starts, with the `x++` and no sequence point between them, which
+§6.5p2 makes undefined. The comma inside `E2` orders only `E2`'s own
+parts. The machine took the read as part of the operator, after `E2`, so
+the sequence point seemed to order the update before it; its own step
+said `x += (x++, 5)` means `x = x + ((x++, 5))`, which it refused.
+
+**Fixed, in both checks.** The check over names refuses a compound
+assignment whose right operand updates the variable on its left by name,
+behind a sequence point or not: "this += reads `x` and its right operand
+updates `x`: `E1 += E2` means `E1 = E1 + (E2)` with E1 evaluated once
+(§6.5.16.2p3), and C99 leaves the order of +'s operands unspecified
+(§6.5p3), so the read may come before that update with no sequence point
+between them, which C99 makes undefined (§6.5p2)". The run-time check
+treats a store inside a compound assignment's right operand as
+unsequenced with the compound assignment's own access, whatever sequence
+points lie between, so `*p += (x++, 5)` with `p == &x` stops at the
+compound assignment as "Undefined behavior: unsequenced accesses". What
+stays defined still runs: a sequence point inside the left operand
+(`*(x++, &x) += 1`, 14 in the probe), an update of another object
+(`x += (y++, 2)`, `*p += id(y++)`), a read of the left operand's object
+on the right (`x *= (x, 3)`, `x += id(x)`), and a call that touches the
+object only in its body (`g += bump()`, 11 as GCC, Clang and tcc give;
+see "Left for later"). `++` and `--` are unaffected: their operand is the
+object itself.
+
+Of my 270 compound probes, the 80 that update the variable by name are
+refused (70 of them ran before), the 100 that reach it through a pointer,
+subscript or member stop as undefined (all 100 ran before), and the 90
+defined ones run to GCC's output and exit status. GCC warns on all 80 by
+name and on 30 of the 100 by alias; it warns on none of the 90.
+
+#### 2. The open-order stop said the order changes the result
+
+The stop for a call and another operand that share an object said "the
+two orders give different results here", its diagnostic "the result
+depends on it", and the limits text "the order decides the result". For
+`inc() + inc()` both orders give 3, and `printf("a") + printf("a")` prints
+`aa` either way. C99 leaves the order unspecified (§6.5p3; §6.5.2.2p10,
+p. 72, PDF p. 84), and the machine cannot cheaply tell whether the two
+orders agree, so stopping stays the teaching choice; the claim was what
+was wrong.
+
+**Fixed.** The title is "Stopped: the result can depend on an open order";
+the lead says "A compiler may run the call before or after the other
+operand, and the result can depend on which runs first, so the machine
+stops rather than pick one"; the diagnostic says "the result can depend on
+it, so compilers may differ"; and the limits text says "the order can
+decide the result, so the engine stops wherever that could happen rather
+than choose". The stop still calls the order unspecified, not undefined.
+
+#### 3. A defined member store was called undefined
+
+`s.a = (s = t, 5)` was refused before its first step: "this expression
+updates `s` and also reads or updates it with no sequence point between
+the two; C99 makes that undefined". The machine runs the same shape with
+plain variables, `i = (i = 3, i + 10)`, and with a member on both sides.
+
+What C99 says: §6.5p2 lets an object be modified at most once between two
+sequence points. `s = t` modifies `s`, and so `s.a`, before the comma's
+sequence point; the outer assignment modifies `s.a` after it, since its
+store (§6.5.16p3, p. 91, PDF p. 103) cannot come before the value it
+stores, which exists only once the comma has completed. The left operand
+`s.a` designates a member of `s` without reading it (§6.5.2.3p3, p. 73,
+PDF p. 85). That is the reading the machine already takes for `i = (i++,
+i + 10)`, and C11 states it outright: the store "is sequenced after the
+value computations of the left and right operands" (C11 §6.5.16p3, p.
+101, PDF p. 119). So the member form is defined exactly when the scalar
+form is.
+
+**Fixed.** The check over names treats an assignment to `s.m`, `s.in.m`
+and so on as it treats one to `s`: an update of `s` that the right operand
+completes at a sequence point of its own comes before the store, while
+one with no sequence point between is still refused, as is the same
+update under a compound assignment (`s.a += (s = t, 5)`, by item 1) or
+beside a read (`s.a = (s = t, 5) + s.a`). `s.a = (s = t, 5)` now runs to
+GCC's 54, and so do five refused variants (a nested member, a call's
+argument, `&&`, `?:`, and a read of `s.a` after the comma); `ps->a = (s =
+t, 5)` and `s.in.a = (s.in = t.in, 6)` ran already. GCC 14 prints "may be
+undefined" for these struct forms but not for the scalar ones; Clang 23
+warns on neither.
+
+#### 4. Smaller things
+
+- **`(s = t).a`** was refused as if it stored into an assignment's value.
+  It reads a member of a non-lvalue structure, which C allows
+  (§6.5.2.3p3). The refusal now says what is missing: "a member of an
+  assignment's value, as in (s = t).a, is outside this subset; assign
+  first, then read the member of the structure assigned to", and the
+  limits text excepts it from "anywhere in an expression".
+- **An initializer list's open order** named `g` in `int a[2] = {inc(),
+  g};` "another operand" and cited §6.5p3. It now says "another
+  initializer", and the stop cites §6.7.8p23 (p. 128, PDF p. 140): "The
+  order in which any side effects occur among the initialization list
+  expressions is unspecified".
+- **Output before the stop.** The open-order stop is found once both
+  calls have run, so `printf("a") + printf("a")` shows `a` first. Its
+  explanation now says so: "It finds the clash only once both have run,
+  so what the first of them did, such as printing, has already happened
+  here."
+- **The new lesson's comments** read "*p++ reads a char and moves p on"
+  (the side effect of `p++` may come before the read, so "then" was
+  wrong) and "Copy, including the '\0'". Line numbers are unchanged; the
+  lesson's module was rebuilt with wasi-sdk 34, which first reproduced
+  every committed module byte for byte, and only `strings.wasm` changed.
+- **A block without braces** was narrated as "a { … } compound statement".
+  A loop body, an if branch or a for statement is a block whether or not
+  braces are written (§6.8.4p3, p. 133, PDF p. 145; §6.8.5p5, p. 135, PDF
+  p. 147), and the step now says so: "Execution enters a block with no
+  braces: a loop body is a block of its own, a new scope", citing the
+  paragraph. A for statement's objects begin their lifetime "as the for
+  statement begins" rather than "at this brace".
+- **A quote over several lines** kept its line break and indentation, as
+  in step 148 of the new lesson. Quoted code now reads as one line, as
+  "what comes next" already did.
+
+#### What changed in the results
+
+- **The review's 161 probes:** 126 are byte for byte the same. Ten change
+  outcome as item 1 means: `p4/f06` and `p5/g01`, `g03` to `g06` and `g10`
+  are refused, and `p5/g02`, `g07` and `g08` stop as undefined. Two run
+  that were refused (item 3): `p4/f04` and `p2/d10`, both 54 as GCC
+  gives. Three refusals of `(s = t).a` change wording (`p2/u09b`,
+  `u09d`, `p4/f08`). The 13 open-order stops change wording (item 2;
+  `x47` now names an initializer and cites §6.7.8p23). Seven change only
+  in the narration of item 4 (braceless blocks and one-line quotes).
+- **The corpus:** every program has the same outcome and step count.
+  [`corpus/results-part14-after.txt`](corpus/results-part14-after.txt)
+  changes only in the wording of `o01` and `o02`; eight programs' steps
+  change only in the narration of item 4 (braceless blocks, and in `p04` a
+  for statement's lifetime sentence).
+- **The lessons:** every lesson has the same steps, values and outcome.
+  Eight lessons' notes change, and only these: the new lesson's eight
+  braceless blocks and its `printf` quote; the `printf` quote spread over
+  lines in the bits and logic lessons; and a for statement's lifetime
+  sentence in the constants, floating point, objects, overflow and
+  unsigned lessons.
+- **"What comes next"** named the step that followed in every step of
+  every probe, corpus program and lesson.
+
+#### Checks
+
+- **Engine tests:** 140 pass (three new: compound reads against the right
+  operand, member stores after a sequenced update, and the small fixes;
+  the open-order test now checks the reworded stop, `inc() + inc()` and
+  the initializer list), and the engine's clippy passes, as `pages.yml`
+  runs them.
+- **Site:** as `pages.yml` runs them, the site's tests (164, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs pass; the worker run prints the engine's existing
+  unfulfilled lint expectation in `src/abstract_machine/parser.rs`, as
+  before. CI builds the site; I did not build it locally.
+- **Formatting:** `rustfmt +nightly --check` passes for every engine file,
+  and `git diff --check` is clean.
+- **Browser:** not rerun. The page code is unchanged apart from two
+  sentences of the limits text; the new wording reaches the page through
+  the engine's notes, which the dumps above cover.
+
+#### Left for later
+
+- **A compound assignment and a call** that changes its left operand, as
+  in `g += bump()`, runs, reading `g` after the call as GCC and Clang do.
+  C11 §6.5.16.2p3 makes the compound assignment "a single evaluation"
+  with respect to the call, which allows the read before the call too, so
+  the result can depend on an open order; C99 does not settle it. The
+  machine does not stop there as it does for `g + bump()`.
+- **A member of a call's or an assignment's value**, `f().a` or `(s =
+  t).a`, is still outside the subset.
