@@ -878,9 +878,8 @@ fn a_return_ends_only_the_automatic_objects_of_its_frame() {
     .expect("sum returns")
     .event;
     assert!(
-        many.summary.ends_with(
-            "the frame of sum ends: its parameters and automatic locals cease to exist."
-        ),
+        many.summary
+            .ends_with("the frame of sum ends: its parameters cease to exist."),
         "{}",
         many.summary
     );
@@ -5907,6 +5906,45 @@ fn the_limits_the_site_states_hold() {
     ] {
         let _diagnostic = compile(source).expect_err(source);
     }
+}
+
+// C99 §6.2.4p5: a return ends the frame's objects; its lead names them
+// by kind, and a shadowed name once, with how many objects it names.
+#[test]
+fn a_return_names_the_objects_it_ends_once_each() {
+    let summary = |source: &str| {
+        let states = stepped(source);
+        step(&states, EventKind::Return, "Return 1 from f")
+            .event
+            .summary
+            .clone()
+    };
+    assert!(
+        summary("int f(int x) { { int x = 1; return x; } } int main(void) { return f(1); }")
+            .ends_with("the frame of f ends: the two objects named `x` cease to exist."),
+        "shadowed names are not repeated"
+    );
+    assert!(
+        summary(
+            "int f(int a, int b, int c, int d) { return a; } int main(void) { return f(1, 2, 3, \
+             4); }"
+        )
+        .ends_with("its parameters cease to exist.")
+    );
+    assert!(
+        summary(
+            "int f(void) { int a = 1; int b = 2; int c = 3; int d = 4; return a; } int main(void) \
+             { return f(); }"
+        )
+        .ends_with("its automatic locals cease to exist.")
+    );
+    assert!(
+        summary(
+            "int f(int a, int b) { int c = 1; int d = 2; return c; } int main(void) { return f(1, \
+             2); }"
+        )
+        .ends_with("its parameters and automatic locals cease to exist.")
+    );
 }
 
 // C99 §6.5.2.4p2, §6.5p2: `*s++` reads the element `s` points to and

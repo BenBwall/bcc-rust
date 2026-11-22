@@ -5305,14 +5305,20 @@ impl Machine {
         } else if let Some(call) = call {
             // Only the frame's objects, those of automatic storage duration,
             // end here; a static local lives on (C99 §6.2.4p3, p4-5).
+            let parameters = ended
+                .iter()
+                .filter(|&&id| self.state.objects[id - 1].parameter)
+                .count();
+            let kinds = match (parameters, ended.len() - parameters) {
+                | (_, 0) => "its parameters",
+                | (0, _) => "its automatic locals",
+                | _ => "its parameters and automatic locals",
+            };
             let frame = match ended.len() {
                 | 0 => format!("the frame of {function} ends"),
                 | 1 => format!("the frame of {function} ends: {names} ceases to exist"),
                 | 2 | 3 => format!("the frame of {function} ends: {names} cease to exist"),
-                | _ => format!(
-                    "the frame of {function} ends: its parameters and automatic locals cease to \
-                     exist"
-                ),
+                | _ => format!("the frame of {function} ends: {kinds} cease to exist"),
             };
             format!("The return hands {shown} back as the value of `{call}`, and {frame}.")
         } else {
@@ -5533,16 +5539,34 @@ impl Machine {
     }
 
     fn names(&self, ids: &[usize]) -> String {
+        // A name that shadows another names two objects at once, as when a
+        // return ends a parameter `x` and a block's `x`: each name is listed
+        // once, with how many objects it names.
+        let mut distinct: Vec<(&str, usize)> = Vec::new();
+        for &id in ids {
+            let name = self.state.objects[id - 1].name.as_str();
+            match distinct.iter_mut().find(|(seen, _)| *seen == name) {
+                | Some((_, count)) => *count += 1,
+                | None => distinct.push((name, 1)),
+            }
+        }
         let mut text = String::new();
-        for (index, id) in ids.iter().enumerate() {
+        for (index, (name, count)) in distinct.iter().enumerate() {
             if index > 0 {
-                text.push_str(if index + 1 == ids.len() {
+                text.push_str(if index + 1 == distinct.len() {
                     " and "
                 } else {
                     ", "
                 });
             }
-            let _ = write!(text, "`{}`", self.state.objects[id - 1].name);
+            match count {
+                | 1 => {
+                    let _ = write!(text, "`{name}`");
+                },
+                | _ => {
+                    let _ = write!(text, "the {} objects named `{name}`", count_word(*count));
+                },
+            }
         }
         text
     }
@@ -6079,6 +6103,16 @@ fn completion_clauses(nested: Nested) -> Vec<Clause> {
     }
     cited.push(clauses::UNSEQUENCED);
     cited
+}
+
+/// A small count in words: "two", "three"; larger ones in digits.
+fn count_word(count: usize) -> String {
+    match count {
+        | 2 => String::from("two"),
+        | 3 => String::from("three"),
+        | 4 => String::from("four"),
+        | _ => count.to_string(),
+    }
 }
 
 fn snippet(source: &str, range: SourceRange) -> &str {
