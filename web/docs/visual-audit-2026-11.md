@@ -5441,7 +5441,424 @@ t;` in two blocks.
   `e05_fallthrough.c` reaches "Run on past `case LOW:`" at step 16
   ([`review1-fallthrough-1440-light`](screenshots/part16/review1-fallthrough-1440-light.png)).
   The final break's note says nothing follows it and names no later label,
-  `c`'s declaration reads "C promises only that its type can represent its
-  constants' values, so at least 0 to 6", and the limits text reads "a typedef of any of these
-  types but a const one". No sideways scroll, console error or warning, or
-  running animation.
+  `c`'s declaration reads round 1's "C promises only that it holds the
+  values of its constants, 0 to 6", and the limits text reads "a typedef of
+  any of these types but a const one". No sideways scroll, console error or
+  warning, or running animation. Round 2's wording, "C promises only that
+  its type can represent its constants' values, so at least 0 to 6", was not
+  in that build; Part 17 checked it in the browser on the deployed site
+  (`main` at `6ccc7d72a`, 1440x900 light).
+
+## Part 17: do, continue, goto, hidden names and pointers returned (2026-11)
+
+Part 16 left the rest of C's control flow refused before a program's first
+step: `do`, `continue` and `goto`, and a case label anywhere but directly in
+a switch's block, which Duff's device needs. It also left a function that
+returns a pointer to an object refused, and a use of a name that another
+object shares explained no differently from any other use. This part runs
+all of them and explains each step in the notes' usual order (what happened
+to memory and values, the rule of C99, why it matters, what comes next). A
+jump is where the abstract machine's rules for objects show most: leaving a
+block ends its objects' lifetimes, entering one begins them, and a jump that
+passes a declaration passes its initializer. The work is on
+`agent/machine-subset-5`.
+
+### Method
+
+- **The corpus.** Thirteen programs join the 72 of Parts 13 to 16 in
+  [`corpus/`](corpus/): three loops (`j01` a `do` that counts the digits of
+  0, so its body runs once before any test, `j02` a `continue` in a `for`,
+  `j03` one in a `do`), three gotos (`j04` out of two nested loops, `j05` to
+  one cleanup point per function, `j06` back over a declaration), two
+  switches with labels inside the body (`j07` Duff's device, `j08` a label in
+  a block that declares an object), a name an inner block hides (`m01`), two
+  functions that return pointers to objects (`q01` to an element of a static
+  array, `q02` to one of its arguments), an undefined program (`u07` uses a
+  pointer to a returned function's local) and one that stops at an
+  indeterminate read (`x01` reads an object whose initializer a goto jumped
+  past; a new prefix, since the machine stops there without calling the
+  read undefined, as it does for any indeterminate read).
+  [`corpus/results-part17-before.txt`](corpus/results-part17-before.txt) and
+  [`corpus/results-part17-after.txt`](corpus/results-part17-after.txt) are
+  the engine's results on `main` and on this branch.
+- **The probes.** 65 programs of my own: 41 for `do`, `continue`, `goto`,
+  nested labels, hidden names and pointer returns, then 24 adversarial ones
+  (a goto two blocks deep, out of a switch, back into a loop's body from
+  after the loop, to a label that runs on into case labels, in a recursive
+  function; `continue` in a `do` inside a `for`; a case label on a loop and a
+  default inside an `if`; three levels of hidden names and a body's `i`
+  hiding its `for`'s; `*f() += 40`, `f()[0]`, `f()->x`; a pointer to a
+  parameter or to a block's object returned). As a regression set, the 668
+  programs Part 16's reviews kept (Part 16's corpus and probes, its review
+  probes, the 299 of Part 15's reviews and the lessons) and today's 17
+  lessons and 72 corpus programs: 757 in all. A throwaway engine test dumped
+  every step of each (title, lead, explanation, note, citations, what comes
+  next, whether a sequence point follows) on `main` and on the branch, and
+  every program was compiled with GCC 14 (`gcc -B …/gcc14… -std=c99
+  -pedantic -O0`) and run.
+- **The builds.** The before build is the deployed site,
+  <https://bcc.benbwall.com/>, which is `main` at `6ccc7d72a` (Part 16
+  merged). This machine had 9 GB of disk free, less than a site build needs
+  while keeping 8 GB spare, so the after build is the one CI made for this
+  branch's pull request (`sh build.sh`, the release build the site deploys),
+  downloaded as its Pages artifact and served locally: CI's build of
+  `028975772`, the branch's head before this document and the screenshots,
+  which change no code.
+- **The browser.** Playwright drove Chromium with reduced motion, one browser
+  at a time, at 1440x900, 1366x768, 1024x768 and 390x844 in both themes, on
+  both builds. Each scene's program was loaded through the page's own Open
+  .c and run with Run edited code, then stepped to its scene, recording the
+  note, the listing's marks, Figure 2's value flow, the cells' text for
+  screen readers, Table 1's rows, the contrast of the new visuals against
+  their composited backgrounds, running animations, sideways scroll and
+  console errors.
+- **The lesson walk.** Part 9's walk, every note of every machine lesson, on
+  both builds at 1440x900 light and 390x844 dark, comparing each note's
+  title, lead, value flow, "why it matters" note and next step.
+
+The screenshots are in [`screenshots/part17/`](screenshots/part17/), named
+`<scene>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours.
+
+### The corpus, before and after
+
+| Construct | Program | Before: where the engine refused it | After |
+| --- | --- | --- | --- |
+| `do` | [`j01_do_digits.c`](corpus/j01_do_digits.c) | 4:5: unsupported statement | runs (28 steps), returns 1 |
+| `continue` in a `for` | [`j02_continue_for.c`](corpus/j02_continue_for.c) | 6:13: unsupported statement | runs (190 steps), returns 35 |
+| `continue` in a `do` | [`j03_continue_do.c`](corpus/j03_continue_do.c) | 4:5: unsupported statement | runs (95 steps), returns 53 |
+| `goto` out of two loops | [`j04_goto_out.c`](corpus/j04_goto_out.c) | 8:17: unsupported statement | runs (203 steps), returns 5 |
+| `goto` to a cleanup point | [`j05_goto_cleanup.c`](corpus/j05_goto_cleanup.c) | 5:9: unsupported statement | runs (52 steps), returns 2 and prints `ok 3`, `bad -2` |
+| `goto` back over a declaration | [`j06_goto_back.c`](corpus/j06_goto_back.c) | 3:6: "use of an undeclared identifier" (the label) | runs (77 steps), returns 4 |
+| Duff's device | [`j07_duff_device.c`](corpus/j07_duff_device.c) | 8:13: unsupported statement (the `do`) | runs (106 steps), returns 15 |
+| A case label in a block | [`j08_case_in_block.c`](corpus/j08_case_in_block.c) | 8:5: "a case or default label nested inside another statement of the switch's body is outside this subset" | runs (23 steps), returns 20 |
+| A hidden name | [`m01_hidden_name.c`](corpus/m01_hidden_name.c) | ran (36 steps), returns 121 | the same, and each use says which `x` it reaches |
+| A pointer to an element returned | [`q01_returns_element.c`](corpus/q01_returns_element.c) | 3:6: "functions return an arithmetic type, an enumeration, a structure or a pointer to a function in this subset" | runs (92 steps), returns 80 |
+| A pointer argument returned | [`q02_returns_argument.c`](corpus/q02_returns_argument.c) | 1:6: the same | runs (39 steps), returns 30 |
+| Undefined: a dangling pointer | [`u07_dangling_return.c`](corpus/u07_dangling_return.c) | 1:6: the same | stops at step 13, the pointer's first use |
+| Stops: a jump past an initializer | [`x01_jump_past_initializer.c`](corpus/x01_jump_past_initializer.c) | 2:5: unsupported statement | stops at step 4, the read of `count`, indeterminate |
+
+On `main` twelve of the thirteen were refused before their first step. On
+the branch the eleven defined programs give GCC 14's output and exit status.
+`u07` stops at its first use of the returned pointer, where GCC's build
+crashes with SIGSEGV; `x01` stops at its read of `count`, which the jump into
+its block left indeterminate (GCC's build returns 253). The 72 programs of
+Parts 13 to 16 give exactly the results of Part 16; the engine's dump of
+every one of their steps is byte for byte the same, except `e05`, whose
+fall-through step now says "no break left the switch" (item 7).
+
+### What changed
+
+#### 1. `do`
+
+`do statement while (expression);` runs, with a braced body or not, and
+`break` and `continue` work in it.
+
+- **The body runs before any test, and a step says so.** The `do` keyword is
+  a step of its own: "do: run the body before any test", led by "A do
+  statement runs its body first and tests `n != 0` only after it, so the
+  body runs at least once", and explained against `while` and `for`, which
+  test before each pass (§6.8.5.2p1, §6.8.5p4). The loop's body is then a
+  block entered on each pass, as a `while`'s is.
+- **The test.** "Condition is true: run the body again" or "Condition is
+  false: leave the loop", citing §6.8.5.2p1. A true test jumps straight back
+  to the body; there is no separate "jump back" step, since nothing else
+  runs between the test and the body.
+- **A note.** New "why it matters" note on C's three loops: while tests
+  before each pass, so its body may never run; do tests after, so its body
+  runs at least once; for puts a loop's start, test and step on one line;
+  break and continue work in all three.
+
+[`do-1440-light`](screenshots/part17/do-1440-light-after.png)
+([before](screenshots/part17/do-1440-light-before.png)),
+[the test](screenshots/part17/dotest-390-dark-after.png).
+
+#### 2. `continue`
+
+`continue;` in a `while`, a `do` or a `for`, inside any blocks, ifs and
+switches of the body.
+
+- **Which lifetimes it ends.** A continue ends the blocks it is in, the
+  loop's body last, each in a step of its own before it jumps, as `break`
+  does (Part 16): "`continue` leaves the block, so `square`, declared inside
+  it, ceases to exist", explained as "The continue leaves this block on its
+  way to the end of the loop's body. With the block left, `square` reaches
+  the end of its lifetime…".
+- **Where it goes.** "continue: end this pass through the body", led by
+  "`continue` skips the rest of this pass through the for loop's body, so
+  control goes to the for statement's third clause, `i++`, and then to the
+  condition" (in a `while`, "goes straight to the condition `i < 6`"; in a
+  `do`, "goes to the test `i < 5` after the body"; in `for (;;)`, "starts the
+  next pass"). The explanation gives §6.8.6.2p2's own reading, a jump to a
+  label just before the body's closing brace, and says how it differs from
+  break. The step after it is the third clause's, or the test's.
+- **What C refuses:** a continue outside a loop, including in a switch that
+  is in no loop, is a constraint violation (§6.8.6.2p1).
+
+[`continue-1366-dark`](screenshots/part17/continue-1366-dark-after.png)
+([before](screenshots/part17/continue-1366-dark-before.png)).
+
+#### 3. `goto` and labels
+
+`goto name;` and `name:` on any statement, forward and backward, out of and
+into blocks.
+
+- **Leaving blocks.** A goto first leaves, one step each, every block it is
+  in that the label is not: "`goto done;` leaves the block that begins on
+  line 4, so `cell`, declared inside it, ceases to exist", and for a for
+  statement's own block "leaves the for statement on line 3, so `row`…".
+  The explanation says the label is not inside that block, and that the goto
+  leaves the blocks one at a time, innermost first.
+- **The jump.** "goto `done`: jump ahead to line 12" (or "jump back"), led by
+  "`goto done;` jumps to the statement labeled `done:` on line 12, later in
+  `main`; execution goes on from there", explained by §6.8.6.1p2 and by a
+  label's function scope (§6.2.1p3), with how many steps before it left
+  blocks.
+- **Entering blocks.** A jump into a block begins the lifetimes of the
+  block's objects, as entering at its brace does (§6.2.4p5), but runs none
+  of their initializers (§6.8p3): "The label is inside the block that begins
+  on line 3, which the jump enters from outside… `count` begins to exist
+  here, indeterminate: the jump passed its declaration, so no initializer
+  ran. C forbids such a jump only into the scope of a variable-length array,
+  which this machine leaves out." The names declared before the label are in
+  scope there, and the step says so; `x01` then stops at its read of
+  `count`.
+- **Passing a declaration in the same block.** Jumping ahead past `int x =
+  4;` brings `x`'s name into scope without its initializer: "The jump passes
+  the declaration of `x` on line 4: … no initializer of that declaration
+  runs, so its value is still indeterminate." Jumping back before a
+  declaration takes the name out of scope while the object lives on, and
+  reaching the declaration again is said as such: "A goto went back over
+  this declaration, so `square` is declared here again: … its initializer
+  stores a value again", or, without an initializer, "its value becomes
+  indeterminate again" (§6.2.4p5). Without that, `j06`'s second pass would
+  have found its object "already declared".
+- **The listing draws the jump.** While a goto leaves blocks and when it
+  jumps, the listing marks its label, `done:`, with a dotted underline, and
+  writes before it where the goto is: `goto, line 8 →`, the idiom the
+  listing uses for `s.apply →`. Figure 2 draws "goto done → jumps to → done:
+  line 12".
+- **What C refuses:** a goto to a label its function does not have
+  (§6.8.6.1p1) and a label repeated in one function (§6.8.1p3), both as
+  constraint violations.
+- **A note** on goto: jumping freely makes code hard to follow, so C
+  programs keep goto for leaving nested loops at once or for one cleanup
+  point; a jump never suspends the rules for objects.
+
+[`goto-1440-light`](screenshots/part17/goto-1440-light-after.png)
+([before](screenshots/part17/goto-1440-light-before.png)), [the
+listing](screenshots/part17/goto-sourcepane-1440-light-after.png), [leaving a
+block](screenshots/part17/gotoleave-sourcepane-1024-dark-after.png),
+[`gotoinside-390-dark`](screenshots/part17/gotoinside-390-dark-after.png)
+([before](screenshots/part17/gotoinside-390-dark-before.png)),
+[`gotoback-1366-light`](screenshots/part17/gotoback-1366-light-after.png).
+
+#### 4. Case labels anywhere in a switch's body
+
+A case or default label may be inside any block or statement of the switch's
+body (§6.8.4.2p2-3), as in Duff's device, where the labels sit inside a `do`.
+The subset refuses them only where C does: outside a switch (§6.8.1p2), and
+inside a nested switch they belong to that switch.
+
+- **The switch's jump enters the blocks around the label.** Its explanation
+  adds what entering does: "The label is inside the block that begins on
+  line 5, which the jump enters from outside… `scale` begins to exist here,
+  indeterminate", so a following `scale = 20;` is fine and a read before it
+  stops.
+- **Falling through to a label first in a block** reads "Execution has
+  entered the block that `default:` begins, and no break left the switch, so
+  execution runs on past the label…", since no statement came before it.
+- **A declaration directly in the switch's block** stays refused, as outside
+  the subset: entering the body would have to create it.
+
+[`duff-1440-dark`](screenshots/part17/duff-1440-dark-after.png)
+([before](screenshots/part17/duff-1440-dark-before.png)),
+[`caseblock-1024-light`](screenshots/part17/caseblock-1024-light-after.png)
+([before](screenshots/part17/caseblock-1024-light-before.png)).
+
+#### 5. Which `x` a use reaches
+
+The tape, the cells and Table 1 already told a hidden name's objects apart
+(`x` and `x #2`). The notes now say which one each use reaches, and why,
+wherever another live object of the call, or the file, has the name:
+
+- **Before the inner declaration:** "The block's own x, declared on line 6,
+  already exists, since entering its block created it, but its name's scope
+  begins only at its declaration, which execution has not reached: until
+  then `x` still means the one declared on line 2" (§6.2.1p7).
+- **After it:** "Another object named x is alive here too, the x declared on
+  line 2. This `x` is the one declared on line 6, in a block inside that
+  one's scope: an inner declaration hides an outer one for the rest of its
+  block, so this use reaches the inner object and not the outer one, which
+  still holds 1" (§6.2.1p4). The other object is "the x declared at file
+  scope, on line 1" or "as a parameter of `f`" where it is one of those.
+- The page writes this `x` as `x #2`, as the tape does; the other is named
+  by its line, so that the two never share a label in one sentence.
+- **A note** on hidden names and GCC's `-Wshadow`.
+- An enumeration constant or a typedef name that hides another name, or is
+  hidden, stays refused as Part 16 left it.
+
+[`hidden-1440-light`](screenshots/part17/hidden-1440-light-after.png)
+([before](screenshots/part17/hidden-1440-light-before.png)), [Table
+1](screenshots/part17/hidden-datasheet-1440-light-after.png).
+
+#### 6. Functions that return pointers to objects
+
+`int *best(void)`, `char *skip(char *s)`, `const char *name(int i)`,
+`struct point *get(void)` and a typedef'd pointer return type all run, as do
+`*f() = 0`, `*f() += 40`, `f()[0]` and `f()->x`. A typedef of an array as a
+return type is refused as the constraint violation it is (§6.7.5.3p1).
+
+- **A dangling result.** When a function returns a pointer to one of its own
+  automatic objects, its return step says so: "`make` returns a pointer to
+  its own `local`, which ends with the call, so the caller receives a
+  dangling pointer", explained by §6.2.4p2: the value of every pointer to an
+  object becomes indeterminate when the object's lifetime ends, and using it,
+  even to store or compare it, is undefined.
+- **The machine stops at the first use,** not at the return: "Undefined
+  behavior: use of a dangling pointer", "The pointer pointed to an object of
+  a call that has returned. When that object's lifetime ended, the pointer's
+  value became indeterminate, and C gives no meaning to using it", citing
+  §6.2.4p2. A statement that only discards the result, `make();`, runs on,
+  since it does not use the value.
+
+[`dangling-1366-light`](screenshots/part17/dangling-1366-light-after.png)
+([before](screenshots/part17/dangling-1366-light-before.png)),
+[the stop](screenshots/part17/danglingfault-390-dark-after.png),
+[`pointerreturn-1024-dark`](screenshots/part17/pointerreturn-1024-dark-after.png).
+
+#### 7. Part 16's nits
+
+- **The next line for a run of labels** says "run on past `case 2: case 3:`
+  into the statements after them", and "after it" for one label.
+- **"No break came"** is now "no break left the switch", true when an inner
+  loop's or switch's break ran.
+- **An unnamed array parameter's refusal**, as in `int first(row);`, points
+  at `row` (2:11), where it pointed at the `)` after it (2:14). An unnamed
+  `const int` parameter's refusal moves the same way.
+- **One constant:** "C does not check that it holds its only constant,
+  ONLY", where it said "one of its constant, ONLY".
+- **The round-1 bullet's browser claim.** Part 16's "Review, round 1" said
+  the browser showed `c`'s declaration reading "C promises only that its type
+  can represent its constants' values, so at least 0 to 6"; the round-1 pass
+  had seen round 1's "C promises only that it holds the values of its
+  constants, 0 to 6". This pass checked round 2's wording in the browser on
+  the deployed site, `main` at `6ccc7d72a`, at 1440x900 light, where it reads
+  as the bullet says
+  ([`enumdeclare-1440-light`](screenshots/part17/enumdeclare-1440-light-before.png)),
+  and the bullet now says which build showed which.
+
+#### 8. "Limits of this model" and the glossary
+
+§3 of "How it works" now lists among what runs: functions that return "a
+pointer to one of these objects or to a function"; and "if and else, while,
+do and for, switch with its case and default labels anywhere in its block,
+break, continue, and goto with the labels it jumps to". Among what does not,
+"do, continue and goto, and a case label nested deeper in a switch's body"
+and "a function that returns any other pointer" are gone, and "a declaration
+directly in a switch's block" is new. The limits test runs a program for
+each new claim and refuses the new counterexamples (a declaration directly
+in a switch's block, a function returning `void *`).
+[`limits-1440-light`](screenshots/part17/limits-1440-light-after.png)
+([before](screenshots/part17/limits-1440-light-before.png)).
+
+The glossary defines goto (§6.8.6.1p2) and continue (§6.8.6.2p2).
+
+#### 9. What did not change
+
+- **No new lesson.** A lesson needs its LLVM IR from `web/pipeline/
+  generate.sh`, which needs a native bcc build with LLVM and at least 14 GB
+  of free disk, and its WebAssembly module from `web/wasm/generate.sh`; this
+  machine had 9 GB, falling to 7.8 GB while another build ran, so neither
+  "Callbacks: passing a function to a function" nor a "Loops three ways"
+  lesson was written. The corpus's `j01` to `j03` show the three loops
+  through Open .c meanwhile.
+- **The lessons' notes.** No lesson uses `do`, `continue`, `goto`, a hidden
+  name or a pointer return, so none of their steps changed (below).
+
+### Checks
+
+- **Correctness against GCC 14.** Every program the engine runs gives GCC
+  14's output and exit status: the 11 new corpus programs that run, and the
+  55 of the 65 probes that run. The undefined ones stop where C
+  leaves the behavior undefined: a use of a returned pointer to a callee's
+  local or parameter (`u07`, and probes that store, compare or dereference
+  it), where GCC's builds crash or happen to return 0; and a read of an
+  object whose initializer a jump passed, or that a jump back made
+  indeterminate again, where GCC's builds return whatever the stack held
+  (253, 254, or the earlier pass's 5). The refused probes are refused for the
+  rule they break, where GCC rejects them too: a goto to a missing label and
+  a repeated label.
+- **Descriptions.** Every step of every probe, corpus program and lesson
+  named, in its "what comes next", the step that followed it; the engine
+  tests check this for every program they run, the nine new ones included.
+- **The notes.** Of the 757 regression programs, 717 have byte-identical
+  dumps, the 17 lessons among them. A script undid this part's intended
+  wording changes in the other 40 (the fall-through lead, "after them", and
+  the single constant) and 32 then equal their `main` dumps. The other eight
+  are explained: two now run (`rv437/s33`, a `continue`, and `s34`, a nested
+  label); three refusals point at the parameter's type (item 7); and three
+  recursions that end at the engine's 8 MB trace limit reach it two to four
+  steps sooner (`r-rv-p1/b17` at 420 of 422, `r-rv-p3/d03` at 477 of 480,
+  `d04` at 496 of 500), since each object now records its block and its
+  declaration's line; their steps before the limit are byte for byte the
+  same. That is the limit, not the programs' behavior. The browser walk
+  compares 1,571 notes of the fifteen machine lessons at each size, 1440x900
+  light and 390x844 dark: none changed in its title, lead, value flow, "why
+  it matters" note or next step, and neither build scrolled sideways or
+  raised a page error. The only intended change to an existing note is
+  Part 16's round-1 bullet in this document (item 7).
+- **The scenes.** At the four sizes in both themes, every scene reached its
+  step on the after build, where the before build refused all but two of the
+  programs (`m01` and `e01`) before their first step. No sideways scroll, no
+  console error or warning, no running animation. The label's mark fits its
+  line at every size, `goto, line 2 →` included at 390x844.
+- **Contrast.** The label's mark, `goto, line 8 →`, measures 14.63:1 at its
+  lowest across sizes and themes, and the label it underlines 16.47:1, both
+  on the listing's black screen; Figure 2's goto chips use the existing chip
+  styles; the notes' text keeps 15.82:1 (light) and 13.34:1 (dark), and
+  Figure 2's legend keeps 5.89:1 for its text and 8.38:1 for its code.
+- **Keyboard, screen readers and motion.** The change adds no control. The
+  label's mark is a decoration of the listing's text, which screen readers
+  read as before; its words, "goto, line 8 →", are also its hover text's
+  subject ("The goto on line 8 jumps ahead to this label"), and the note says
+  the same in words. The new styles have no transition, and every run used
+  reduced motion.
+- **Stack.** The limits test's stack need is unchanged: on the debug test
+  binary it passes at 500 KiB and aborts at 490 KiB, on `main` and on the
+  branch, well under 1 MiB. Labels parse in a loop, one frame for a whole
+  run of them, and the new statements parse through `statement`, whose frame
+  is unchanged.
+- **Tests:** as `pages.yml` runs them, the engine's tests (169: nine new,
+  and three changed: the limits test for what now runs and what stays
+  refused, the switch test whose nested label and `continue` now compile,
+  and the corpus test, which expects an `x` program to stop at its
+  indeterminate read) and its clippy pass, as do the site's tests (173, one
+  new for the goto's mark in the listing and
+  its value flow; one changed its example of an unsupported statement from
+  `do` to an array of arrays; and the prerender's 2), the WebAssembly
+  stepper's (79) and the site's four clippy runs. `cargo +nightly fmt
+  --check` passes for every engine file; in the site's files every changed
+  line is formatted. `git diff --check` is clean.
+
+### Left for later
+
+- **A lesson on callbacks**, and one on the three loops, once a native build
+  with LLVM has room (14 GB of free disk).
+- **The lessons' opening comments**: rewrap them to 36 columns and
+  regenerate the line tables and modules (Part 15's reason stands).
+- **A declaration directly in a switch's block**, which the switch's jump
+  passes: entering the body would begin its lifetime, as entering any other
+  block a jump lands in now does.
+- **`f().m`**, a member of a structure a call returns, still refused; `f()->m`
+  runs.
+- **Hiding a name with a constant or a typedef name**, Part 16's item, stands.
+- **Static pointers to objects**: `static int *p = &x;` (§6.6p9), still
+  refused.
+- **A direct call's conversion**, Part 15's item, stands.
+- **N-f, the listing's label**: draw it outside the line, so a long one
+  cannot wrap a short line; the goto's `goto, line 8 →` is short, but the
+  same idea would serve it.
+- **break's leave steps** still say "The block ends", where continue's and
+  goto's now say which statement leaves the block; changing break's would
+  change Part 16's notes, so it was left out of this part.
