@@ -4308,3 +4308,357 @@ braces. It now cites the paragraph the step that entered the block cites:
   example in one sentence of the limits text; the new wording reaches the
   page through the engine's diagnostics and notes, which the dumps above
   cover.
+
+## Part 15: pointers to functions and constant static initializers (2026-11)
+
+Parts 13 and 14 left two things a beginner meets soon after arrays outside
+the machine: pointers to functions, which every C text uses for callbacks
+and dispatch tables, and a static initializer that computes its value, as in
+`static int mask = 1 << 3;`. This part runs both. A pointer to a function is
+a new kind of value, and the page draws it in its own way everywhere a value
+appears: the tape, the cells, Table 1, Figure 2, and the listing, where an
+arrow from the pointer's name leads to the function it points to. The work is
+on `agent/machine-subset-3`.
+
+### Method
+
+- **The corpus.** Nine programs join the 49 of Parts 13 and 14 in
+  [`corpus/`](corpus/): five more with pointers to functions (`g03` to `g07`:
+  a typedef, a callback, `(*f)(x)`, comparisons with a function and with
+  null, and a static dispatch table), two static initializers that compute
+  (`s01`, `s02`), and two undefined calls (`u04` through a null pointer,
+  `u05` through a pointer cast to the wrong type).
+  [`corpus/results-part15-before.txt`](corpus/results-part15-before.txt) and
+  [`corpus/results-part15-after.txt`](corpus/results-part15-after.txt) are
+  the engine's results on `main` and on this branch.
+- **The probes.** 77 programs of my own: 52 for pointers to
+  functions (24 that run, 7 undefined, 1 indeterminate read and 20 that C or
+  the subset refuses), 20 for constant expressions in static initializers
+  and 5 for the open-order stop's naming; and, as a regression set, the 247
+  probes of Part 14's second and third reviews. A throwaway engine test
+  stepped each to its end, checking every step's "what comes next" against
+  the step that followed, and every program the engine runs was compiled
+  with GCC 14 (`gcc -B …/gcc14… -std=c99`) and run.
+- **The notes.** The same throwaway test dumped every step of every lesson
+  (title, lead, explanation, why it matters, citations, what comes next,
+  whether a sequence point follows) on `main` and on the branch.
+- **The builds.** The before build is the deployed site,
+  <https://bcc.benbwall.com/>, which is `main` at `6fb057ac7` (Part 14
+  merged). The after build is this branch, built once at the end with
+  `web/build.sh` without `--release`: the dev profile at `opt-level=s`, as in
+  Parts 7 to 14.
+- **The browser.** Playwright drove Chromium with reduced motion, one
+  browser at a time, at 1440x900, 1366x768, 1024x768 and 390x844 in both
+  themes, on both builds. Each corpus program was loaded through the page's
+  own Open .c and run with Run edited code, then stepped to its scene,
+  recording the note, the listing's marks, the cells' and Table 1's text
+  for screen readers, Figure 2's outline, the contrast of the new visuals
+  against their composited backgrounds, running animations, sideways scroll
+  and console errors.
+- **The lesson walk.** Part 9's walk, every note of every machine lesson,
+  on both builds at 1440x900 light and 390x844 dark, comparing each note's
+  title, lead, value flow, "why it matters" note and next step.
+
+The screenshots are in [`screenshots/part15/`](screenshots/part15/), named
+`<scene>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours.
+
+### The corpus, before and after
+
+| Construct | Program | Before: where the engine refused it | After |
+| --- | --- | --- | --- |
+| Pointer to a function | [`g01_function_pointer.c`](corpus/g01_function_pointer.c) | 6:9: expected an identifier | runs (18 steps), returns 5 |
+| Table of pointers | [`g02_function_table.c`](corpus/g02_function_table.c) | 10:9: expected an identifier | runs (23 steps), returns 5 |
+| typedef | [`g03_typedef.c`](corpus/g03_typedef.c) | 1:1: expected an arithmetic type or struct | runs (39 steps), returns 25 |
+| Callback | [`g04_callback.c`](corpus/g04_callback.c) | 1:15: expected an identifier | runs (35 steps), returns 40 |
+| `(*f)(x)` and `&f` | [`g05_star_call.c`](corpus/g05_star_call.c) | 6:9: expected an identifier | runs (28 steps), returns 42 |
+| `==` and null | [`g06_compare_null.c`](corpus/g06_compare_null.c) | 6:9: expected an identifier | runs (49 steps), returns 8 |
+| Static table | [`g07_static_table.c`](corpus/g07_static_table.c) | 6:5: expected an identifier | runs (73 steps), returns 0 and prints `11` and `5` |
+| Constant expression | [`s01_mask.c`](corpus/s01_mask.c) | 1:21: "a static object's initializer must be a constant … and no arithmetic on it" | runs (7 steps), returns 9 |
+| Constant expressions in a list | [`s02_computed_table.c`](corpus/s02_computed_table.c) | 1:18: the same | runs (12 steps), returns 6 |
+| Undefined | [`u04_null_call.c`](corpus/u04_null_call.c) | 1:5: expected an identifier | stops at step 6: call through a null pointer |
+| Undefined | [`u05_wrong_type.c`](corpus/u05_wrong_type.c) | 1:1: expected an arithmetic type or struct | stops at step 10: call through the wrong function type |
+
+On `main` all eleven were refused before their first step, by the parser
+for every pointer to a function (it found no name after `(` in `int (*f)(…)`,
+and did not know `typedef`) and by the static initializer's rule for the two
+constant expressions. On the branch the nine defined programs run to GCC
+14's output and exit status, and the two undefined ones stop where the call
+would go wrong. The other 47 programs of Parts 13 and 14 give the same
+results, and the engine's dump of every one of their steps is byte for byte
+the same.
+
+### What changed
+
+#### 1. A pointer to a function is a value of its own
+
+The engine had one kind of pointer, to an object, drawn as an arrow into the
+cells. A pointer to a function points to no object: it records which
+function a call runs. It is now a value kind of its own (`Value::Function`
+in the engine, `function` in the JSON trace, whose schema is now version
+10), with the types that hold one: `int (*f)(int)`, a table `int
+(*ops[2])(int, int)`, a pointer to such a pointer `int (**pp)(int)`, and a
+parameter `int (*f)(int)`. Table 1 and the cells spell the type as C does,
+`int (*)(int)` and `int (*[2])(int, int)`, 8 bytes per pointer.
+
+- **Declaration and typedef.** The declarator grammar takes `(*name)(…)`,
+  `(**name)(…)`, `(*name[N])(…)` and `(*name[])(…)` before a list, in
+  declarations, parameters, prototypes and type names (`(int (*)(int))` in
+  a cast, `sizeof(int (*)(int))`). A file-scope `typedef int (*binop)(int,
+  int);` names the type, and `binop op`, `binop ops[4]` and `binop *p` use
+  it; a typedef declares no object, so it is no step (C99 §6.7.7p3). A
+  parameter written as a function, `int f(int)`, is refused with the
+  pointer it adjusts to (§6.7.5.3p8).
+- **The conversion.** A function's name used as an operand is a step of its
+  own: "`square` becomes a pointer to the function", whose lead says "A
+  function's name used as an operand designates the function, and C
+  converts it to a pointer to it" and whose explanation says why: "A
+  function is code, not an object: it has no value to read and cannot be
+  copied, so wherever its name is an operand, other than after & or sizeof,
+  C converts it to a pointer to the function", naming the function's type
+  and the line that defines it (§6.3.2.1p4). `&square` is one step, "Take
+  the address of the function square", which yields the same pointer
+  without the conversion (§6.5.3.2p3). A call written `square(3)` makes the
+  same conversion; the machine shows it as a step only where the pointer is
+  kept or passed on, so no existing lesson's steps change, and the
+  explanation says so.
+- **The call.** `fp(x)`, `(*fp)(x)`, `ops[i](x)` and `(square)(x)` call
+  through a pointer. The call step is titled "Call square through `fp`
+  (frame #2)", leads with "`fp` yields a pointer to square, so the call runs
+  square in a new frame of its own", and explains how the call finds the
+  function: the expression before the parentheses gave a pointer to the
+  function, the call runs the function it points to exactly as `square(…)`
+  would, in compiled code by jumping to the address where the function's
+  machine code starts, and the pointer's type promised a function of the
+  type the function has, so the arguments convert to its parameters
+  (§6.5.2.2p1, p3). It notes that C leaves the order of evaluating that
+  expression and the arguments open and that the machine evaluates it
+  first (§6.5.2.2p10). `*fp` is a step, "`*fp` designates the function
+  square", that says the designator converts straight back to the same
+  pointer, which is why `(*fp)(…)` and `fp(…)` call the same function
+  (§6.5.3.2p4).
+- **Comparison and null.** `fp == square`, `f != g` and `fp == 0` compare
+  ("Compare pointers to functions: f == square → 1", citing §6.5.9p6), a
+  null pointer to a function counts as false in a condition and a pointer
+  to a function as true, "a pointer to a function, which is never null,
+  counts as true" (§6.3.2.3p3). A static pointer starts null.
+- **What C refuses.** Each is a constraint violation, refused before the
+  first step with what is wrong: storing a pointer to a function of another
+  type ("this is an int (*)(int, int), where an int (*)(int) is needed: a
+  pointer to a function converts only to a pointer to a function of the
+  same type, whose parameters and return type agree", §6.5.16.1p1,
+  §6.7.5.3p15), a call with the wrong number of arguments (§6.5.2.2p2),
+  calling something that is not a pointer to a function (§6.5.2.2p1),
+  arithmetic, ordering, `++` and `--` on one (§6.5.6p2, §6.5.8p2), `==`
+  against a pointer of another type (§6.5.9p2), `sizeof` of a function
+  (§6.5.3.4p1), and assigning to a function's name.
+- **Undefined calls.** A call through a null pointer stops: "Undefined
+  behavior: call through a null pointer", with "A null pointer points to no
+  function, and C defines a call only of a function, so this call has no
+  meaning", citing §6.3.2.3p3. C99 has no sentence that says so; the call
+  is undefined because §6.5.2.2p3 defines a call only of the function its
+  expression denotes, and §4p2 makes behavior undefined where no definition
+  is given, so the stop says "has no meaning" rather than quoting a rule
+  that does not exist. `(*fp)(x)` with `fp` null stops at the `*`, which
+  §6.5.3.2p4 and its footnote 87 make undefined. A call through a pointer
+  that a cast converted to another function type stops as "Undefined
+  behavior: call through the wrong function type", naming both types
+  ("`f` points to add, a function of type int (int, int), but its own type
+  says it points to a function of type int (int)"), citing §6.5.2.2p9; the
+  cast itself is a step that says C lets the pointer be converted and back
+  again unchanged (§6.3.2.3p8), and casting back before the call runs. An
+  uninitialized pointer to a function stops at its read, as any
+  indeterminate read does.
+- **A note.** New "why it matters" note: a pointer to a function lets a
+  program choose at run time which code runs, as a table or a callback such
+  as qsort's does, and its type is a promise that a null or mistyped call
+  breaks.
+
+[`callback-1366-dark`](screenshots/part15/callback-1366-dark-after.png)
+([before](screenshots/part15/callback-1366-dark-before.png)),
+[`nullcall-390-dark`](screenshots/part15/nullcall-390-dark-after.png)
+([before](screenshots/part15/nullcall-390-dark-before.png)),
+[`wrongtype-1024-dark`](screenshots/part15/wrongtype-1024-dark-after.png)
+([before](screenshots/part15/wrongtype-1024-dark-before.png)).
+
+#### 2. The page draws a pointer to a function, and links it to the listing
+
+- **The tape and the cells** write the value as `→square()`: the arrow of a
+  pointer, and the parentheses of a call, since it leads to code. It is set
+  in a colour of its own, the colour of code, with a dotted rule under it in
+  the cells, distinct from the object colours and from the orange of a
+  write, in both themes. A table's cells each hold one.
+- **Table 1** writes the same value, in the same colour, and its title says
+  "Points to the function square, defined on line 5".
+- **Figure 2** writes the value on the wire as `&square`, as `&` and the
+  name would make it, in the colour of code, and the outline screen readers
+  hear reads "square: a pointer to the function square". The call's node
+  takes the pointer as its first input, so the wire from `f` into `f()`
+  shows which function the call will run.
+- **The listing** marks each function a live object points to: its name in
+  its definition is underlined with the same dotted rule, and before it the
+  pointers that lead there are written, `f →` or `ops[0] →` and `ops[1] →`
+  on two functions, with a hover text "ops[1] points to the function sub".
+  A pointer to an object points into the cells; a pointer to a function now
+  points into the code.
+- **Screen readers.** Each cell that holds one is read as "f, int (*)(int),
+  8 bytes: a pointer to the function square, defined on line 5"; the arrow
+  in the listing is drawn by the editor and is not read, so the cell, the
+  table and the outline carry the same facts in words.
+- **The glossary** defines a function designator (§6.3.2.1p4), a pointer to
+  a function (§6.2.5p20) and a constant expression (§6.6p2).
+
+[`table-1440-light`](screenshots/part15/table-1440-light-after.png)
+([before](screenshots/part15/table-1440-light-before.png)); [the
+cells](screenshots/part15/callback-headrow-1440-light-after.png), [a table's
+cells](screenshots/part15/table-headrow-1024-dark-after.png), [Table
+1](screenshots/part15/table-datasheet-1440-light-after.png), [the
+listing](screenshots/part15/callback-sourcepane-1366-light-after.png), [Figure 2 at
+`add`](screenshots/part15/designator-schematic-1024-light-after.png) and [at
+`*f`](screenshots/part15/star-schematic-1366-dark-after.png);
+[`compare-390-light`](screenshots/part15/compare-390-light-after.png)
+([before](screenshots/part15/compare-390-light-before.png)),
+[`table-390-dark`](screenshots/part15/table-390-dark-after.png).
+
+#### 3. Constant expressions in static initializers
+
+`static int mask = 1 << 3;`, `int table[] = { 1+1, 2*2 };`, `double third =
+1.0 / 3;`, `int big = 10 > 3 ? 100 : 200;`, `char c = 'a' + 2;` and a
+static local `static int count = 10 * 10;` run. The engine works each
+initializer out while it compiles the program, by the same rules as the
+running program (§6.6p11): the integer promotions and usual arithmetic
+conversions, unsigned wraparound, casts between arithmetic types, `&&`,
+`||` and `?:` evaluating only what they need. The static object's step says
+what happened: "Its initializer `1 << 3` is a constant expression: the
+compiler works it out while it translates the program, by the same rules
+the running program would use, giving 8. The value is fixed before the
+program starts, and no step of the run computes it", citing §6.6p2, p8 and
+§6.7.8p4, with a new note on why a static initializer must be constant.
+A static table of pointers to functions says that each function's name
+"is an address constant: a function exists before the program starts, so
+a pointer to it is known while the program is translated" (§6.6p9). A
+constant as written, `int n = -5;`, is narrated as before.
+[`mask-1440-dark`](screenshots/part15/mask-1440-dark-after.png)
+([before](screenshots/part15/mask-1440-dark-before.png)).
+
+What is not a constant expression is refused with the reason: a call or an
+assignment (§6.6p3), the comma operator, a read of an object, which C99
+refuses even for a `const` one (§6.6p8; GCC accepts that as an extension,
+which §6.6p10 allows, and the message says so), and a value the type cannot
+hold or that has none, such as `2147483647 + 1`, `1 / 0`, `1 << 40` or `-1
+<< 2` (§6.6p4). GCC 14 compiles the last four with a warning, which is the
+diagnostic the constraint requires; the machine refuses them rather than
+show a value C does not define.
+
+#### 4. The minor findings of Part 14's last review
+
+- **N1.** The open-order stop named the object where the call's access
+  starts, so a callee that assigns a whole structure was said to store into
+  `s.a` when the caller read `s.b`. It now names where the two accesses
+  meet: "the call `f()` stores into `s.b`, and another operand, `s.b`,
+  reads it", and the whole object when both reach all of it ("the call
+  `g()` stores into `s`, and the call `f()` stores into it too"). Of the
+  review's 247 probes (its round-2 and round-3 sets), exactly its three
+  `name` and `m26` probes change, each now naming `s.b`.
+- **N2.** Part 14's round-1 section listed `g += bump()` under what still
+  runs; it now carries the same "(Round 2 makes it stop.)" as its "Left for
+  later".
+
+#### 5. "Limits of this model"
+
+§3 of "How it works" now lists among what runs: static initializers that
+are constant expressions, string literals or the names of functions; and
+pointers to functions, declared directly or with a typedef, kept in
+variables, tables and parameters, called as `fp(x)` or `(*fp)(x)`, compared
+and tested for null. Among what does not: a typedef of anything but a
+pointer to a function; a function that returns a pointer to a function, a
+structure member that points to one, and a pointer to a library function; a
+static pointer initialized to an object's address. The limits test runs a
+program for each new claim, stops on both undefined calls, and refuses each
+new counterexample.
+[`limits-1440-light`](screenshots/part15/limits-1440-light-after.png)
+([before](screenshots/part15/limits-1440-light-before.png)).
+
+#### 6. What did not change
+
+- **The lessons' opening comments** still wrap in the narrow listing. Each
+  is one or two lines of up to 75 columns; rewrapping them to 36 columns
+  adds lines, which moves every later line of the lesson, and with it the
+  lesson's precomputed LLVM IR line tables, its WebAssembly module's line
+  table and the site tests that pin lesson lines. That is not cheap, so it
+  is left for later (below).
+- **No new lesson.** "Callbacks: passing a function to a function" would
+  teach what no lesson does, but its LLVM IR needs a native bcc build with
+  LLVM, which this machine's disk and the build lock did not leave room
+  for beside the site build; the corpus's `g04_callback.c` and
+  `g07_static_table.c` show the same steps through Open .c meanwhile.
+
+### Checks
+
+- **Correctness against GCC 14.** Every program the engine runs gives GCC
+  14's output and exit status: the 24 pointer-to-function probes, the 14
+  constant-expression probes, all 51 corpus programs that run, and the 126
+  of the 247 review probes that run. Every undefined probe stops at the call
+  or `*` that C leaves undefined, with the messages above, where GCC's
+  builds crash with SIGSEGV on the null calls and return arbitrary statuses
+  (203, 0 and 11) on the mistyped ones.
+- **Descriptions.** Every step of every probe, corpus program and lesson
+  named, in its "what comes next", the step that followed it; the engine
+  tests check this for every program they run, the six new ones included.
+- **The notes.** The engine's dump of every lesson is byte for byte the
+  same on `main` and on the branch. The browser walk compares 1,571 notes of
+  the fifteen machine lessons at each size: none changed in its title,
+  lead, value flow, "why it matters" note or next step, at either size, and
+  neither build scrolled sideways or raised a page error. The one intended
+  change a reader can see in an existing lesson is a new glossary link: the
+  words "constant expression" in a static object's explanation now link to
+  the glossary's new entry.
+- **Regressions.** Of the review's 247 probes, 244 have byte-identical
+  dumps; the other three are N1's, which now name `s.b`.
+- **The scenes.** At the four sizes in both themes, every scene reached its
+  step on the after build, where the before build refused the program
+  before its first step. No sideways scroll, no console error or warning,
+  no running animation. The listing marked the function each live pointer
+  leads to wherever that line was on screen (on a phone the listing
+  follows the current line, so the definition is often scrolled away, and
+  the cells carry the same facts).
+- **Contrast.** The function-pointer value measures, at its lowest across
+  sizes and themes, 7.64:1 in the cells, 7.05:1 in Table 1 and on Figure
+  2's wires, 10.73:1 on the tape, and 13.56:1 for the listing's label; the
+  notes' text keeps 15.82:1 (light) and 13.34:1 (dark).
+- **Keyboard, screen readers and motion.** The change adds no control. A
+  cell holding a pointer to a function is read as "f, int (*)(int), 8
+  bytes: a pointer to the function square, defined on line 5", Table 1's
+  value has the same words as its title, and Figure 2's outline reads
+  "f: a pointer to the function square". The new styles have no
+  transition, and every run used reduced motion.
+- **Tests:** as `pages.yml` runs them, the engine's tests (146: six new,
+  and eight updated: the limits and corpus tests for what now runs, three
+  for the JSON schema's version 10, and three whose refusals now run or
+  read differently)
+  and its clippy pass, as do the site's tests (167, three new, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four clippy
+  runs. The worker run no longer prints the unfulfilled lint expectation in
+  `src/abstract_machine/parser.rs`: the type it was on now has a variant of
+  a type's size, so the expectation is gone. `cargo +nightly fmt --check`
+  passes for every engine file; in the site's files every changed line is
+  formatted. `git diff --check` is clean.
+
+### Left for later
+
+- **A lesson on callbacks**, `apply(int (*f)(int), int x)` and a dispatch
+  table, with its LLVM IR from `web/pipeline/generate.sh` and its module
+  from `web/wasm/generate.sh`.
+- **The lessons' opening comments**: rewrap them to 36 columns and
+  regenerate the line tables and modules, as Part 14 did for the trailing
+  comments.
+- **Pointers to functions in more places**: as structure members (a
+  "vtable"), as return values (`int (*pick(int))(int)`), and pointing to
+  the library's functions (`puts`), all refused with a message today; a
+  typedef of other types.
+- **Static pointers to objects**: `static int *p = &x;` and `int *p = a;` at
+  file scope are address constants too (§6.6p9), and are still refused.
+- **A direct call's conversion**: `square(3)` converts `square` to a pointer
+  before calling, which the machine shows only where the pointer is kept or
+  passed on, so a learner sees the conversion only in programs with
+  pointers to functions.
