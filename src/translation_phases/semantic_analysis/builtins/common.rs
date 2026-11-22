@@ -512,16 +512,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// with side effects, which neither Clang nor `cl` evaluates, so the
     /// promise is ignored (`warn_assume_side_effects`, which
     /// `Sema::CheckBuiltinFunctionCall` reports when `Expr::HasSideEffects`
-    /// holds). `cl` says nothing. MSVC extension: Microsoft Learn,
-    /// "__assume".
+    /// holds, [`Self::clang_has_side_effects`]). `cl` says nothing. Clang
+    /// converts the operand to `bool` first, which draws its
+    /// `-Wpointer-bool-conversion` for an address (`BuiltinAssume`).
+    /// MSVC extension: Microsoft Learn, "__assume".
     fn check_assumption(&mut self, operand: &'tu Expression<'tu>) {
         use crate::configuration::{
             CompilerIdentity,
             DiagnosticGroup as G,
+            RuleSet,
         };
-        if self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
-            || !self.has_side_effects(operand)
-        {
+        let identity = self.context.configuration.compiler_identity();
+        if identity.rules() == RuleSet::Clang {
+            self.bool_conversion_nonnull(operand, operand.source_vectors);
+        }
+        if identity == CompilerIdentity::Msvc || !self.clang_has_side_effects(operand, false) {
             return;
         }
         let text = self
@@ -535,6 +540,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             Some(text),
             None,
         );
+    }
+
+    /// Whether the operand of `__assume` or `__builtin_assume` goes
+    /// unevaluated, its promise ignored: under `cl` when it has any side
+    /// effect ([`Self::has_side_effects`]); elsewhere when Clang finds one
+    /// ([`Self::clang_has_side_effects`]), Clang evaluating the others for
+    /// `llvm.assume`, or when evaluating it would run an `asm` statement or
+    /// a variable length array's size, which Clang does.
+    /// MSVC extension: Microsoft Learn, "__assume".
+    pub(in crate::translation_phases::semantic_analysis) fn assumption_ignored(
+        &self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        if self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Msvc
+        {
+            self.has_side_effects(operand)
+        } else {
+            self.clang_has_side_effects(operand, true)
+        }
     }
 
     /// Checks a runtime processor query. Its text must be a string literal

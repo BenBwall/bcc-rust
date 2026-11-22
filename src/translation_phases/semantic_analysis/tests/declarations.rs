@@ -1160,6 +1160,93 @@ fn microsoft_assumptions_with_side_effects_warn_as_clang_does() {
     );
 }
 
+/// `-Wassume` asks Clang's `Expr::HasSideEffects`: a call of a function
+/// declared `const` or `pure`, or of a builtin Clang's tables mark so, has
+/// only its operands' effects; `_Generic` and `__builtin_choose_expr` only
+/// their selected operand's; a statement expression its contents', where an
+/// `asm` statement has none; `sizeof` and `__builtin_offsetof` none; and
+/// `va_arg` one. `__assume(&x)` also draws `-Wpointer-bool-conversion`.
+/// Each line of `quiet` is silent in Clang 23 and each of `loud` warns.
+#[test]
+fn microsoft_assumptions_count_side_effects_as_clang_does() {
+    use crate::configuration::{
+        CompilerIdentity,
+        DiagnosticGroup,
+    };
+    let microsoft = CompilerConfiguration::default()
+        .with_target(crate::target::Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    let declarations = "__attribute__((const)) int fc(int);\n__attribute__((pure)) int \
+                        fp(int);\nint f(void);\nint abs(int);\n__attribute__((const)) int \
+                        (*pointer)(int);\nvolatile int v;\n";
+    let quiet = [
+        "fc(i)",
+        "fp(i)",
+        "(&fc)(i)",
+        "abs(i)",
+        "__builtin_expect(i, 1)",
+        "__builtin_popcount(i)",
+        "__builtin_nan(\"\") != 0",
+        "_Generic(i, int: 1, default: f())",
+        "__builtin_choose_expr(1, i, f())",
+        "({ int t = 1; t; })",
+        "({ __asm__(\"nop\"); 1; })",
+        "sizeof(int[n++]) > 0",
+        "sizeof(v) == 4",
+        "&v != 0",
+        "(i, 1)",
+    ];
+    let loud = [
+        "f()",
+        "fc(f())",
+        "fc(v)",
+        "pointer(i)",
+        "__builtin_popcount(f())",
+        "__builtin_sqrt(1.0) > 0",
+        "_Generic(i, int: f())",
+        "__builtin_choose_expr(0, i, f())",
+        "({ int t = f(); t; })",
+        "v",
+        "i++",
+        "0 ? f() : 1",
+        "__builtin_va_arg(ap, int)",
+    ];
+    let assume = SemanticErrorKind::ValueWarning(DiagnosticGroup::Assume);
+    for (operands, warns) in [(&quiet[..], false), (&loud[..], true)] {
+        for operand in operands {
+            let source = format!(
+                "{declarations}void t(int i, int n, __builtin_va_list ap) {{ __assume({operand}); \
+                 }}\n"
+            );
+            let found = kinds(&source, microsoft);
+            assert_eq!(found.contains(&assume), warns, "{operand}: {found:?}");
+        }
+    }
+    // A math function's only under `-fno-math-errno`.
+    let source = "void w(void) { __assume(__builtin_sqrt(1.0) > 0); }\n";
+    assert_eq!(kinds(source, microsoft), [assume]);
+    let relaxed = microsoft.with_relaxed_floating_point(
+        crate::configuration::RelaxedFloatingPoint::NoMathErrno,
+        true,
+    );
+    assert_eq!(kinds(source, relaxed), []);
+    let source = "int x;\nvoid p(void) { __assume(&x); }\n";
+    assert_eq!(
+        kinds(source, microsoft),
+        [SemanticErrorKind::Nonnull(
+            DiagnosticGroup::PointerBoolConversion,
+            crate::translation_phases::semantic_analysis::always_nonnull::NonnullNote::Plain
+        )]
+    );
+    assert_eq!(
+        kinds(
+            source,
+            microsoft.with_compiler_identity(CompilerIdentity::Msvc)
+        ),
+        []
+    );
+}
+
 /// A Microsoft intrinsic that a header declares with its own type stays the
 /// intrinsic; a declaration of another type and a definition are errors,
 /// as Clang's `conflicting types for '__va_start'` and `definition of

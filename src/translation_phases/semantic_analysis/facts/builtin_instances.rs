@@ -115,7 +115,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             // An assumption with side effects is never evaluated.
             // MSVC extension: Microsoft Learn, "__assume".
-            if descriptor.operation == BuiltinOperation::Assume && self.has_side_effects(expression)
+            if descriptor.operation == BuiltinOperation::Assume
+                && self.assumption_ignored(expression)
             {
                 operand.evaluation = ArgumentEvaluation::Unevaluated;
             }

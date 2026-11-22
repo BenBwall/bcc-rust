@@ -265,6 +265,56 @@ fn microsoft_assumptions_lower() {
     }
 }
 
+/// An assumption Clang finds no side effect in is evaluated and promised,
+/// as Clang evaluates it for `llvm.assume`: a call of a function declared
+/// `const` or `pure`. `cl` evaluates no call, and an `asm` statement, which
+/// Clang's predicate passes over, never runs. MSVC extension: Microsoft
+/// Learn, "__assume".
+#[test]
+fn clang_evaluates_assumptions_without_side_effects() {
+    let source = "__attribute__((const)) int positive(int x) { return x > 0; \
+                  }\n__attribute__((pure)) int small(int x) { return x < 9; }\nint f(int x) {\n    \
+                  __assume(positive(x));\n    __assume(small(x));\n    __assume(({ __asm__ \
+                  volatile(\"ud2\"); 1; }));\n    return x;\n}\nint main(void) { return f(4) - 4; \
+                  }";
+    let microsoft = CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    for (configuration, promises) in [
+        (microsoft, 2),
+        (
+            microsoft.with_compiler_identity(crate::configuration::CompilerIdentity::Msvc),
+            0,
+        ),
+    ] {
+        with_configured_module(
+            source,
+            Target::WindowsMsvc,
+            false,
+            Profile::PostAbi,
+            configuration,
+            |module, target| {
+                assert_eq!(interpret(module, target).0, 0, "{module}");
+                let mut llvm = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
+                assert_eq!(
+                    llvm.matches("call void @llvm.assume(i1").count(),
+                    promises,
+                    "{llvm}"
+                );
+                for callee in ["@positive(", "@small("] {
+                    assert_eq!(
+                        llvm.matches(&format!("call i32 {callee}")).count(),
+                        promises / 2,
+                        "{llvm}"
+                    );
+                }
+                assert!(!llvm.contains("ud2"), "{llvm}");
+            },
+        );
+    }
+}
+
 /// Microsoft's `__va_start(&ap, last)`, through which `<vadefs.h>` defines
 /// `va_start` on x64, starts the list `ap` points to, and stays the
 /// intrinsic, as `__debugbreak` does, when a header declares it with a

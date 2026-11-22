@@ -2807,7 +2807,16 @@ was run):
   end, which the optimizer drops first for the other back ends, and the
   native back end skips with what only its condition needs. An operand with
   side effects is never evaluated, as in `cl` and Clang; the Clang
-  identities warn of it (`-Wassume`), `cl` does not.
+  identities warn of it (`-Wassume`), `cl` does not. The Clang identities
+  count side effects as Clang's `Expr::HasSideEffects` does: a call of a
+  function declared `const` or `pure`, or of a builtin Clang's tables mark
+  so (`src/builtins/clang_purity.rs`, a math function's only under
+  `-fno-math-errno`), has only its operands', `_Generic` and
+  `__builtin_choose_expr` only their selected operand's, `sizeof` and
+  `__builtin_offsetof` none, and `va_arg` one; such an operand is evaluated
+  for `llvm.assume`, as Clang does, unless it runs an `asm` statement or a
+  variable length array's size. `__assume(&x)` draws Clang's
+  `-Wpointer-bool-conversion`.
   `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
   Microsoft's debug-information annotation with Microsoft extensions: its
   arguments must be wide string literals and it does not execute (bcc emits
