@@ -1,8 +1,10 @@
 // Arithmetic never happens in a type narrower than int.
 int main(void) {
     char small = 100;
-    int wide = small + small;     // both chars are promoted to int: 200
-    char narrow = small + small;  // 200 does not fit in a char
+    // both are promoted to int: 200
+    int wide = small + small;
+    // 200 does not fit in a char
+    char narrow = small + small;
     narrow++;
     return wide - narrow;
 }

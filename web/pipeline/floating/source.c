@@ -4,23 +4,28 @@
 int main(void) {
     int total = 7;
     int count = 2;
-    double average = total / count;      // int division first: 3, then 3.0
+    // int division: 3, then 3.0
+    double average = total / count;
     printf("total / count is %f\n", average);
-    average = (double)total / count;     // a double division: 3.5
+    // a double division: 3.5
+    average = (double)total / count;
     printf("(double)total / count is %f\n", average);
 
-    double sum = 0.1 + 0.2;              // neither 0.1 nor 0.2 is exact
+    // neither 0.1 nor 0.2 is exact
+    double sum = 0.1 + 0.2;
     printf("0.1 + 0.2 == 0.3 is %d\n", sum == 0.3);
     printf("0.1 + 0.2 is %.17g\n", sum);
 
     double tenth = 0.0;
     for (int i = 0; i < 10; i++) {
-        tenth += 0.1;                    // each addition rounds again
+        // rounds at every addition
+        tenth += 0.1;
     }
     printf("ten 0.1s make %.17g\n", tenth);
 
     double price = 2.99;
-    int whole = (int)price;              // truncates toward zero: 2
+    // truncates toward zero: 2
+    int whole = (int)price;
     printf("(int)%.2f is %d\n", price, whole);
     return 0;
 }

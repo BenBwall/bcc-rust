@@ -6235,7 +6235,10 @@ fn an_order_c_leaves_open_stops_the_run() {
 
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
-/// end except those that use function pointers.
+/// end except those that use function pointers (`g…`), which are refused,
+/// those whose behavior C leaves undefined (`u…`), which stop there, and
+/// those whose result depends on an order C leaves open (`o…`), which stop
+/// rather than choose one.
 #[test]
 fn the_corpus_of_beginner_programs_runs() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/docs/corpus");
@@ -6267,9 +6270,14 @@ fn the_corpus_of_beginner_programs_runs() {
             let state = session.step();
             foretold(upcoming.as_ref(), state);
         }
+        let expected = match name.as_bytes().first() {
+            | Some(b'u') => "undefined_behavior",
+            | Some(b'o') => "error",
+            | _ => "finished",
+        };
         assert_eq!(
             session.state().status,
-            "finished",
+            expected,
             "{name}: {:?}",
             session.state().diagnostics
         );

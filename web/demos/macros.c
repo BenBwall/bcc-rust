@@ -2,9 +2,12 @@
 #include <limits.h>
 
 #define VERBOSE 0
-#define SQUARE(x) ((x) * (x))   /* parenthesize, or 1 + 2 goes wrong */
-#define STR(x) #x               /* # spells its argument as a string */
-#define GLUE(a, b) a ## b       /* ## pastes two tokens into one */
+/* parenthesized, so 1 + 2 works */
+#define SQUARE(x) ((x) * (x))
+/* # makes its argument a string */
+#define STR(x) #x
+/* ## pastes two tokens into one */
+#define GLUE(a, b) a ## b
 #define SWAP(a, b) do {   \
         int t = (a);      \
         (a) = (b);        \

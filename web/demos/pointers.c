@@ -10,7 +10,10 @@ int sum(int *first, int *last) {
 
 int main(void) {
     int primes[4] = {2, 3, 5, 7};
-    int *begin = primes;      // the array decays to &primes[0]
-    int *end = primes + 4;    // one past the end: valid to form, not to read
+    // primes decays to &primes[0]
+    int *begin = primes;
+    // one past the end: valid to
+    // form, not to read
+    int *end = primes + 4;
     return sum(begin, end);
 }

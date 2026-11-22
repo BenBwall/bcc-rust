@@ -11,7 +11,8 @@ int main(void) {
     for (int i = 0; i < LIMIT; i++) {
         total += step;
     }
-    char small = (char)300;  // 300 does not fit in a char
+    // 300 does not fit in a char
+    char small = (char)300;
     total += small;
     printf(LABEL " is %.3d\n", total);
     return 0;
