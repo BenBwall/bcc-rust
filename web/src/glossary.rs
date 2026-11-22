@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 57] = [
+pub static TERMS: [Term; 60] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
