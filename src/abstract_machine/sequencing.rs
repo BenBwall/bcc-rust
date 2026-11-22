@@ -16,6 +16,10 @@
 //! value; and every other pair of operands is unsequenced. A store is a
 //! side effect, which C completes only by the next sequence point, so a
 //! store nested in an operand is not ordered before its enclosing operator.
+//! A compound assignment `E1 op= E2` is `E1 = E1 op (E2)` with `E1`
+//! evaluated once, so its node stands for a read of `E1` as well as the
+//! store: that read is an operand of `op`, and a sequence point inside `E2`
+//! does not order a store in `E2` before it.
 //!
 //! A call's body is separated from the expression that calls it, but C
 //! leaves the order of a call and the other operands unspecified (C99
@@ -27,6 +31,7 @@
 //! C99: §6.5 paragraphs 2-3, p. 67; PDF p. 79.
 //! C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
 //! C99: §6.5.16 paragraph 3, p. 91; PDF p. 103.
+//! C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
 //! C99: Annex C paragraph 1, p. 439; PDF p. 451.
 
 use super::{
@@ -363,6 +368,12 @@ fn stores(node: &ExpressionNode) -> bool {
         || (label.ends_with('=') && !matches!(label, "==" | "!=" | "<=" | ">="))
 }
 
+/// Whether `node` is a compound assignment, which reads the object its
+/// first operand designates as well as storing into it.
+fn compound(node: &ExpressionNode) -> bool {
+    stores(node) && !matches!(node.label.as_str(), "=" | "++" | "--")
+}
+
 /// How the earlier access `a` and the later access `b` of one full
 /// expression are ordered.
 fn order(nodes: &[ExpressionNode], a: &Access, b: &Access) -> Order {
@@ -390,6 +401,19 @@ fn order(nodes: &[ExpressionNode], a: &Access, b: &Access) -> Order {
         }
         // The nodes from the inner access up to the operator, exclusive.
         let below: Vec<usize> = path.iter().copied().take_while(|&n| n != common).collect();
+        let first = below.last().copied();
+        // `E1 op= E2` is `E1 = E1 op (E2)` with `E1` evaluated once: its
+        // read of `E1` is an operand of `op`, unsequenced with all of `E2`,
+        // so a sequence point inside `E2` does not order a store there
+        // before that read. A call's body is a single evaluation of its own.
+        if inner.write
+            && !inner.call
+            && compound(operator)
+            && first.is_some()
+            && operator.children.get(1) == first.as_ref()
+        {
+            return Order::Unsequenced;
+        }
         // A sequence point inside the operand ends the inner access before
         // the operand's value exists: the first operand of `&&`, `||`, `?:`
         // or a comma, an argument of a call, or a call's own body.
@@ -410,7 +434,6 @@ fn order(nodes: &[ExpressionNode], a: &Access, b: &Access) -> Order {
         // The operand's value comes before the operator uses it. A store
         // may read the old value of what it stores into only to compute the
         // new one, not to find where to store.
-        let first = below.last().copied();
         if outer.write
             && stores(operator)
             && first.is_some()

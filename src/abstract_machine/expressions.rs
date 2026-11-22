@@ -631,10 +631,16 @@ impl Parser<'_> {
     /// precede a call, after its arguments; only one of the second and
     /// third operands of `?:` is evaluated. An assignment's operands are
     /// evaluated before its store, so its right operand may read the
-    /// variable it stores into, as in `x = x + 1`.
+    /// variable it stores into, as in `x = x + 1`, and may update it before
+    /// a sequence point of its own, as in `x = (x++, x + 1)`; `s.m = …`
+    /// designates part of `s` without reading it, so it is checked as `s =
+    /// …` is. A compound assignment `x op= E` is `x = x op (E)`, whose read
+    /// of `x` is unsequenced with all of `E`, so `E` may not update `x` even
+    /// behind a sequence point.
     ///
-    /// C99: §6.5 paragraph 2, p. 67; PDF p. 79.
+    /// C99: §6.5 paragraphs 2-3, p. 67; PDF p. 79.
     /// C99: §6.5.16 paragraph 3, p. 91; PDF p. 103.
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
     /// C99: Annex C paragraph 1, p. 439; PDF p. 451.
     pub(super) fn check_update(&mut self, expression: usize) -> Result<(), Diagnostic> {
         if !self.expressions[expression].effect {
@@ -692,19 +698,34 @@ impl Parser<'_> {
                     reach = self.unsequenced(reach, Reach::checked(node.range, expression))?;
                 },
             },
-            | ExprKind::Assign { target, value, .. } => {
+            | ExprKind::Assign {
+                target,
+                value,
+                operator,
+                ..
+            } => {
                 let right = self.reach(*value)?;
+                let designated = self.designated(*target);
+                if let Some(name) = designated {
+                    // `E1 op= E2` is `E1 = E1 op (E2)`: its read of `E1` is
+                    // an operand of `op`, unsequenced with all of `E2`
+                    // (C99 §6.5.16.2p3, §6.5p3).
+                    if *operator != "=" && right.updates.iter().any(|(other, _)| other == name) {
+                        let member = !matches!(self.expressions[*target].kind, ExprKind::Name(..));
+                        return Err(Self::compound_error(name, member, operator, node.range));
+                    }
+                    // An update the right operand completes at a sequence
+                    // point of its own comes before the store.
+                    if right
+                        .updates
+                        .iter()
+                        .any(|(other, at)| other == name && !right.sealed.contains(at))
+                    {
+                        return Err(self.unsequenced_error(name, node.range));
+                    }
+                }
                 match &self.expressions[*target].kind {
                     | ExprKind::Name(name, ..) => {
-                        // An update the right operand completes at a
-                        // sequence point of its own comes before the store.
-                        if right
-                            .updates
-                            .iter()
-                            .any(|(other, at)| other == name && !right.sealed.contains(at))
-                        {
-                            return Err(self.unsequenced_error(name, node.range));
-                        }
                         // The right operand's reads come before the store.
                         let opaque = right.opaque.is_some();
                         reach = right;
@@ -715,8 +736,18 @@ impl Parser<'_> {
                         }
                     },
                     | _ => {
-                        let left = self.reach(*target)?;
+                        let mut left = self.reach(*target)?;
+                        // `s.m = …` designates part of `s` without reading
+                        // it, so, as for a name, the check above settles
+                        // the right operand's updates of `s`.
+                        let stored = designated.filter(|_| *operator == "=");
+                        if let Some(name) = stored {
+                            left.names.retain(|other| other != name);
+                        }
                         reach = self.unsequenced(left, right)?;
+                        if let Some(name) = stored {
+                            reach.names.push(name.clone());
+                        }
                         reach = self.unsequenced(reach, Reach::checked(node.range, expression))?;
                     },
                 }
@@ -799,6 +830,43 @@ impl Parser<'_> {
         left.join(right);
         left.checked.extend(checked);
         Ok(left)
+    }
+
+    /// The variable an assignment's left operand designates by name: the
+    /// name itself, or the structure whose member `.` selects, as in
+    /// `s.a` or `s.in.a`.
+    fn designated(&self, target: usize) -> Option<&String> {
+        match &self.expressions[target].kind {
+            | ExprKind::Name(name, ..) => Some(name),
+            | ExprKind::Member {
+                base, arrow: false, ..
+            } => self.designated(*base),
+            | _ => None,
+        }
+    }
+
+    /// A compound assignment to the variable `name`, or to a `member` of it,
+    /// whose right operand also updates it: the compound assignment's read of
+    /// `name` is an operand, which a sequence point inside the right operand
+    /// does not order.
+    ///
+    /// C99: §6.5 paragraphs 2-3, p. 67; PDF p. 79.
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
+    fn compound_error(name: &str, member: bool, operator: &str, range: SourceRange) -> Diagnostic {
+        let binary = operator.trim_end_matches('=');
+        let read = if member { "part of " } else { "" };
+        Diagnostic::new(
+            "unsupported",
+            range,
+            &format!(
+                "this {operator} reads {read}`{name}` and its right operand updates `{name}`: `E1 \
+                 {operator} E2` means `E1 = E1 {binary} (E2)` with E1 evaluated once \
+                 (§6.5.16.2p3), and C99 leaves the order of {binary}'s operands unspecified \
+                 (§6.5p3), so the read may come before that update with no sequence point between \
+                 them, which C99 makes undefined (§6.5p2). A sequence point inside the right \
+                 operand orders only that operand's own parts"
+            ),
+        )
     }
 
     /// Two accesses to the variable `name`, one an update, that no sequence
