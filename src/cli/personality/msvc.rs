@@ -80,22 +80,6 @@ use crate::{
     },
 };
 
-/// Options that clang-cl ignores with a warning when given bare, as for an
-/// unknown `/` option: Clang options it takes only after `/clang:` (the
-/// `char` signedness, and `-f[no-]fast-math`, so `/fp:fast -fno-fast-math`
-/// keeps `/fp:fast`), and GCC's `-fstrict-volatile-bitfields`, which bcc
-/// reads but Clang does not know.
-const CLANG_ONLY_OPTIONS: [&str; 8] = [
-    "-fsigned-char",
-    "-fno-signed-char",
-    "-funsigned-char",
-    "-fno-unsigned-char",
-    "-ffast-math",
-    "-fno-fast-math",
-    "-fstrict-volatile-bitfields",
-    "-fno-strict-volatile-bitfields",
-];
-
 /// Translates a `cl.exe` or clang-cl command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let clang_cl = invocation.personality.is_clang_cl();
@@ -163,6 +147,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if intel.is_some() {
         super::print(&icx::cl_logo(), true);
     }
+    // clang-cl reads its warning options before it parses the others.
+    let unknown_argument = clang_cl.then(|| unknown_argument_severity(&expanded));
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -272,7 +258,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.verbose |= clang_cl && matches!(text, "-v" | "-###");
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
             // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
-            clang_options.push(clang.into());
+            if clang.starts_with("-W") || clang == "--no-warnings" {
+                clang_options.extend(clang_warning_option(clang));
+            } else {
+                clang_options.push(clang.into());
+            }
             continue;
         }
         let remaining = arguments.len();
@@ -283,7 +273,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             if known == Some(ClOption::TakesNext) && arguments.len() == remaining {
                 _ = arguments.next();
             }
-        } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
+        } else if clang_cl
+            && text.starts_with('-')
+            && known.is_none()
+            && let Some(unknown) = known::cl_unknown_option(text, intel.is_some())
+        {
+            // A GCC or Clang option clang-cl's driver does not take, which
+            // it ignores (`-fsigned-char`, `-ffreestanding`, `-std=c11`);
+            // the Clang options it takes only after `/clang:`.
+            let severity = unknown_argument.unwrap_or(DriverSeverity::Warning);
+            if state.unknown_argument(invocation, severity, text, unknown.nearest.as_deref()) {
+                return Err(MainError::Reported(1));
+            }
+        } else if clang_cl && text.starts_with('-') {
             // clang-cl also takes Clang's options; bcc reads most of them, and
             // treats the rest as its Clang personality does.
             if text.starts_with("-m") {
@@ -309,15 +311,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         format_args!("'{text}' is not supported: {why}"),
                     ),
                 }
-            } else if text.starts_with("-W") && !warning_options::clang_takes(text) {
-                // Clang's front end warns about the warning options it does
-                // not take, `-Wl,`, `-Wa,` and `-Wp,` among them, which
-                // clang-cl's driver does not have.
-                state
-                    .bcc
-                    .push(format!("--unknown-warning-option={text}").into());
-            } else if text.starts_with("-W") && !implements_language_option(text) {
-                // Taken, and with no effect in bcc.
+            } else if text.starts_with("-W") || text == "--no-warnings" {
+                state.bcc.extend(clang_warning_option(text));
             } else {
                 state.bcc.push(argument.into());
             }
@@ -713,6 +708,112 @@ fn clang_cl_query(invocation: &Invocation, text: &str) -> Option<Plan> {
             )))
         },
         | _ => None,
+    }
+}
+
+/// What bcc reads for a warning option clang-cl hands its front end, bare
+/// or after `/clang:`: Clang's front end warns about the ones it does not
+/// take, `-Wl,`, `-Wa,` and `-Wp,` among them, which clang-cl's driver does
+/// not have; it takes the others, of which bcc reads those it implements.
+/// The groups of the driver's own warnings (`-Wno-unknown-argument`) are
+/// taken and have no effect there. `--no-warnings` is `-w`.
+fn clang_warning_option(text: &str) -> Option<OsString> {
+    if text == "--no-warnings" {
+        Some("-w".into())
+    } else if !warning_options::clang_takes(text) {
+        Some(format!("--unknown-warning-option={text}").into())
+    } else if implements_language_option(text) {
+        Some(text.into())
+    } else {
+        None
+    }
+}
+
+/// How a warning of Clang's driver that is on by default comes out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DriverSeverity {
+    Ignored,
+    Warning,
+    Error,
+    /// An error that stops the driver, which reports nothing after it.
+    Fatal,
+}
+
+/// How clang-cl reports an argument it ignores as unknown, a warning in the
+/// group `-Wunknown-argument`, after the warning options anywhere on the
+/// command line, which its driver reads first (`clang_main`), as Clang's
+/// `ProcessWarningOptions` maps them in order: `/w`, `/W0` and `-w` silence
+/// every warning; `/WX` and `-Werror` make it an error unless
+/// `-Wno-error=unknown-argument` says otherwise, and `-Wfatal-errors` makes
+/// an error fatal; `-Wno-unknown-argument` and `-Wno-everything` turn it
+/// off, and `-Wunknown-argument` on again, though never down from an error
+/// `-Werror=unknown-argument` or `-Wfatal-errors=unknown-argument` asked
+/// for. clang-cl hands a `/clang:` option to its front end alone, so none
+/// counts here.
+fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
+    const GROUP: &str = "unknown-argument";
+    let (mut ignore_all, mut all_errors, mut all_fatal) = (false, false, false);
+    let mut mapping = DriverSeverity::Warning;
+    let (mut no_error, mut no_fatal) = (false, false);
+    let mut arguments = arguments.iter().filter_map(|argument| argument.to_str());
+    while let Some(argument) = arguments.next() {
+        if matches!(argument, "/link" | "-link" | "--") {
+            break;
+        }
+        let Some(option) = argument
+            .strip_prefix('/')
+            .or_else(|| argument.strip_prefix('-'))
+        else {
+            continue;
+        };
+        if known::clang_cl_option(option) == Some(ClOption::TakesNext) {
+            _ = arguments.next();
+            continue;
+        }
+        let group = |prefix: &str| {
+            argument
+                .strip_prefix(prefix)
+                .is_some_and(|name| name == GROUP)
+        };
+        // `cl`'s options start with `/` or `-`, Clang's with `-`.
+        match (option, argument.starts_with('-')) {
+            | ("w" | "W0", _) | ("-no-warnings", true) => ignore_all = true,
+            | ("WX", _) | ("Werror", true) => all_errors = true,
+            | ("WX-", _) | ("Wno-error", true) => all_errors = false,
+            | ("Wfatal-errors", true) => all_fatal = true,
+            | ("Wno-fatal-errors", true) => all_fatal = false,
+            | ("Wno-everything", true) => mapping = DriverSeverity::Ignored,
+            | _ if group("-W") => {
+                if !matches!(mapping, DriverSeverity::Error | DriverSeverity::Fatal) {
+                    mapping = DriverSeverity::Warning;
+                }
+            },
+            | _ if group("-Wno-") => mapping = DriverSeverity::Ignored,
+            | _ if group("-Werror=") => mapping = DriverSeverity::Error,
+            | _ if group("-Wno-error=") => {
+                no_error = true;
+                if matches!(mapping, DriverSeverity::Error | DriverSeverity::Fatal) {
+                    mapping = DriverSeverity::Warning;
+                }
+            },
+            | _ if group("-Wfatal-errors=") => mapping = DriverSeverity::Fatal,
+            | _ if group("-Wno-fatal-errors=") => {
+                no_fatal = true;
+                if mapping == DriverSeverity::Fatal {
+                    mapping = DriverSeverity::Error;
+                }
+            },
+            | _ => {},
+        }
+    }
+    match mapping {
+        | DriverSeverity::Ignored => DriverSeverity::Ignored,
+        | _ if ignore_all => DriverSeverity::Ignored,
+        | DriverSeverity::Warning if !all_errors || no_error => DriverSeverity::Warning,
+        | DriverSeverity::Warning | DriverSeverity::Error if all_fatal && !no_fatal =>
+            DriverSeverity::Fatal,
+        | DriverSeverity::Warning => DriverSeverity::Error,
+        | severity => severity,
     }
 }
 
@@ -1541,6 +1642,49 @@ impl State {
                 true,
             );
         }
+    }
+}
+
+impl State {
+    /// Reports `argument`, a GCC or Clang option clang-cl's driver ignores,
+    /// with its warning in the group `-Wunknown-argument` at `severity`, and
+    /// the option it suggests: `unknown argument ignored in clang-cl:
+    /// '-fsigned-char' [-Wunknown-argument]`, or `... in clang-cl
+    /// '-fbuiltin-'; did you mean '-fbuiltin'? [...]`. An error fails the
+    /// command line, and a fatal one stops it: returns whether it did.
+    fn unknown_argument(
+        &mut self,
+        invocation: &Invocation,
+        severity: DriverSeverity,
+        argument: &str,
+        nearest: Option<&str>,
+    ) -> bool {
+        let message = match nearest {
+            | Some(nearest) => format!(
+                "unknown argument ignored in clang-cl '{argument}'; did you mean '{nearest}'?"
+            ),
+            | None => format!("unknown argument ignored in clang-cl: '{argument}'"),
+        };
+        match severity {
+            | DriverSeverity::Ignored => {},
+            | DriverSeverity::Warning =>
+                invocation.warning(format_args!("{message} [-Wunknown-argument]")),
+            | DriverSeverity::Error => {
+                self.errors += 1;
+                invocation.error(format_args!("{message} [-Werror,-Wunknown-argument]"));
+            },
+            | DriverSeverity::Fatal => {
+                super::print(
+                    &format!(
+                        "{}: fatal error: {message} [-Wunknown-argument]\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+                return true;
+            },
+        }
+        false
     }
 }
 

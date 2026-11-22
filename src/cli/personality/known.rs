@@ -10,6 +10,11 @@
 //! `Options.td` in `options/clang-cl.list`, tell an option from a path: like
 //! clang-cl, the `cl` and clang-cl personalities read an argument that
 //! starts with `/` and names none of them as an input file.
+//!
+//! The GCC and Clang options clang-cl's driver does not take, which it
+//! ignores with the warning `unknown argument ignored in clang-cl`, are
+//! frozen from the pinned Clang's clang-cl and from icx-cl 2026.2.0 in
+//! `options/clang-cl-unknown.list` and `options/icx-cl-unknown.list`.
 
 /// Which compiler's names to look in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -156,6 +161,56 @@ fn clang_cl_options() -> impl Iterator<Item = (&'static str, &'static str)> {
         .filter_map(|line| line.split_once(' '))
 }
 
+/// An option clang-cl's driver does not take and ignores with its warning
+/// `unknown argument ignored in clang-cl`, as `Driver::ParseArgStrings`
+/// reports an argument its option table (LLVM's `OptTable`) matches with
+/// no option visible to clang-cl.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) struct ClUnknown {
+    /// The option the warning suggests (`; did you mean '-fbuiltin'?`).
+    pub(super) nearest: Option<String>,
+}
+
+/// Whether clang-cl, or icx-cl with `intel`, ignores `argument`, one that
+/// starts with `-` and is none of its `cl` options, as a GCC or Clang
+/// option it does not take. A `flag` entry matches the whole argument and
+/// a `joined` one any argument it begins (`-lfoo`, `-std=c11`); the
+/// longest matching entry decides, so a `known` one, an option the driver
+/// takes, is not covered by a shorter entry (`-l` and
+/// `-lifetime-safety-max-cfg-blocks=`). An entry's suggestion is for its
+/// spelling alone, or with `+` for its value given after it.
+pub(super) fn cl_unknown_option(argument: &str, intel: bool) -> Option<ClUnknown> {
+    let list = if intel {
+        include_str!("options/icx-cl-unknown.list")
+    } else {
+        include_str!("options/clang-cl-unknown.list")
+    };
+    let mut best: Option<(&str, &str, Option<&str>)> = None;
+    for line in list.lines().filter(|line| !line.starts_with('#')) {
+        let mut words = line.split(' ');
+        let (Some(kind), Some(name)) = (words.next(), words.next()) else {
+            continue;
+        };
+        let matches = argument == name || (kind != "flag" && argument.starts_with(name));
+        if matches && best.is_none_or(|(_, longest, _)| name.len() > longest.len()) {
+            best = Some((kind, name, words.next()));
+        }
+    }
+    let (kind, name, nearest) = best?;
+    if kind == "known" {
+        return None;
+    }
+    let value = &argument[name.len()..];
+    let nearest = match nearest {
+        | Some(nearest) => match nearest.strip_prefix('+') {
+            | Some(nearest) => (!value.is_empty()).then(|| format!("{nearest}{value}")),
+            | None => value.is_empty().then(|| nearest.to_owned()),
+        },
+        | None => None,
+    };
+    Some(ClUnknown { nearest })
+}
+
 /// The Levenshtein distance between `a` and `b`, in bytes, as LLVM's
 /// `StringRef::edit_distance` counts it with replacements allowed.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -213,6 +268,51 @@ mod tests {
         assert_eq!(clang_cl_option("home/user/a.c"), None);
         assert_eq!(clang_cl_option("Users/a.c"), Some(ClOption::Whole));
         assert_eq!(clang_cl_option("opt/a.c"), Some(ClOption::Whole));
+    }
+
+    #[test]
+    fn clang_cl_ignores_the_options_its_driver_does_not_take() {
+        let plain = |argument| cl_unknown_option(argument, false);
+        let nearest = |argument, intel| {
+            cl_unknown_option(argument, intel).and_then(|unknown| unknown.nearest)
+        };
+        for argument in [
+            "-fsigned-char",
+            "-ffast-math",
+            "-ffreestanding",
+            "-funsafe-math-optimizations",
+            "-ffp-model=fast",
+            "-std=c11",
+            "-pedantic",
+            "-lm",
+            "-isystem",
+            "-isystem/usr/include",
+        ] {
+            assert_eq!(nearest(argument, false), None, "{argument}");
+            assert!(plain(argument).is_some(), "{argument}");
+        }
+        // Options clang-cl takes.
+        for argument in [
+            "-fms-extensions",
+            "-fno-builtin",
+            "-fmath-errno",
+            "-mavx2",
+            "-o",
+            "-v",
+            "-lifetime-safety-max-cfg-blocks=4",
+        ] {
+            assert_eq!(plain(argument), None, "{argument}");
+        }
+        assert_eq!(nearest("-fbuiltin-", false).as_deref(), Some("-fbuiltin"));
+        assert_eq!(nearest("-fbuiltin-x", false), None);
+        assert_eq!(nearest("-mabs=foo", false).as_deref(), Some("-mabi=foo"));
+        assert_eq!(nearest("-mabs=", false), None);
+        // icx-cl takes `-ffast-math`, and suggests Intel's own options.
+        assert_eq!(cl_unknown_option("-ffast-math", true), None);
+        assert_eq!(
+            nearest("-ffreestanding", true).as_deref(),
+            Some("-Qfreestanding")
+        );
     }
 
     #[test]

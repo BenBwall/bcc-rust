@@ -187,8 +187,7 @@ C99 and later, which bcc does not report, and of Clang's `-Wgnu`,
 `-Wgnu-zero-variadic-macro-arguments`, `-Wpre-c23-compat` and
 `-Wc++20-extensions` bcc reads only what they make of an omitted variadic
 argument; bcc's own command line warns that each is only partly
-implemented. clang-cl's `unknown argument ignored in clang-cl:
-'-pedantic' [-Wunknown-argument]` is not given. `-Wfatal-errors` stops at
+implemented. `-Wfatal-errors` stops at
 the first error bcc reports, and bcc reports a preprocessing diagnostic
 before the errors of the lines above it where GCC, Clang and TCC report
 them in source order.
@@ -1431,13 +1430,9 @@ clang-cl reads `cl`'s options and also Clang's (`-fsomething`, `-Wfoo`,
 option to bcc (which reads most Clang options), and reads an argument that
 starts with `/` and names no option as an input, as clang-cl does on every
 host (see below); it warns, with clang-cl's `unknown argument ignored in
-clang-cl`, about a `cl` option clang-cl knows and bcc does not, and about
-the bare Clang options clang-cl ignores. Like
+clang-cl`, about a `cl` option clang-cl knows and bcc does not. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
-stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
-bare `-fsigned-char`, `-funsigned-char`, `-ffast-math` or `-fno-fast-math`
-with the same warning, so `/fp:fast -fno-fast-math` keeps `/fp:fast` and
-`/fp:fast /clang:-fno-fast-math` does not. Its
+stand, so `/clang:-fsigned-char /J` leaves `char` signed. Its
 `/fp:fast` gives up the math functions' `errno`, as clang-cl's
 `-ffast-math` does, so a call of `sqrt` has no side effect for `-Wassume`,
 and `/fp:precise` restores the target's default, as `-ffp-model=precise`
@@ -1459,6 +1454,68 @@ compile, and exits with status 1 after an error. It reads `-` as standard
 input, which `/E` preprocesses as C and which compiles only when `/Tc`
 names its language (`clang-cl: error: use /Tc or /Tp to set input type for
 standard input` otherwise).
+
+### Options clang-cl ignores
+
+clang-cl's driver takes `cl`'s options and only some of Clang's: any other
+argument that starts with `-` is unknown to it, and it ignores it with a
+warning (`Driver::ParseArgStrings`). That covers GCC's and Clang's
+`-fsigned-char`, `-ffreestanding`, `-ffast-math`, the other fast-math flags
+(`-funsafe-math-optimizations`, `-ffinite-math-only`, `-fno-honor-nans`,
+`-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`,
+`-ffp-model=` ...), `-std=`, `-pedantic`, `-ansi`, `-g0` and the like, `-l`,
+`-L`, `-isystem`, `-include`, `-M` and its relatives, `-shared` and
+`-static`. The personality ignores exactly the options clang-cl ignores:
+`personality/options/clang-cl-unknown.list` lists them, frozen by
+`scripts/update_driver_options.py --clang-cl-unknown`, which asks the pinned
+Clang's clang-cl about every option the GCC and Clang lists, GCC's
+`--help` and Clang's `--autocomplete=-` name. A flag is ignored as
+spelled, an option with a value with any value (`-std=c11`, `-lm`,
+`-isystem/usr/include`), and an ignored option takes no argument, so in
+`-isystem dir` the directory is an input, as in clang-cl. bcc's own
+options that neither compiler has (`--emit=`, `-Xbcc`) still reach bcc.
+`/clang:` gives clang-cl's front end a Clang option, which bcc reads as
+Clang does: `/clang:-ffreestanding` makes the environment freestanding,
+and `/fp:fast /clang:-fno-fast-math` gives up `/fp:fast`, where a bare
+`-fno-fast-math` keeps it.
+
+The warning is clang-cl's, byte for byte: `clang-cl: warning: unknown
+argument ignored in clang-cl: '-fsigned-char' [-Wunknown-argument]`, or
+with the option clang-cl's option table finds one edit away, `unknown
+argument ignored in clang-cl '-fbuiltin-'; did you mean '-fbuiltin'?`,
+which keeps a value it is given (`-mabs=x` suggests `-mabi=x`). It comes
+in command-line order, and the warning options anywhere on the command
+line decide it, as Clang's `ProcessWarningOptions` maps the group
+`-Wunknown-argument` before the driver parses the rest:
+
+- `/w`, `/W0`, `-w` and `--no-warnings` silence it, whatever else says;
+- `/WX` and `-Werror` make it an error, `clang-cl: error: ...
+  [-Werror,-Wunknown-argument]`, with status 1 and nothing compiled, unless
+  `/WX-`, `-Wno-error` or `-Wno-error=unknown-argument` follows or
+  `-Wno-error=unknown-argument` stands anywhere; `-Werror=unknown-argument`
+  makes it one by itself, and a later `-Wunknown-argument` keeps it one;
+- `-Wno-unknown-argument` and `-Wno-everything` turn it off until a later
+  `-Wunknown-argument`, `-Werror=unknown-argument` or
+  `-Wfatal-errors=unknown-argument` turns it on;
+- `-Wfatal-errors` makes the error fatal (`clang-cl: fatal error: ...
+  [-Wunknown-argument]`), which ends the command line at the first one, and
+  so does `-Wfatal-errors=unknown-argument` without `/WX`;
+- the `/W1`-`/W4`, `/Wall` and `-Weverything` levels leave it as it is,
+  and a `/clang:` warning option, which clang-cl hands its front end,
+  does not reach it.
+
+`/clang:-Wno-unknown-argument` and the other groups of the driver's own
+warnings are taken by the front end with no effect, so bcc's command line
+does not call them unknown.
+
+icx-cl ignores a slightly different set, which
+`personality/options/icx-cl-unknown.list` lists, frozen from icx-cl
+2026.2.0 by `scripts/update_driver_options.py --icx-cl`: of the options
+clang-cl ignores it takes `-ffast-math`, `-fast` and the complex-range
+options, reports most of the other 90 or so in its own words (`command line
+warning #10430: Unsupported command line options encountered`, which bcc
+does not model, passing them on as before), and its suggestions name
+Intel's options (`'-ffreestanding'; did you mean '-Qfreestanding'?`).
 
 ### Paths that start with `/`
 
@@ -2233,7 +2290,7 @@ Over the 34 `icx-cl` command lines, each `-dM` listing is the same set as
 Intel's apart from the processor macros below and `__SIZEOF_FLOAT128__`,
 which icx-cl defines and bcc does not, having no `__float128` on the MSVC
 target; the rest differ as the clang-cl personality differs from clang-cl
-(unknown options refused rather than ignored with a warning, `/arch:AVX2`
+(`/arch:AVX2`
 refused, `/E`'s `#line` markers) or as bcc refuses OpenMP and the strict
 model, and Intel's diagnostics name the source by its absolute path
 (`/home/me/a.c(1,22): error: ...`) where bcc keeps the name given.
