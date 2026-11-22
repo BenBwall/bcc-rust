@@ -863,8 +863,8 @@ impl Parser<'_> {
                  {operator} E2` means `E1 = E1 {binary} (E2)` with E1 evaluated once \
                  (§6.5.16.2p3), and C99 leaves the order of {binary}'s operands unspecified \
                  (§6.5p3), so the read may come before that update with no sequence point between \
-                 them, which C99 makes undefined (§6.5p2). A sequence point inside the right \
-                 operand orders only that operand's own parts"
+                 them; C99 makes that undefined whenever the update is evaluated (§6.5p2). A \
+                 sequence point inside the right operand orders only that operand's own parts"
             ),
         )
     }

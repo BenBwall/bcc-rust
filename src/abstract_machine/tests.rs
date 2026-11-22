@@ -6310,6 +6310,24 @@ fn a_compound_assignment_reads_its_left_operand_unsequenced_with_its_right() {
             diagnostic.message
         );
     }
+    // The refusal is a limit of the model, not a claim that C makes these
+    // undefined: an update that is never evaluated breaks no rule, so the
+    // message says C99 makes the clash undefined only when the update is
+    // evaluated. GCC gives 1 and 2.
+    for source in [
+        "int main(void) { int x = 1; x += (0 && x++); return x; }",
+        "int main(void) { int c = 1; int x = 1; x += (c ? 1 : x++); return x; }",
+    ] {
+        let message = compile(source).expect_err(source).message;
+        assert!(
+            message.contains("C99 makes that undefined whenever the update is evaluated (§6.5p2)"),
+            "{source}: {message}"
+        );
+        assert!(
+            !message.contains("which C99 makes undefined"),
+            "{source}: {message}"
+        );
+    }
     // The spelled-out form is refused too.
     let _diagnostic = compile("int main(void) { int x = 1; x = x + (x++, 5); return x; }")
         .expect_err("x = x + (x++, 5)");
