@@ -453,6 +453,39 @@ clauses! {
     BREAK = "6.8.6.3p2", "p. 138; PDF p. 150", "The break statement",
         "A break ends the innermost switch or loop around it: control continues just after that \
          statement.";
+    /// C99: §6.7.5.3 paragraph 1, p. 118; PDF p. 130.
+    RETURN_TYPE = "6.7.5.3p1", "p. 118; PDF p. 130", "Function declarators",
+        "A function may not return an array or a function; it may return a pointer to either.";
+    /// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
+    LABEL_UNIQUE = "6.8.1p3", "p. 132; PDF p. 144", "Labeled statements",
+        "No two labels of one function may have the same name.";
+    /// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
+    LABEL_SCOPE = "6.2.1p3", "p. 29; PDF p. 41", "Scopes of identifiers",
+        "A label's name can be used in a goto anywhere in its function, before or after the \
+         label itself.";
+    /// C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42.
+    NAME_HIDING = "6.2.1p4", "pp. 29-30; PDF pp. 41-42", "Scopes of identifiers",
+        "A name declared in an inner block hides the same name declared outside it: inside the \
+         inner scope the name means the inner one.";
+    /// C99: §6.8.5.2 paragraph 1, p. 136; PDF p. 148.
+    DO_STATEMENT = "6.8.5.2p1", "p. 136; PDF p. 148", "The do statement",
+        "A do statement tests its controlling expression after each run of its body, so the body \
+         runs at least once.";
+    /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
+    GOTO_CONSTRAINT = "6.8.6.1p1", "p. 137; PDF p. 149", "The goto statement",
+        "A goto must name a label in its own function, and may not jump into the scope of a \
+         variable-length array.";
+    /// C99: §6.8.6.1 paragraph 2, p. 137; PDF p. 149.
+    GOTO = "6.8.6.1p2", "p. 137; PDF p. 149", "The goto statement",
+        "A goto jumps unconditionally to the statement its label names, anywhere in the \
+         function.";
+    /// C99: §6.8.6.2 paragraph 1, p. 138; PDF p. 150.
+    CONTINUE_PLACE = "6.8.6.2p1", "p. 138; PDF p. 150", "The continue statement",
+        "A continue may appear only inside a loop body.";
+    /// C99: §6.8.6.2 paragraph 2, p. 138; PDF p. 150.
+    CONTINUE = "6.8.6.2p2", "p. 138; PDF p. 150", "The continue statement",
+        "A continue jumps to the end of the innermost loop's body, so the loop goes on to its \
+         next test (after a for statement's third clause).";
     /// C99: §4 paragraph 2, p. 7; PDF p. 19.
     UNDEFINED_BY_OMISSION = "4p2", "p. 7; PDF p. 19", "Conformance",
         "Behavior is undefined where the standard says so, and also wherever it gives no \

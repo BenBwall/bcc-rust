@@ -25,13 +25,16 @@ use super::{
         Alias,
         Arithmetic,
         BlockObject,
+        Case,
         Diagnostic,
         Directive,
         DirectiveKind,
+        Entry,
         Enumeration,
         ExpressionNode,
         Function,
         Instruction,
+        Landing,
         Library,
         MAX_ARGUMENTS,
         MAX_CELLS,
@@ -84,6 +87,9 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         constants: Vec::new(),
         enumeration_tags: Vec::new(),
         breakables: Vec::new(),
+        switches: Vec::new(),
+        labels: Vec::new(),
+        gotos: Vec::new(),
         designated: Vec::new(),
         computed: Vec::new(),
         prototypes: Vec::new(),
@@ -240,6 +246,7 @@ impl<'a> Parser<'a> {
         parser.signatures.push((String::from(name.text), returns));
         parser.returns = returns;
         parser.block()?;
+        parser.resolve_gotos()?;
         parser.emit(Op::Fallthrough, name.range)?;
         *total_code += parser.code.len();
         if *total_code > MAX_CODE {
@@ -415,6 +422,14 @@ pub(super) struct Parser<'a> {
     /// The `switch` statements and loops being compiled, innermost last,
     /// which a `break` leaves.
     pub breakables:          Vec<Breakable>,
+    /// The `switch` statements being compiled, innermost last, whose case
+    /// and default labels may be anywhere in their bodies.
+    pub switches:            Vec<SwitchLabels>,
+    /// The current function's named labels so far.
+    pub labels:              Vec<LabelSite<'a>>,
+    /// The current function's `goto` instructions, with the label names
+    /// they jump to, resolved once the whole body is compiled.
+    pub gotos:               Vec<(usize, Token<'a>)>,
     /// Each function declared by a prototype so far.
     pub prototypes:          Vec<Prototype>,
     /// Each `#include <stdio.h>` and object-like `#define` so far.
@@ -455,7 +470,7 @@ impl<'a> Parser<'a> {
                      #include <stdio.h> at file scope",
                 ));
             }
-            if self.at_declaration() {
+            if self.at_declaration() && !self.at_named_label() {
                 self.declaration()?;
             } else {
                 self.statement()?;
@@ -551,20 +566,24 @@ impl<'a> Parser<'a> {
                 self.control_body()?;
                 self.emit(Op::Jump(head), token.range)?;
                 self.patch(branch, self.code.len());
-                self.close_breakable();
+                self.close_loop(head, Some(range));
                 Ok(())
             },
             | "for" => self.for_statement(),
+            | "do" => self.do_statement(),
             | "switch" => self.switch_statement(),
             | "break" => self.break_statement(),
-            | "case" | "default" => Err(self.misplaced_label()),
+            | "continue" => self.continue_statement(),
+            | "goto" => self.goto_statement(),
+            | "case" | "default" => self.labeled_statement(),
+            | _ if self.at_named_label() => self.labeled_statement(),
             | ";" => {
                 self.position += 1;
                 Ok(())
             },
             | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "float" | "double"
-            | "struct" | "enum" | "typedef" | "static" | "const" | "else" | "continue"
-            | "goto" | "do" => Err(self.error("unsupported statement in this subset")),
+            | "struct" | "enum" | "typedef" | "static" | "const" | "else" =>
+                Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -575,7 +594,7 @@ impl<'a> Parser<'a> {
     // Selection/iteration substatements get their C99 implicit block scope.
     // A compound body is a block of its own that ends at the same point, so
     // its scope stands in for the implicit one.
-    fn control_body(&mut self) -> Result<(), Diagnostic> {
+    pub fn control_body(&mut self) -> Result<(), Diagnostic> {
         if self.at("{") {
             return self.statement();
         }
@@ -604,6 +623,7 @@ impl<'a> Parser<'a> {
             self.expect(";")?;
         }
         let head = self.code.len();
+        let mut condition_range = None;
         let branch = if self.at(";") {
             self.emit(Op::Push(1, Integer::Int), token.range)?;
             let branch = self.code.len();
@@ -613,6 +633,7 @@ impl<'a> Parser<'a> {
             let condition = self.controlling_expression()?;
             let value = self.emit_condition(condition)?;
             let range = self.expressions[condition].range;
+            condition_range = Some(range);
             let node = self.tree("for", range, vec![value])?;
             let branch = self.code.len();
             self.emit_node(Op::Branch(0, "for"), range, node)?;
@@ -620,14 +641,24 @@ impl<'a> Parser<'a> {
         };
         self.expect(";")?;
         let iteration_start = self.code.len();
+        let clause = self.current().range;
+        let mut clause_range = None;
         if !self.at(")") {
             self.expression_statement()?;
+            clause_range = Some(combined(clause, self.tokens[self.position - 1].range));
         }
         self.expect(")")?;
         let mut iteration = self.code.split_off(iteration_start);
         self.loop_body = true;
         self.open_breakable("for");
         self.control_body()?;
+        // A continue runs the third clause next, or with none the
+        // condition (C99 §6.8.6.2p2).
+        let (continuation, next) = if iteration.is_empty() {
+            (head, condition_range)
+        } else {
+            (self.code.len(), clause_range)
+        };
         // The clause moves after the body: its jumps inside itself (a
         // `?:` or `&&`'s) move with it.
         let moved = self.code.len() - iteration_start;
@@ -644,7 +675,7 @@ impl<'a> Parser<'a> {
         self.code.extend(iteration);
         self.emit(Op::Jump(head), token.range)?;
         self.patch(branch, self.code.len());
-        self.close_breakable();
+        self.close_loop(continuation, next);
         self.leave(token.range)?;
         self.prune_scope(self.scope);
         self.scope -= 1;
@@ -653,7 +684,10 @@ impl<'a> Parser<'a> {
 
     /// A parenthesized controlling expression; returns its range and the
     /// statement's tree root.
-    fn condition(&mut self, statement: &'static str) -> Result<(SourceRange, usize), Diagnostic> {
+    pub fn condition(
+        &mut self,
+        statement: &'static str,
+    ) -> Result<(SourceRange, usize), Diagnostic> {
         self.expect("(")?;
         let expression = self.controlling_expression()?;
         let value = self.emit_condition(expression)?;
@@ -787,6 +821,7 @@ impl<'a> Parser<'a> {
                 constant: specified.constant,
                 typedef: specified.typedef,
                 named: specified.named,
+                range: name.range,
             });
         }
         self.emit(
@@ -2211,7 +2246,9 @@ impl<'a> Parser<'a> {
 
     /// The type a function returns, from its declaration specifiers `base`
     /// with `depth` `*`s: an arithmetic type, an enumeration's integer type,
-    /// a complete structure, or a pointer to a function named by a typedef.
+    /// a complete structure, a pointer to an object, or a pointer to a
+    /// function named by a typedef. A typedef'd array is refused, as C
+    /// refuses a function that returns an array.
     ///
     /// C99: §6.7.5.3 paragraph 1, p. 118; PDF p. 130.
     pub fn return_type(
@@ -2225,13 +2262,34 @@ impl<'a> Parser<'a> {
             | (Base::Enum(id, false), 0) => Ok(Type::Integer(self.enumerations[id].integer)),
             | (Base::Struct(id), 0) => self.complete_structure(id, range),
             | (Base::Named(ty @ Type::FunctionPointer(_)), 0) => Ok(ty),
-            | _ => Err(Diagnostic::new(
-                "unsupported",
+            | (Base::Named(ty), 0) if ty.is_pointer() => Ok(ty),
+            | (Base::Named(ty), _) if ty.is_array() => Err(Diagnostic::constraint(
                 range,
-                "functions return an arithmetic type, an enumeration, a structure or a pointer to \
-                 a function in this subset",
+                "this typedef name names an array type, and a function cannot return an array \
+                 (C99 §6.7.5.3p1); return a pointer to its first element instead",
+                &super::clauses::RETURN_TYPE,
             )),
+            | (_, depth) if depth > 0 => {
+                let ty = self.declared_type(base, depth, None, range)?;
+                if ty.is_pointer() {
+                    Ok(ty)
+                } else {
+                    Err(self.unsupported_return(range))
+                }
+            },
+            | _ => Err(self.unsupported_return(range)),
         }
+    }
+
+    /// The refusal of a return type outside the subset.
+    fn unsupported_return(&self, range: SourceRange) -> Diagnostic {
+        let _ = self;
+        Diagnostic::new(
+            "unsupported",
+            range,
+            "functions return an arithmetic type, an enumeration, a structure or a pointer in \
+             this subset",
+        )
     }
 
     /// `T (*name(parameters))(pointed-to parameters)`: a function whose
@@ -3596,13 +3654,37 @@ pub(super) struct Typedef<'a> {
 
 /// A `switch` or loop being compiled, which a `break` inside it leaves.
 pub(super) struct Breakable {
-    /// `switch`, `while` or `for`.
+    /// `switch`, `while`, `do` or `for`.
     pub statement: &'static str,
-    /// How many blocks were open where its body began: a `break` leaves
-    /// each block opened since.
+    /// How many blocks were open where its body began: a `break` or a
+    /// `continue` leaves each block opened since.
     pub blocks:    usize,
     /// The `break` jumps to patch to the statement's end.
     pub breaks:    Vec<usize>,
+    /// The `continue` jumps of a loop, to patch to its continuation.
+    pub continues: Vec<usize>,
+}
+
+/// The labels of a `switch` being compiled.
+pub(super) struct SwitchLabels {
+    pub cases:    Vec<Case>,
+    pub default:  Option<Landing>,
+    /// The promoted type of the controlling expression, which each case
+    /// constant converts to (C99 §6.8.4.2p5).
+    pub promoted: Integer,
+    /// How many blocks were open at the switch: a label inside more is
+    /// reached by entering the blocks between.
+    pub blocks:   usize,
+}
+
+/// A named label: where it is written, the instruction it labels, and the
+/// blocks open there, outermost first, with how many of each block's
+/// objects are declared before it.
+pub(super) struct LabelSite<'a> {
+    pub name:   Token<'a>,
+    pub range:  SourceRange,
+    pub target: usize,
+    pub path:   Vec<Entry>,
 }
 
 /// The char value a byte holds: plain char is signed with 8 bits on x86-64

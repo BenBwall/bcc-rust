@@ -192,22 +192,8 @@ impl Machine {
             // indeterminate; their names come into scope only at their
             // declarations (C99 §6.2.4p5, §6.2.1p7).
             | Op::Enter { objects, iteration } => {
-                self.activations[top].scope += 1;
-                let scope = self.activations[top].scope;
-                let mut begun = Vec::with_capacity(objects.len());
-                for object in objects {
-                    let id =
-                        self.allocate(&object.name, object.ty, scope, Value::Indeterminate, false)?;
-                    if let Some(typedef) = object.typedef {
-                        self.name_type(id, typedef);
-                    }
-                    self.name(id, object.named);
-                    if object.constant {
-                        self.make_const(id);
-                    }
-                    self.state.objects[id - 1].declared = false;
-                    begun.push(id);
-                }
+                let block = self.activations[top].pc - 1;
+                let begun = self.begin_block(objects, block)?;
                 let written = source.get(range.start..range.end).unwrap_or("");
                 self.enter_block(range, written, begun, *iteration)
             },
@@ -224,39 +210,19 @@ impl Machine {
                     }
                 }
                 self.activations[top].scope -= 1;
-                self.leave_block(range, ended)
+                let event = self.leave_block(range, ended);
+                if source.get(range.start..range.end) == Some("continue") {
+                    narration::left_by_continue(event)
+                } else {
+                    event
+                }
             },
             // The object exists already; from here its name designates it.
             // Without an initializer, reaching the declaration stores an
             // indeterminate value (C99 §6.8p3): this subset reaches each
             // declaration once per entry into its block, when nothing has
             // been stored yet, so the value is unchanged.
-            | &Op::Declare {
-                ref name,
-                ty,
-                initialized,
-                named,
-            } => {
-                let frame = &self.activations[top];
-                let id = self
-                    .state
-                    .objects
-                    .iter()
-                    .rev()
-                    .find(|object| {
-                        object.name == *name
-                            && object.frame_id == frame.id
-                            && object.lifetime == "alive"
-                            && !object.declared
-                            && self.metadata[object.id - 1].scope == frame.scope
-                    })
-                    .map(|object| object.id)
-                    .ok_or_else(|| {
-                        self.error("declaration of an object its block did not create")
-                    })?;
-                self.state.objects[id - 1].declared = true;
-                self.declare(range, id, ty, (initialized, named))
-            },
+            | Op::Declare { .. } => self.declare_operation(instruction)?,
             | &Op::StaticLocal(index) => self.static_local(range, index + 1),
             | &Op::Enumeration(index) => self.enumeration(program, index),
             | Op::Enumerator { .. } => self.enumerator_operation(instruction)?,
@@ -306,7 +272,8 @@ impl Machine {
                 };
                 self.push(operand.clone())?;
                 let role = self.designation(program, instruction);
-                self.designate(range, id, operand, role)
+                let event = self.designate(range, id, operand, role);
+                self.hiding(event, id)
             },
             | Op::Element {
                 name,
@@ -330,7 +297,8 @@ impl Machine {
                     .map_or(1, |length| i32::try_from(length).unwrap_or(i32::MAX));
                 let value = Value::pointer(id, 0, 0, length);
                 self.push(Operand::Value(value.clone()))?;
-                self.decay(range, id, value)
+                let event = self.decay(range, id, value);
+                self.hiding(event, id)
             },
             | Op::Load => {
                 let (target, offset) = self.pop_address()?;
@@ -652,8 +620,14 @@ impl Machine {
                 )?,
             | Op::Test { .. } | Op::Yield { .. } | Op::Comma { .. } =>
                 self.sequenced(instruction, program)?,
+            // Discarding a value does not use it, even a pointer whose
+            // object's lifetime has ended.
             | Op::Pop => {
-                let value = self.pop_value()?;
+                let value = match self.pop()? {
+                    | Operand::Value(value) => value,
+                    | Operand::Address { .. } =>
+                        return Err(self.error("expected an evaluated value")),
+                };
                 self.discard(range, source, value)
             },
             | &Op::Jump(target) => {
@@ -665,12 +639,16 @@ impl Machine {
                 self.activations[top].pc = target;
                 narration::break_statement(range, statement, skipped)
             },
-            | &Op::PastLabels(count) => narration::past_labels(range, source, count),
+            | Op::PastLabels(_) | Op::Do | Op::Continue { .. } | Op::Goto(_) =>
+                self.jump_operation(instruction, program)?,
             | Op::Switch { .. } => self.switch_operation(program, instruction)?,
             | &Op::Branch(target, statement) => {
                 let value = self.pop_value()?;
                 let truth = self.truth(&value)?;
-                if !truth {
+                // A do statement's test jumps back to its body while the
+                // value is nonzero; every other condition jumps past the
+                // code it controls when it is zero (C99 §6.8.5.2p1).
+                if truth == (statement == "do") {
                     self.activations[top].pc = target;
                 }
                 // An if with an else ends its first branch with a forward
@@ -707,6 +685,100 @@ impl Machine {
                          explicit return",
                     ));
                 },
+        })
+    }
+
+    /// Reaching the declaration of an automatic object its block created:
+    /// its name is in scope from here (C99 §6.2.1p7), and without an
+    /// initializer it holds an indeterminate value (C99 §6.8p3).
+    fn declare_operation(&mut self, instruction: &Instruction) -> Result<Event, Diagnostic> {
+        let &Op::Declare {
+            ref name,
+            ty,
+            initialized,
+            named,
+        } = &instruction.op
+        else {
+            return Err(self.error("not a declaration"));
+        };
+        let top = self.activations.len() - 1;
+        let range = instruction.range;
+        let frame = &self.activations[top];
+        let id = self
+            .state
+            .objects
+            .iter()
+            .rev()
+            .find(|object| {
+                object.name == *name
+                    && object.frame_id == frame.id
+                    && object.lifetime == "alive"
+                    && !object.declared
+                    && self.metadata[object.id - 1].scope == frame.scope
+            })
+            .map(|object| object.id)
+            .ok_or_else(|| self.error("declaration of an object its block did not create"))?;
+        self.state.objects[id - 1].declared = true;
+        // Reaching the declaration again, after a jump back over
+        // it, stores an indeterminate value anew when it has no
+        // initializer (C99 §6.2.4p5, §6.8p3).
+        let again = std::mem::replace(&mut self.metadata[id - 1].reached, true);
+        let before = self.state.objects[id - 1].value.clone();
+        if !initialized {
+            self.state.objects[id - 1].value = ty.indeterminate(&self.structures);
+        }
+        let event = self.declare(range, id, ty, (initialized, named));
+        Ok(if again {
+            let name = self.state.objects[id - 1].name.clone();
+            self.declared_again(event, &name, &before, initialized)
+        } else {
+            event
+        })
+    }
+
+    /// A step that moves control without testing anything: running on
+    /// past case labels, a `do` entering its body, a `continue`, or a
+    /// `goto`'s steps.
+    fn jump_operation(
+        &mut self,
+        instruction: &Instruction,
+        program: &Program,
+    ) -> Result<Event, Diagnostic> {
+        let top = self.activations.len() - 1;
+        let range = instruction.range;
+        let source = &program.source;
+        Ok(match &instruction.op {
+            | &Op::PastLabels(count) => {
+                // Labels first in a block follow its entry, not a statement.
+                let code = &program.functions[self.activations[top].function].code;
+                let first = self.activations[top]
+                    .pc
+                    .checked_sub(2)
+                    .and_then(|before| code.get(before))
+                    .is_some_and(|before| matches!(before.op, Op::Enter { .. }));
+                narration::past_labels(range, source, count, first)
+            },
+            | Op::Do => self.do_statement(program, instruction),
+            | &Op::Continue {
+                target,
+                statement,
+                next,
+            } => {
+                // The blocks the continue left, in the steps before it.
+                let code = &program.functions[self.activations[top].function].code;
+                let at = self.activations[top].pc - 1;
+                let left = code[..at]
+                    .iter()
+                    .rev()
+                    .take_while(|before| {
+                        matches!(before.op, Op::Leave) && before.range == instruction.range
+                    })
+                    .count();
+                self.activations[top].pc = target;
+                self.continued(program, range, statement, next, left)
+            },
+            | Op::Goto(goto) => self.goto_operation(program, instruction, goto)?,
+            | _ => return Err(self.error("not a jump")),
         })
     }
 
@@ -776,14 +848,158 @@ impl Machine {
         let promoted_value = promoted.convert(number);
         let matched = cases.iter().find(|case| case.value == promoted_value);
         let top = self.activations.len() - 1;
-        self.activations[top].pc = matched.map_or(default.unwrap_or(*end), |case| case.target);
-        Ok(Self::switched(
+        let landing = matched.map(|case| &case.landing).or(default.as_ref());
+        let entered = match landing {
+            | Some(landing) => {
+                self.activations[top].pc = landing.target;
+                self.land(program, landing)?
+            },
+            | None => {
+                self.activations[top].pc = *end;
+                Vec::new()
+            },
+        };
+        let mut event = Self::switched(
             program,
             instruction.range,
             promoted_value,
             matched,
-            *default,
-        ))
+            default.is_some(),
+        );
+        if !entered.is_empty() {
+            event = self.entered_by_jump(
+                event,
+                program,
+                landing.map_or(&[], |landing| &landing.enter),
+                &entered,
+            );
+        }
+        Ok(event)
+    }
+
+    /// Begin the lifetimes of the automatic objects `objects` of the block
+    /// whose `Enter` instruction is `block`, one scope deeper: each is
+    /// indeterminate, and its name is not in scope until its declaration
+    /// (C99 §6.2.4p5, §6.2.1p7).
+    fn begin_block(
+        &mut self,
+        objects: &[super::model::BlockObject],
+        block: usize,
+    ) -> Result<Vec<usize>, Diagnostic> {
+        let top = self.activations.len() - 1;
+        self.activations[top].scope += 1;
+        let scope = self.activations[top].scope;
+        let mut begun = Vec::with_capacity(objects.len());
+        for object in objects {
+            let id = self.allocate(&object.name, object.ty, scope, Value::Indeterminate, false)?;
+            if let Some(typedef) = object.typedef {
+                self.name_type(id, typedef);
+            }
+            self.name(id, object.named);
+            if object.constant {
+                self.make_const(id);
+            }
+            self.state.objects[id - 1].declared = false;
+            self.metadata[id - 1].block = u32::try_from(block).ok();
+            self.metadata[id - 1].line = u32::try_from(object.range.line).unwrap_or(0);
+            begun.push(id);
+        }
+        Ok(begun)
+    }
+
+    /// A jump has moved the program counter to `landing`'s target: enter
+    /// the blocks between, beginning their objects' lifetimes. The objects
+    /// whose declarations come before the target are in scope there, and
+    /// indeterminate, since the jump passed their initializers (C99
+    /// §6.2.4p5, §6.8p3). Returns the objects begun.
+    pub(super) fn land(
+        &mut self,
+        program: &Program,
+        landing: &super::model::Landing,
+    ) -> Result<Vec<usize>, Diagnostic> {
+        let top = self.activations.len() - 1;
+        let function = self.activations[top].function;
+        let mut begun = Vec::new();
+        for entry in &landing.enter {
+            let Some(Op::Enter { objects, .. }) = program.functions[function]
+                .code
+                .get(entry.block)
+                .map(|instruction| &instruction.op)
+            else {
+                return Err(self.error("a jump enters a block that is not one"));
+            };
+            let ids = self.begin_block(objects, entry.block)?;
+            for &id in ids.iter().take(entry.declared) {
+                self.state.objects[id - 1].declared = true;
+                self.metadata[id - 1].reached = true;
+            }
+            begun.extend(ids);
+        }
+        Ok(begun)
+    }
+
+    /// `goto`: while the innermost block open here is one the label is not
+    /// in, leave it, in a step of its own, and run the goto again; then
+    /// jump, entering the blocks the label is in, and bring into scope
+    /// exactly the names declared before the label in the innermost block
+    /// that stays open (C99 §6.8.6.1p2, §6.2.1p7).
+    fn goto_operation(
+        &mut self,
+        program: &Program,
+        instruction: &Instruction,
+        goto: &super::model::Goto,
+    ) -> Result<Event, Diagnostic> {
+        let top = self.activations.len() - 1;
+        let frame = &self.activations[top];
+        if frame.scope > goto.common {
+            let left = goto.from.get(frame.scope - 1).copied();
+            let mut ended = Vec::new();
+            for object in &mut self.state.objects {
+                if object.frame_id == frame.id
+                    && object.lifetime == "alive"
+                    && self.metadata[object.id - 1].scope == frame.scope
+                {
+                    object.lifetime = "ended";
+                    ended.push(object.id);
+                }
+            }
+            self.activations[top].scope -= 1;
+            self.activations[top].pc -= 1;
+            let event = self.leave_block(instruction.range, ended);
+            return Ok(self.left_by_goto(event, program, goto, left));
+        }
+        // The innermost block that stays open: the names declared in it
+        // before the label are in scope there, the others not.
+        let stays = goto
+            .from
+            .get(goto.common.wrapping_sub(1))
+            .and_then(|&block| u32::try_from(block).ok());
+        let mut passed = Vec::new();
+        let mut unscoped = Vec::new();
+        let frame_id = self.activations[top].id;
+        let mut index = 0;
+        for object in &mut self.state.objects {
+            if object.frame_id == frame_id
+                && object.lifetime == "alive"
+                && stays.is_some()
+                && self.metadata[object.id - 1].block == stays
+            {
+                let declared = index < goto.declared;
+                index += 1;
+                if declared && !object.declared {
+                    passed.push(object.id);
+                } else if !declared && object.declared {
+                    unscoped.push(object.id);
+                }
+                object.declared = declared;
+                if declared {
+                    self.metadata[object.id - 1].reached = true;
+                }
+            }
+        }
+        self.activations[top].pc = goto.landing.target;
+        let entered = self.land(program, &goto.landing)?;
+        Ok(self.goto_jump(program, instruction, goto, &entered, &passed, &unscoped))
     }
 
     /// A store into the lvalue below the value on the stack: an
@@ -1274,17 +1490,17 @@ impl Machine {
         let top = self.activations.len() - 1;
         let id = self.activations[top].id;
         let defined = &program.functions[self.activations[top].function];
-        // A function may return a pointer to a function, or a null one,
-        // which a null pointer constant such as 0 converts to (C99
-        // §6.3.2.3p3).
-        let pointer = matches!(defined.returns, Type::FunctionPointer(_));
+        // A function may return a pointer, to an object or to a function,
+        // or a null one, which a null pointer constant such as 0 converts
+        // to (C99 §6.3.2.3p3).
+        let pointer = defined.returns.is_pointer();
         let value = match value {
             | Value::Integer(0) if pointer => Value::null(),
             | value => value,
         };
         let supported = match value {
             | Value::Integer(_) | Value::Floating(_) | Value::Struct { .. } => !pointer,
-            | Value::Function(_) | Value::Pointer { target: None, .. } => pointer,
+            | Value::Function(_) | Value::Pointer { .. } => pointer,
             | _ => false,
         };
         if !supported {
@@ -1331,7 +1547,15 @@ impl Machine {
                 &program.source[range.start..range.end]
             })
         };
-        Ok(self.returned(
+        // A pointer to one of the call's own objects, which end now.
+        let dangling = match value {
+            | Value::Pointer {
+                target: Some(target),
+                ..
+            } if ended.contains(&target) => Some(target),
+            | _ => None,
+        };
+        let event = self.returned(
             range,
             &function,
             id,
@@ -1340,7 +1564,11 @@ impl Machine {
             ended,
             fallthrough,
             call,
-        ))
+        );
+        Ok(match dangling {
+            | Some(target) => self.returned_dangling(event, &function, target),
+            | None => event,
+        })
     }
 
     /// Start tracking the full expression `instruction` belongs to in the
@@ -1358,6 +1586,9 @@ impl Machine {
                     | Op::Break(..)
                     | Op::PastLabels(_)
                     | Op::Enumeration(_)
+                    | Op::Do
+                    | Op::Continue { .. }
+                    | Op::Goto(_)
             ) {
                 activation.evaluation = None;
                 activation.accesses.clear();
@@ -1629,9 +1860,15 @@ impl Machine {
         Ok(())
     }
 
+    /// The value on top of the stack, for an operation that uses it: a
+    /// pointer a call returned to one of its own objects, which ended with
+    /// the call, stops the machine here (C99 §6.2.4p2).
     pub fn pop_value(&mut self) -> Result<Value, Diagnostic> {
         match self.pop()? {
-            | Operand::Value(value) => Ok(value),
+            | Operand::Value(value) => {
+                self.check_dangling(&value)?;
+                Ok(value)
+            },
             | Operand::Address { .. } => Err(self.error("expected an evaluated value")),
         }
     }
@@ -1742,4 +1979,13 @@ pub(super) struct ObjectMetadata {
     /// The typedef name its type was spelled with, which names the type
     /// where the program did (C99 §6.7.7p3).
     pub typedef:  Option<&'static str>,
+    /// The `Enter` instruction of the block that created it, for an
+    /// automatic object a block declares.
+    pub block:    Option<u32>,
+    /// The line its declaration names it on, for an object a declaration
+    /// creates; 0 for any other.
+    pub line:     u32,
+    /// Whether execution has reached its declaration since its block
+    /// began it, so that reaching it again is a jump's doing.
+    pub reached:  bool,
 }

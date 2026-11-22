@@ -97,6 +97,9 @@ impl Machine {
         if object.constant {
             self.make_const(id);
         }
+        if !object.literal {
+            self.metadata[id - 1].line = u32::try_from(object.range.line).unwrap_or(0);
+        }
         Ok(id)
     }
 
@@ -236,6 +239,9 @@ impl Machine {
             ty,
             constant: false,
             typedef: None,
+            block: None,
+            line: 0,
+            reached: false,
         });
         self.cells += cells;
         Ok(id)
@@ -503,6 +509,32 @@ impl Machine {
             ));
         }
         Ok(object)
+    }
+
+    /// A value about to be used: a pointer whose object has ended, as one a
+    /// call returned to an object of its own, is indeterminate, and using
+    /// it is undefined (C99 §6.2.4p2).
+    pub fn check_dangling(&self, value: &Value) -> Result<(), Diagnostic> {
+        if let Value::Pointer {
+            target: Some(target),
+            ..
+        } = value
+            && let Some(object) = self.state.objects.get(target - 1)
+            && object.lifetime != "alive"
+        {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "this pointer points to `{}`, an automatic object of a call that has \
+                     returned: its lifetime ended with that call, so the pointer's value became \
+                     indeterminate, and using it is undefined",
+                    object.name
+                ),
+                &clauses::LIFETIME,
+                Undefined::DanglingPointer,
+            ));
+        }
+        Ok(())
     }
 
     fn check_pointer_lifetime(&self, value: &Value) -> Result<(), Diagnostic> {

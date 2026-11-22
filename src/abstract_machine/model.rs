@@ -791,6 +791,10 @@ pub enum Undefined {
     NullSubscript,
     /// An access to an object whose lifetime has ended (C99 §6.2.4p2).
     AfterLifetime,
+    /// A use of a pointer a call returned to one of its own automatic
+    /// objects, which ended with the call: the pointer's value is
+    /// indeterminate (C99 §6.2.4p2).
+    DanglingPointer,
     /// An access one past the end of an array (C99 §6.5.6p8).
     OnePastEnd,
     /// Pointer arithmetic that leaves the array and its one-past position.
@@ -923,6 +927,8 @@ pub(super) struct BlockObject {
     pub constant: bool,
     pub typedef:  Option<&'static str>,
     pub named:    Named,
+    /// Where its declarator names it.
+    pub range:    SourceRange,
 }
 
 /// How a declaration named an object's type beyond the type itself: with a
@@ -1172,10 +1178,11 @@ pub(super) enum Op {
     /// `switch`: pop the controlling expression's value, promoted to
     /// `promoted`, and jump to the case label whose constant equals it, to
     /// `default` when none does, or past the body to `end` when there is
-    /// no default either (C99 §6.8.4.2p5).
+    /// no default either (C99 §6.8.4.2p5). A label inside a block of the
+    /// body is reached by entering that block.
     Switch {
         cases:    Vec<Case>,
-        default:  Option<usize>,
+        default:  Option<Landing>,
         end:      usize,
         promoted: Integer,
     },
@@ -1190,6 +1197,25 @@ pub(super) enum Op {
     /// do not alter the flow of control, so it runs on into the statements
     /// after them (C99 §6.8.1p4).
     PastLabels(usize),
+    /// `do`: the body runs before the first test of the controlling
+    /// expression, whose `Branch` after the body jumps back to it while
+    /// the value is nonzero (C99 §6.8.5.2p1).
+    Do,
+    /// `continue`: jump to the target, the loop-continuation portion of the
+    /// innermost loop, the named statement: its condition, a for
+    /// statement's third clause, or a do statement's test (C99
+    /// §6.8.6.2p2). The blocks it leaves end in the steps before it.
+    Continue {
+        target:    usize,
+        statement: &'static str,
+        /// The source that runs next, which the explanation quotes: the
+        /// condition or the third clause; `None` for an omitted condition.
+        next:      Option<SourceRange>,
+    },
+    /// `goto label;`: leave, one step each, the blocks the label is not in,
+    /// then jump to the label, entering the blocks it is in (C99
+    /// §6.8.6.1p2).
+    Goto(Box<Goto>),
     /// A call with the arguments' types, which convert to the parameters'.
     Call(String, Vec<Type>),
     /// A call through the pointer to a function below the arguments on the
@@ -1232,13 +1258,51 @@ pub(super) enum Skipped {
 }
 
 /// One `case` label of a `switch`: its constant converted to the promoted
-/// type of the controlling expression, where it is written, and the
-/// instruction it labels.
+/// type of the controlling expression, where it is written, and where the
+/// switch's jump to it lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Case {
-    pub value:  i128,
-    pub range:  SourceRange,
+    pub value:   i128,
+    pub range:   SourceRange,
+    pub landing: Landing,
+}
+
+/// Where a jump lands: the instruction, and the blocks between the jump
+/// and that instruction that the jump enters, outermost first. Entering a
+/// block by a jump begins the lifetimes of its objects as entering it at
+/// its brace does (C99 §6.2.4p5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Landing {
     pub target: usize,
+    pub enter:  Vec<Entry>,
+}
+
+/// A block a jump enters: its `Enter` instruction, and how many of the
+/// objects it declares have their declarations before the jump's target,
+/// so that their names are in scope there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Entry {
+    pub block:    usize,
+    pub declared: usize,
+}
+
+/// A `goto` and the label it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Goto {
+    pub label:    String,
+    /// The labeled statement's label, `again:`.
+    pub at:       SourceRange,
+    /// The `Enter` instructions of the blocks open at the goto, outermost
+    /// first.
+    pub from:     Vec<usize>,
+    /// How many of them the label is in too, which the jump does not
+    /// leave.
+    pub common:   usize,
+    /// How many objects of the innermost of those blocks have their
+    /// declarations before the label: their names are in scope there, and
+    /// the others' are not.
+    pub declared: usize,
+    pub landing:  Landing,
 }
 
 /// Where a `++`, `--` or assignment inside a larger expression sits: the

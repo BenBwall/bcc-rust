@@ -21,6 +21,7 @@ use crate::abstract_machine::{
         Arithmetic,
         DirectiveKind,
         EventKind,
+        Goto,
         Instruction,
         Library,
         Op,
@@ -450,13 +451,24 @@ impl Machine {
                     )
                 }
             },
+            | Op::Do => (
+                EventKind::Jump,
+                String::from("enter the body of the `do`, which runs before any test"),
+                clauses::DO_STATEMENT,
+            ),
+            | Op::Continue { statement, .. } => (
+                EventKind::Jump,
+                format!("continue: end this pass through the `{statement}` loop's body"),
+                clauses::CONTINUE,
+            ),
+            | Op::Goto(goto) => self.goto_upcoming(goto),
             | &Op::Branch(_, statement) => (
                 EventKind::Branch,
                 format!("test the `{statement}` condition {}", code()),
-                if statement == "if" {
-                    clauses::IF_STATEMENT
-                } else {
-                    clauses::ITERATION
+                match statement {
+                    | "if" => clauses::IF_STATEMENT,
+                    | "do" => clauses::DO_STATEMENT,
+                    | _ => clauses::ITERATION,
                 },
             ),
             | Op::Call(name, _) => (
@@ -752,6 +764,32 @@ impl Machine {
         }
     }
 
+    /// A goto's next step: leaving the innermost block, when the label is
+    /// not in it, or the jump.
+    fn goto_upcoming(&self, goto: &Goto) -> (EventKind, String, Clause) {
+        if self
+            .activations
+            .last()
+            .is_some_and(|frame| frame.scope > goto.common)
+        {
+            let ended = self.ending();
+            let text = if ended.is_empty() {
+                String::from("leave the block, since the label is not in it")
+            } else {
+                format!(
+                    "end the lifetime of {}, leaving the block for the label",
+                    listed(ended.into_iter())
+                )
+            };
+            return (EventKind::LeaveBlock, text, clauses::AUTOMATIC_LIFETIME);
+        }
+        (
+            EventKind::Jump,
+            format!("goto: jump to `{}:` on line {}", goto.label, goto.at.line),
+            clauses::GOTO,
+        )
+    }
+
     /// The objects leaving the innermost block ends, by name.
     fn ending(&self) -> Vec<&str> {
         let Some(frame) = self.activations.last() else {
@@ -839,9 +877,12 @@ fn enumeration_upcoming(
             format!("break out of the `{statement}`"),
             clauses::BREAK,
         ),
-        | Op::PastLabels(_) => (
+        | Op::PastLabels(count) => (
             EventKind::Jump,
-            format!("run on past {code} into the statements after it"),
+            format!(
+                "run on past {code} into the statements after {}",
+                if count == 1 { "it" } else { "them" }
+            ),
             clauses::LABELS_FLOW,
         ),
         | _ => (

@@ -8,6 +8,7 @@
 mod enumerations;
 mod floating;
 mod functions;
+mod jumps;
 mod upcoming;
 
 use std::{
@@ -27,6 +28,7 @@ pub(super) use floating::{
     floating_constant,
     floating_precision,
 };
+pub(super) use jumps::left_by_continue;
 
 use super::{
     clauses::{
@@ -144,6 +146,9 @@ pub(super) enum Topic {
     Enumeration,
     Switch,
     Typedef,
+    Loops,
+    Jump,
+    Hiding,
 }
 
 impl Topic {
@@ -482,6 +487,24 @@ impl Topic {
                  separate blocks: after the jump, execution runs straight on through the next \
                  labels until a break. Forgetting a break, so one case falls through into the \
                  next, is a classic bug, which is why compilers can warn about it.",
+            | Self::Loops =>
+                "C has three loops. while tests its condition before each pass, so its body may \
+                 never run; do tests after each pass, so its body runs at least once; for puts a \
+                 loop's start, test and step on one line. In any of them, break leaves the loop at \
+                 once, and continue skips the rest of one pass and goes on to the next test.",
+            | Self::Jump =>
+                "goto jumps to a label anywhere in its function. Jumping around freely makes code \
+                 hard to follow, so C programs mostly use loops, break and continue, and keep goto \
+                 for leaving several nested loops at once or for one cleanup point at a function's \
+                 end. A jump never suspends the rules for objects: leaving a block ends its \
+                 objects' lifetimes, and jumping into a block, past an initializer, leaves the \
+                 object without its initial value.",
+            | Self::Hiding =>
+                "A block may declare a name that an enclosing block, or the file, already uses. \
+                 Inside the inner block the name means the inner object, which hides the outer one \
+                 until the inner block ends; the outer object still exists and keeps its value. \
+                 Using the wrong one by mistake is easy, so compilers can warn about it (GCC's \
+                 -Wshadow).",
             | Self::Typedef =>
                 "A typedef gives a type a second name, such as `celsius` for double or `string` \
                  for char *, so a declaration can say what a value means rather than how it is \
@@ -1098,6 +1121,12 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: use after lifetime",
             "The object no longer exists, and C gives no meaning to using it; its memory may \
              already hold another object.",
+        ),
+        | Some(Undefined::DanglingPointer) => (
+            "Undefined behavior: use of a dangling pointer",
+            "The pointer pointed to an object of a call that has returned. When that object's \
+             lifetime ended, the pointer's value became indeterminate, and C gives no meaning to \
+             using it.",
         ),
         | Some(Undefined::OnePastEnd) => (
             "Undefined behavior: access one past the end",
@@ -5171,6 +5200,18 @@ impl Machine {
                 "the first branch is skipped; with no else, the if statement is done",
                 "the if branch is skipped",
                 clauses::IF_STATEMENT,
+            ),
+            | ("do", true) => (
+                "true: run the body again",
+                "the body runs again",
+                "the body runs again",
+                clauses::DO_STATEMENT,
+            ),
+            | ("do", false) => (
+                "false: leave the loop",
+                "the loop ends",
+                "the loop ends",
+                clauses::DO_STATEMENT,
             ),
             | (_, true) => (
                 "true: run the loop body",
