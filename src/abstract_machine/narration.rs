@@ -80,6 +80,7 @@ pub(super) enum Topic {
     Address,
     Indirection,
     PointerArithmetic,
+    PointerDifference,
     Subscript,
     Comparison,
     IntRange,
@@ -185,6 +186,12 @@ impl Topic {
                 "An int is 4 bytes on x86-64, so the address grows by 4 per step, but C counts in \
                  elements. Pointer arithmetic is defined only within one array and one past its \
                  end; going further is undefined, even if the pointer is never used.",
+            | Self::PointerDifference =>
+                "Subtracting two pointers counts elements, not bytes: `end - begin` is how many \
+                 elements lie from begin up to end, which is why the half-open range [begin, end) \
+                 holds exactly end - begin of them. Its type, ptrdiff_t, is signed, since the \
+                 count is negative when the left pointer comes first, and it is defined only for \
+                 two pointers into the same array.",
             | Self::Subscript =>
                 "Subscripting is pointer arithmetic: `a[i]` is `*(a + i)` whether `a` is an array, \
                  which decays to a pointer first, or a pointer, so a function given only a pointer \
@@ -2688,17 +2695,54 @@ impl Machine {
         // Only the outer `*`: `**pp`'s operand is `*pp`.
         let written = snippet(source, range);
         let operand = written.strip_prefix('*').unwrap_or(written).trim_start();
-        let summary = format!(
-            "`*{operand}` follows the pointer `{operand}` to the object it points to: \
-             `*{operand}` now stands for {location} itself."
-        );
-        let text = format!(
-            "`{operand}` holds {}. The unary `*` operator (indirection) turns a pointer back into \
-             the object it points to, so `*{operand}` is an lvalue: another name for {location}, \
-             the same place in memory, not a copy of it. Nothing is read or written yet: the \
-             operator around it decides which.",
-            self.value_text(&pointer),
-        );
+        // `*p++` is `*(p++)`: the `*` follows the value `p++` yields, the
+        // old one (C99 §6.5.2.4p2).
+        let updated = ["++", "--"].into_iter().find_map(|update| {
+            operand
+                .strip_suffix(update)
+                .map(|name| (name.trim_end(), update, false))
+                .or_else(|| {
+                    operand
+                        .strip_prefix(update)
+                        .map(|name| (name.trim_start(), update, true))
+                })
+        });
+        let (summary, text) = if let Some((name, update, prefix)) = updated {
+            let (which, when) = if prefix {
+                ("new", "holds after")
+            } else {
+                ("old", "held before")
+            };
+            (
+                format!(
+                    "`*{operand}` follows the pointer `{operand}` yields, the {which} value of \
+                     `{name}`: `*{operand}` now stands for {location} itself."
+                ),
+                format!(
+                    "`{operand}` yields {}, the value `{name}` {when} its update: \
+                     `{update}` binds tighter than `*`, so `*{operand}` is `*({operand})`, and \
+                     the `*` uses what `{operand}` yields. The unary `*` operator (indirection) \
+                     turns that pointer back into the object it points to, so `*{operand}` is an \
+                     lvalue: another name for {location}, the same place in memory, not a copy of \
+                     it. Nothing is read or written yet: the operator around it decides which.",
+                    self.value_text(&pointer),
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "`*{operand}` follows the pointer `{operand}` to the object it points to: \
+                     `*{operand}` now stands for {location} itself."
+                ),
+                format!(
+                    "`{operand}` holds {}. The unary `*` operator (indirection) turns a pointer \
+                     back into the object it points to, so `*{operand}` is an lvalue: another \
+                     name for {location}, the same place in memory, not a copy of it. Nothing is \
+                     read or written yet: the operator around it decides which.",
+                    self.value_text(&pointer),
+                ),
+            )
+        };
         let mut event = noted(
             explained(
                 Event::new(
@@ -2708,7 +2752,15 @@ impl Machine {
                 ),
                 &summary,
                 &text,
-                &[clauses::INDIRECTION],
+                &match updated {
+                    | Some((_, "++", false)) =>
+                        vec![clauses::INDIRECTION, clauses::POSTFIX_INCREMENT],
+                    | Some((_, _, false)) => vec![clauses::INDIRECTION, clauses::POSTFIX_DECREMENT],
+                    | Some((_, "++", true)) =>
+                        vec![clauses::INDIRECTION, clauses::PREFIX_INCREMENT],
+                    | Some(_) => vec![clauses::INDIRECTION, clauses::PREFIX_DECREMENT],
+                    | None => vec![clauses::INDIRECTION],
+                },
             ),
             Topic::Indirection,
         );
@@ -3325,7 +3377,7 @@ impl Machine {
                     &text,
                     &[clauses::POINTER_SUBTRACTION, clauses::EVALUATION_ORDER],
                 ),
-                Topic::PointerArithmetic,
+                Topic::PointerDifference,
             );
         }
         let truth = if *output == Value::Integer(1) {
