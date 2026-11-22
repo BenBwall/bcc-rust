@@ -74,6 +74,7 @@ use crate::{
         N1256_URL,
         Range,
         Snapshot,
+        Value,
         status_label,
     },
 };
@@ -1241,6 +1242,7 @@ impl State {
             {
                 execution.push(boxed(next, "exec-next", 2));
             }
+            objects.extend(function_marks(snapshot));
             self.source.with(|source| {
                 let names: Vec<&str> = snapshot
                     .objects
@@ -1656,6 +1658,59 @@ fn marker(diagnostic: &CompileDiagnostic) -> Option<Marker> {
 
 /// One continuous box behind `range` (Monaco draws a range's `className` as
 /// a single overlay, where an inline class would box each token).
+/// The listing's arrows to code: each function a live object points to
+/// has its name in its definition marked, with the pointers that lead there
+/// written before it (`f, ops[0] →`), so a pointer to a function points into
+/// the listing as a pointer to an object points into the cells.
+fn function_marks(snapshot: &Snapshot) -> Vec<Decoration> {
+    let mut targets: Vec<(Range, String, Vec<String>)> = Vec::new();
+    let mut note = |value: &Value, label: String| {
+        if let Value::Function {
+            name, at: Some(at), ..
+        } = value
+        {
+            match targets.iter_mut().find(|(target, ..)| target == at) {
+                | Some((.., labels)) => labels.push(label),
+                | None => targets.push((*at, name.clone(), vec![label])),
+            }
+        }
+    };
+    for object in snapshot.objects.iter().filter(|object| object.alive) {
+        match &object.value {
+            | Value::Array { elements } =>
+                for (index, element) in elements.iter().enumerate() {
+                    note(element, format!("{}[{index}]", object.name));
+                },
+            | value => note(value, object.name.clone()),
+        }
+    }
+    targets
+        .into_iter()
+        .map(|(at, name, labels)| {
+            let shown = match labels.as_slice() {
+                | [a, b, c, _, ..] => format!("{a}, {b}, {c} +{} →", labels.len() - 3),
+                | _ => format!("{} →", labels.join(", ")),
+            };
+            let verb = if labels.len() == 1 { "points" } else { "point" };
+            Decoration {
+                start_line: at.start.line,
+                start_column: at.start.column,
+                end_line: at.end.line,
+                end_column: at.end.column,
+                inline_class: Some("fn-target".to_owned()),
+                hover: Some(format!(
+                    "{} {verb} to the function {name}",
+                    labels.join(", ")
+                )),
+                before: Some(shown),
+                before_class: Some("fn-pointer-label".to_owned()),
+                z_index: 4,
+                ..Decoration::default()
+            }
+        })
+        .collect()
+}
+
 fn boxed(range: Range, class: &str, z_index: i32) -> Decoration {
     Decoration {
         start_line: range.start.line,
@@ -2597,15 +2652,20 @@ fn About() -> impl IntoView {
                          operator; pointers to numbers, chars, structures or other pointers; arrays of numbers, of \
                          chars or of pointers, and string literals; structures, nested or reached through pointers; \
                          const, casts and sizeof; subtracting two pointers into one array and ordering two pointers \
-                         into one object (p - q, p < q); file-scope and static objects; functions that return a \
-                         number or a structure, called anywhere in an expression; assignments, compound \
+                         into one object (p - q, p < q); file-scope and static objects, whose initializers may be \
+                         constant expressions such as 1 << 3, string literals or the names of functions; functions \
+                         that return a number or a structure, called anywhere in an expression; pointers to \
+                         functions, declared directly or with a typedef, kept in variables, tables and parameters, \
+                         called as fp(x) or (*fp)(x), compared and tested for null; assignments, compound \
                          assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c \
                          = next()) != 0), except in an initializer list and before a . that selects a member of \
                          their value; if and else, while and for; printf, puts and putchar after #include \
                          <stdio.h>; and #define of a name as one number, character or string. Outside it are, among \
-                         others: switch, do, break, continue and goto; typedef, enum, \
-                         union and _Bool; void and static functions; pointers to functions; arrays of structures or \
-                         of arrays; and the other library functions. A program that uses one of them stops before \
+                         others: switch, do, break, continue and goto; enum, union and _Bool, and a typedef of \
+                         anything but a pointer to a function; void and static functions; a function that returns \
+                         a pointer to a function, a structure member that points to one, and a pointer to a library \
+                         function; a static pointer initialized to an object's address; arrays of structures or of \
+                         arrays; and the other library functions. A program that uses one of them stops before \
                          its first step, and its note says so. One that needs more of the preprocessor (another \
                          header, a function-like macro, #if) stops there too, and its note has a button to the \
                          compiler's Preprocessor stage, which shows what bcc makes of it."

@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 54] = [
+pub static TERMS: [Term; 57] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -183,6 +183,17 @@ pub static TERMS: [Term; 54] = [
                      whose left is nonzero, is never evaluated. p != 0 && *p > 0 relies on it.",
         clause:     "6.5.13p4",
         page:       101,
+    },
+    Term {
+        id:         "constant-expression",
+        name:       "Constant expression",
+        phrases:    &["constant expression"],
+        definition: "An expression the compiler can work out while it translates the program, \
+                     such as 1 << 3 or sizeof(int) * 4: no call, no assignment and no read of an \
+                     object. A static object's initializer must be one, since its value is fixed \
+                     before the program starts.",
+        clause:     "6.6p2",
+        page:       107,
     },
     Term {
         id:         "full-expression",
@@ -480,6 +491,27 @@ pub static TERMS: [Term; 54] = [
                      array is not copied. sizeof and & are the exceptions.",
         clause:     "6.3.2.1p3",
         page:       58,
+    },
+    Term {
+        id:         "function-designator",
+        name:       "Function designator",
+        phrases:    &["function designator"],
+        definition: "An expression that names a function, such as its name or *fp. Used as an \
+                     operand it becomes a pointer to the function, as an array becomes a pointer \
+                     to its first element; sizeof and & are the exceptions.",
+        clause:     "6.3.2.1p4",
+        page:       58,
+    },
+    Term {
+        id:         "function-pointer",
+        name:       "Pointer to a function",
+        phrases:    &["pointer to a function", "pointers to functions"],
+        definition: "A value that records which function a call runs. A function's name becomes \
+                     one, and fp(x) or (*fp)(x) calls the function it points to; its type spells \
+                     the parameters and return type, so int (*)(int) points to a function that \
+                     takes an int and returns one.",
+        clause:     "6.2.5p20",
+        page:       47,
     },
     Term {
         id:         "pointer-arithmetic",

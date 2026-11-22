@@ -601,8 +601,16 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                         // dangling: its value is indeterminate (C99
                         // §6.2.4p2).
                         let dangling = matches!(value, Value::Pointer { ended: true, .. });
+                        // A pointer to a function is read out as the
+                        // function and where the listing defines it.
+                        let function = match &value {
+                            | Value::Function { name, line, .. } => Some(format!("a pointer to the function {name}, defined on line {line}")),
+                            | _ => None,
+                        };
                         let shown = if dangling {
                             "dangling: the object it pointed to has ended, so its value is indeterminate"
+                        } else if let Some(function) = &function {
+                            function
                         } else {
                             text.as_deref().unwrap_or("indeterminate")
                         };
@@ -617,6 +625,7 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                 class=format!("cell {}", palette::class(&object.name))
                                 class:is-indeterminate=indeterminate
                                 class:is-dangling=dangling
+                                class:is-function=function.is_some()
                                 class:is-undeclared=!object.declared
                                 class:is-long=long
                                 data-access=kind

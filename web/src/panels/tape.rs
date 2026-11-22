@@ -160,6 +160,9 @@ pub struct Segment {
     /// Whether the value is a pointer to an object whose lifetime has
     /// ended, which makes the pointer's value indeterminate (C99 §6.2.4p2).
     pub dangling: bool,
+    /// Whether the value is a pointer to a function, set in the colour of
+    /// code.
+    pub function: bool,
 }
 
 /// The values read (object, step) that a store or a call's parameter took
@@ -282,6 +285,7 @@ impl Reel {
                 if object.alive {
                     let value = value_text(&object.value);
                     let dangling = matches!(object.value, Value::Pointer { ended: true, .. });
+                    let function = matches!(object.value, Value::Function { .. });
                     match last {
                         | Some(segment)
                             if segment.to == step
@@ -294,6 +298,7 @@ impl Reel {
                             object: object.id,
                             value,
                             dangling,
+                            function,
                         }),
                     }
                 } else if last
@@ -591,6 +596,9 @@ pub fn value_text(value: &Value) -> Option<String> {
                 .join(",")
         )),
         | Value::Pointer { target: None, .. } => Some("null".to_owned()),
+        // A pointer to a function names the function, with the
+        // parentheses of a call, since it leads to code, not an object.
+        | Value::Function { name, .. } => Some(format!("→{name}()")),
         | Value::Pointer { ended: true, .. } => Some("→ ended".to_owned()),
         | Value::Pointer {
             target: Some(id),
@@ -1945,6 +1953,9 @@ fn bus_class(segment: &Segment, cursor: usize) -> String {
     }
     if segment.dangling {
         class.push_str(" is-dangling");
+    }
+    if segment.function {
+        class.push_str(" is-function");
     }
     if segment.from <= cursor && cursor < segment.to {
         class.push_str(" is-now");

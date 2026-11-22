@@ -529,6 +529,8 @@ fn truth(condition: Option<&Operand>) -> bool {
         | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
         | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
         | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
+        // A pointer to a function is never null (C99 §6.3.2.3p3).
+        | Operand::Value(abstract_machine::Value::Function(_)) => true,
         | _ => false,
     })
 }
