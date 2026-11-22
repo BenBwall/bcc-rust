@@ -159,6 +159,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Only the selected association's, which a generic selection waits
         // for.
         let group = G::ImplicitConstIntFloatConversion;
+        if self.in_seh_handler() {
+            self.warn_if_reachable(
+                source.expression,
+                group,
+                super::super::SemanticErrorKind::ValueWarning(group),
+                site,
+                Some(text),
+            );
+            return;
+        }
         self.hold_warning(super::super::functions::HeldWarning {
             group,
             kind: super::super::SemanticErrorKind::ValueWarning(group),

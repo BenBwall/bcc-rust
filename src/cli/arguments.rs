@@ -32,6 +32,8 @@ use super::{
 };
 use crate::{
     configuration::{
+        ClWarningState,
+        ClWarnings,
         CompilerConfiguration,
         CompilerIdentity,
         Coverage,
@@ -398,6 +400,39 @@ impl Cli {
             .with_diagnostic_format(format)
             .with_diagnostic_presentation(presentation)
             .with_max_nesting_depth(self.max_nesting_depth)
+            .with_cl_warnings(self.cl_warnings())
+    }
+
+    /// `cl`'s warning level and numbered warnings, as the `cl` personality
+    /// passes them.
+    fn cl_warnings(&self) -> ClWarnings {
+        let level = self
+            .cl_warning_level
+            .filter(|&level| level <= 4)
+            .unwrap_or(1);
+        let mut warnings = ClWarnings::DEFAULT.with_level(level);
+        for setting in &self.cl_warning {
+            let Some((code, value)) = setting.split_once(':') else {
+                continue;
+            };
+            let Ok(code) = code.parse() else {
+                continue;
+            };
+            let Some(default) = ClWarnings::default_level(code) else {
+                continue;
+            };
+            let state = match value {
+                | "d" => ClWarningState::Disabled,
+                | "e" => ClWarningState::Error,
+                | "o" => ClWarningState::Once(default),
+                | level => match level.parse() {
+                    | Ok(level @ 1..=4) => ClWarningState::Level(level),
+                    | _ => continue,
+                },
+            };
+            warnings = warnings.with_state(code, state);
+        }
+        warnings
     }
 
     /// Gives `context` what the compiler says about the warning options

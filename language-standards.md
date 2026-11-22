@@ -1197,7 +1197,18 @@ before the parser sees the resulting tokens.
   filters, `__finally` compounds and `__leave;`. Children use the ordinary
   compound and expression productions and scope restoration. Missing
   handlers, bodies, filters and delimiters produce recovered syntax and preserve
-  following input. `__leave` placement and handler semantics are later analysis.
+  following input. Semantic analysis analyzes each block in a control region
+  that a `goto`, `case` label or computed goto may leave but not enter (Clang's
+  error and notes, or `cl`'s C2705; `cl` rejects a jump only to a label
+  deeper in SEH blocks, a handler one level inside its `__try` block, or to
+  one as deep in another innermost block),
+  rejects a `__leave` outside every `__try` block (C2703 under `cl`), and warns
+  of a `goto`, `break`, `continue` or `return` that leaves a `__finally` block
+  (`-Wjump-seh-finally`; `cl`'s C4532 for all but `return`, and for a `goto`
+  only from the `__finally` block itself). Under every identity but `cl`'s,
+  Clang's reachability holds: no edge enters an `__except` handler, its filter
+  is outside the graph and draws no full-expression check, and a function with
+  `__finally` has no graph at all. Lowering does not translate SEH.
 - `parse_msvc` also owns `__asm`/`_asm` brace blocks and single-line instructions
   as opaque arena token lists with balanced parentheses, brackets and braces. A
   repeated asm keyword separates single-line instructions, and the enclosing C
@@ -1477,7 +1488,7 @@ operands are not macro-replaced.
 | GCC | Read | Unknown pragma | Unknown pragma |
 | Clang | Read, as Clang's own | Read, with `fatal` | With `-fms-extensions`: `push` and `pop` only |
 | clang-cl | Read, as Clang's own | Read, with `fatal` | `push` and `pop` only: its warnings have no numbers |
-| `cl` | Unknown pragma | Unknown pragma | `disable`, `error`, `default`, levels and `once` for the numbers bcc gives a warning; `suppress` does nothing |
+| `cl` | Unknown pragma | Unknown pragma | `push`, `push, n` (level `n` until the `pop`), `pop`, and `disable`, `error`, `default`, levels, `once` and `suppress` (the pragma's line and the next) for the numbers bcc gives a warning |
 | TCC | Unknown pragma | Unknown pragma | Unknown pragma |
 
 A pragma covers the warnings of every phase by where they arise, by output-token
@@ -1596,6 +1607,14 @@ Differences that remain:
   error goes unreported.
 - `cl` warns about a bad `#pragma warning` line (C4081 and others); bcc ignores
   it. clang-cl's words are reproduced.
+- As in `cl`, `default` and a level specifier (`4: 4100`) show a numbered
+  warning from that level again, undoing a `/wd` or `/we`, and `disable` and
+  `error` replace a level; `once` shows it from its own level, the first
+  time only, and `suppress` withholds it on the pragma's line and the next;
+  when that next line is a `push`, until the `push`'s `pop`, since `cl`'s
+  `suppress` then pops the `push`'s entry rather than its own.
+  Under `/W0` a pragma brings nothing back, where `cl`'s `push, 4` or `error`
+  would: bcc's `/W0` is `-w`.
 
 ## System headers
 

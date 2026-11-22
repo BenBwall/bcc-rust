@@ -19,6 +19,7 @@ use crate::{
     configuration::{
         CompilerIdentity,
         DiagnosticGroup as G,
+        RuleSet,
     },
     diagnostics::format_in,
     translation_phases::{
@@ -159,6 +160,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 self.limits_warning(G::TypeLimits, site, text);
             }
+            return;
+        }
+        // Clang checks a comparison as it finishes the full expression
+        // (`AnalyzeComparison` under `Sema::CheckCompletedExpr`), which it
+        // does not do for an `__except` filter.
+        if self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+            && self.in_seh_filter()
+        {
             return;
         }
         // Clang leaves a constant the range holds alone when an enumerator or

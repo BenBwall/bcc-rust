@@ -458,7 +458,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// agree with Clang's (`int *`, `const char *`, `struct S *`); `None`
     /// for the others, which `cl` spells its own way (`__int64`, a
     /// function pointer's `__cdecl`).
-    fn msvc_type_spelling(&self, ty: TypeId) -> Option<&'tu str> {
+    pub(super) fn msvc_type_spelling(&self, ty: TypeId) -> Option<&'tu str> {
         let spelling = self.type_spelling(ty, false)?;
         (!spelling.contains(['(', '['])
             && ![
@@ -472,6 +472,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .any(|word| spelling.contains(word)))
         .then_some(spelling)
+    }
+
+    /// The function `name` of type `ty` as `cl` names it in an error:
+    /// `int g(int,char *)`, `int f(void)`. `None` for a function without a
+    /// prototype or with `...`, and where a type is one `cl` spells its own
+    /// way ([`Self::msvc_type_spelling`]).
+    pub(super) fn msvc_function_spelling(
+        &mut self,
+        ty: TypeId,
+        name: StringCacheId,
+    ) -> Option<&'tu str> {
+        let TypeKind::Function {
+            result,
+            parameters,
+            prototype: true,
+            variadic: false,
+        } = self.types.nodes[ty.index]
+        else {
+            return None;
+        };
+        let mut text = ArenaString::new_in(self.types.tu);
+        text.push_str(self.msvc_type_spelling(result)?);
+        text.push(' ');
+        text.push_str(self.context.string_cache.at(name));
+        text.push('(');
+        if parameters.is_empty() {
+            text.push_str("void");
+        }
+        for (index, &parameter) in parameters.iter().enumerate() {
+            if index != 0 {
+                text.push(',');
+            }
+            text.push_str(self.msvc_type_spelling(parameter)?);
+        }
+        text.push(')');
+        Some(text.into_str())
     }
 
     /// The group of a pointer conversion violation under `cl`'s wording:

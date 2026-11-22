@@ -633,6 +633,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Return(slot) => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Return);
                 self.check_noreturn_return(s.source_vectors);
                 if let Some(function) = self.functions.current {
                     let control = self.function_records[function.id].control;
@@ -671,12 +672,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             ),
             | S::Break => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Break);
                 self.generated_break();
                 self.switch_break(s);
                 self.control_jump(s, false);
                 self.functions.dead = true;
             },
             | S::Continue => {
+                self.check_finally_exit(s, super::statements::FinallyExit::Continue);
                 self.control_jump(s, true);
                 self.functions.dead = true;
             },
@@ -705,6 +708,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(function) = self.functions.current {
                     self.function_records[function.id].assembly = true;
                 },
+            | S::Seh(_) => self.structured_exception_handler(s),
+            | S::SehLeave => self.check_leave(s),
             | _ => {},
         }
     }

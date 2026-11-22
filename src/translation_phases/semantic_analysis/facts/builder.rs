@@ -20,6 +20,7 @@ use super::{
     RegionId,
     RegionKind,
     ScopeId,
+    SehBlock,
     StatementFacts,
     StatementId,
     SwitchFacts,
@@ -113,6 +114,11 @@ impl<'tu, 's> Builder<'tu, 's> {
             } else {
                 previous.nearest_statement_expression
             },
+            nearest_seh: if matches!(kind, RegionKind::Seh(_)) {
+                Some(id)
+            } else {
+                previous.nearest_seh
+            },
         });
         if let CleanupKind::AutomaticVla(binding) = cleanup {
             _ = self.vla_regions.insert(binding, id);
@@ -142,6 +148,7 @@ impl<'tu, 's> Builder<'tu, 's> {
             nearest_cleanup: None,
             nearest_cleanup_declaration: None,
             nearest_statement_expression: None,
+            nearest_seh: None,
         });
         self.current = Some(root);
         FunctionControl { id, root }
@@ -345,6 +352,65 @@ impl<'tu, 's> Builder<'tu, 's> {
             .nearest_statement_expression
             .filter(|&expression| !ancestor(&self.regions, expression, from))
             .map(|expression| self.regions[expression.0].source)
+    }
+
+    /// The `__try`, `__except` and `__finally` blocks a jump from `from` to
+    /// `to` enters, innermost first, as Clang's `JumpScopeChecker` notes
+    /// them; at most `N`. A jump may leave such a block but not enter it.
+    pub(in crate::translation_phases::semantic_analysis) fn entered_seh_blocks<const N: usize>(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> [Option<RegionId>; N] {
+        let mut entered = [None; N];
+        let mut block = self.regions[to.0].nearest_seh;
+        for slot in &mut entered {
+            let Some(region) = block.filter(|&region| !ancestor(&self.regions, region, from))
+            else {
+                break;
+            };
+            *slot = Some(region);
+            block = self.regions[region.0]
+                .parent
+                .and_then(|parent| self.regions[parent.0].nearest_seh);
+        }
+        entered
+    }
+
+    /// The SEH block `cl` says a jump from `from` to `to` enters, which is
+    /// the label's innermost one: if the label is deeper in SEH blocks than
+    /// the jump, or as deep but in another innermost block. A jump to a
+    /// shallower label enters nothing, whichever blocks hold it. Microsoft
+    /// Learn: "Compiler Error C2705"; the rule is fitted to `cl` 19.44.
+    pub(in crate::translation_phases::semantic_analysis) fn cl_entered_seh_block(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> Option<RegionId> {
+        let innermost = self.regions[to.0].nearest_seh?;
+        let (depth, label_depth) = (self.cl_seh_depth(from), self.cl_seh_depth(to));
+        (label_depth > depth
+            || (label_depth == depth && self.regions[from.0].nearest_seh != Some(innermost)))
+        .then_some(innermost)
+    }
+
+    /// How deep `region` is in SEH blocks as `cl` counts them, with a
+    /// `__try` statement's `__except` or `__finally` block one level inside
+    /// its `__try` block.
+    fn cl_seh_depth(&self, region: RegionId) -> usize {
+        let mut depth = 0;
+        let mut block = self.regions[region.0].nearest_seh;
+        while let Some(region) = block {
+            depth += if self.regions[region.0].kind == RegionKind::Seh(SehBlock::Try) {
+                1
+            } else {
+                2
+            };
+            block = self.regions[region.0]
+                .parent
+                .and_then(|parent| self.regions[parent.0].nearest_seh);
+        }
+        depth
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn finalize(

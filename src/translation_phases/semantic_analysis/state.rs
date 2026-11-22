@@ -37,10 +37,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
         let pragmas = context.has_diagnostic_pragmas();
-        let prior_error = (configuration.compiler_identity()
-            == crate::configuration::CompilerIdentity::Gcc)
-            .then(|| context.first_default_error())
-            .flatten();
+        let prior_error = matches!(
+            configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+                | crate::configuration::CompilerIdentity::Msvc
+        )
+        .then(|| context.first_default_error())
+        .flatten();
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),
             #[cfg(test)]
@@ -129,6 +132,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             object_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            cl_spelled_by_name: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_variables: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             functions: functions::State::new(scratch),

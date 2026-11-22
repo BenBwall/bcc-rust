@@ -132,7 +132,10 @@ impl Renderer {
             };
             let _ = match format {
                 | DiagnosticFormat::Msvc { column, .. } => (0..repeats).try_for_each(|repeat| {
-                    if column {
+                    if diagnostic.back_end {
+                        Self::write_full_path(&mut out, context, vector)?;
+                        write!(out, "({}) : ", vector.line)?;
+                    } else if column {
                         write!(out, "{file}({},{}): ", vector.line, vector.column)?;
                     } else {
                         write!(out, "{file}({}): ", vector.line)?;
@@ -191,6 +194,23 @@ impl Renderer {
             self.paint(severity, severity_style),
             self.paint(message, Style::new().bold()),
         );
+        if let DiagnosticFormat::Msvc { column, .. } = format {
+            for note in &diagnostic.msvc_notes {
+                let vector = note
+                    .source
+                    .and_then(|source| context.get_source_vectors(source).first())
+                    .or(location);
+                if let Some(vector) = vector {
+                    let file = Self::file_name(context, vector, None);
+                    let _ = if column {
+                        write!(out, "{file}({},{}): ", vector.line, vector.column)
+                    } else {
+                        write!(out, "{file}({}): ", vector.line)
+                    };
+                }
+                let _ = writeln!(out, "note: {}", note.text);
+            }
+        }
         // TCC writes the message line alone.
         if format == DiagnosticFormat::Tcc {
             return out.into_str();
@@ -665,6 +685,22 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// Writes the path of the file `vector` is in, made absolute from the
+    /// working directory, as `cl`'s code generator names it.
+    fn write_full_path(
+        out: &mut ArenaString<'_>,
+        context: &Context<'_>,
+        vector: &SourceVector,
+    ) -> fmt::Result {
+        let path = context.get_source_file(vector.source_file_index);
+        if path.is_relative()
+            && let Ok(directory) = std::env::current_dir()
+        {
+            write!(out, "{}{}", directory.display(), std::path::MAIN_SEPARATOR)?;
+        }
+        write!(out, "{}", path.display())
     }
 
     /// Writes a place as GCC and Clang lead a diagnostic or a note with it:

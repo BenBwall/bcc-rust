@@ -201,7 +201,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .context
                     .string_cache
                     .intern("shifting a negative signed value is undefined");
-                self.exceptional_warning(
+                self.runtime_exceptional_warning(
+                    e,
                     DiagnosticGroup::ShiftNegativeValue,
                     text,
                     operator_source(e),
@@ -479,6 +480,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty: TypeId,
     ) {
         use BinaryOperator as B;
+        if self.unused.cl {
+            // `cl` says nothing of a compound assignment's operands.
+            let compound =
+                !matches!(e.kind, ExpressionType::Binary { operator, .. } if operator == op);
+            if self.inhibited_evaluations == 0 && !self.tainted && !compound {
+                self.report_exceptional_operands_as_cl(e, op, left, right, ty);
+            }
+            return;
+        }
         if !self.context.configuration.folds_exceptional_constants()
             || self.inhibited_evaluations != 0
             || self.tainted
@@ -551,8 +561,67 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Clang underlines the count or divisor beside the operator's caret.
         let count = [right.expression.source_vectors, SourceVectors::default()];
         self.with_highlights(count, |analyzer| {
-            analyzer.exceptional_warning(group, text, operator_source(e));
+            analyzer.runtime_exceptional_warning(e, group, text, operator_source(e));
         });
+    }
+
+    /// `cl`'s C4293, at level 1, for a constant shift count of `<<` or `>>`
+    /// (not `<<=` or `>>=`) that is negative or not below the width of the
+    /// promoted left operand, whatever that operand is, and its error C2124 for
+    /// an integer constant divided by a constant zero (a variable divided by
+    /// zero draws nothing) while the unit has had no error.
+    /// Microsoft Learn: "Compiler Warning (level 1) C4293", "Compiler Error
+    /// C2124".
+    /// C99: §6.5.7 paragraph 3, p. 84; PDF p. 96; §6.5.5 paragraph 5, p. 82;
+    /// PDF p. 94.
+    fn report_exceptional_operands_as_cl(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        op: BinaryOperator,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+        ty: TypeId,
+    ) {
+        use BinaryOperator as B;
+        let Some(count) = right.integer.filter(|_| right.ice) else {
+            return;
+        };
+        match op {
+            // `cl` reports none once the unit has had an error.
+            | B::Division | B::Modulo
+                if count.is_zero()
+                    && left.ice
+                    && self.integer_type(left.ty).is_some()
+                    && self.hard_errors == 0 =>
+            {
+                self.error(
+                    SemanticErrorKind::ClDivideByZero,
+                    operator_source(e),
+                    None,
+                    None,
+                );
+            },
+            | B::LeftShift | B::RightShift => {
+                let Some((bits, _)) = self.integer_type(ty) else {
+                    return;
+                };
+                let group = if self.negative_integer(count) {
+                    DiagnosticGroup::ShiftCountNegative
+                } else if self.count_reaches_width(count, bits) {
+                    DiagnosticGroup::ShiftCountOverflow
+                } else {
+                    return;
+                };
+                let text = if op == B::LeftShift {
+                    "'<<': shift count negative or too big, undefined behavior"
+                } else {
+                    "'>>': shift count negative or too big, undefined behavior"
+                };
+                let text = self.context.string_cache.intern(text);
+                self.exceptional_warning(group, text, operator_source(e));
+            },
+            | _ => {},
+        }
     }
 
     /// GCC's `-Wshift-negative-value` for `left << count`, `e`: the left
@@ -596,6 +665,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `text` under `group`, which selects its option and severity.
+    /// [`Self::exceptional_warning`] for Clang's warning about the operator
+    /// `e` where code runs (`DiagRuntimeBehavior`), which waits for the
+    /// reachability walk in an `__except` filter or handler.
+    fn runtime_exceptional_warning(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        group: DiagnosticGroup,
+        text: StringCacheId,
+        source: SourceVectors,
+    ) {
+        if self.exceptional_rules() == RuleSet::Clang && self.in_seh_handler() {
+            self.warn_if_reachable(
+                e,
+                group,
+                SemanticErrorKind::ExceptionalConstant(group, text),
+                source,
+                None,
+            );
+        } else {
+            self.exceptional_warning(group, text, source);
+        }
+    }
+
     fn exceptional_warning(
         &mut self,
         group: DiagnosticGroup,
@@ -932,6 +1024,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang: `Sema::CheckForIntOverflow` in `SemaChecking.cpp`.
     pub(super) fn finish_full_expression(&mut self, root: &'tu Expression<'tu>, start: usize) {
         if self.pending_overflows.len() <= start {
+            return;
+        }
+        if self.exceptional_rules() == RuleSet::Clang && self.in_seh_filter() {
+            self.pending_overflows.truncate(start);
             return;
         }
         let pending = self

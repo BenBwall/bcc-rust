@@ -169,6 +169,50 @@ pub(crate) enum InitializedObject {
     Scalar,
 }
 
+/// The errors bcc reports with `cl`'s code and words
+/// ([`SemanticErrorKind::ClError`]). Microsoft Learn: "Compiler Error C2039",
+/// "Compiler Error C2063", "Compiler Error C2084", "Compiler Error C2100",
+/// "Compiler Error C2106", "Compiler Error C2197", "Compiler Error C2198",
+/// "Compiler Error C2703", "Compiler Error C2705".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClErrorCode {
+    /// C2039: `'y': is not a member of 'S'`, with a note at the tag.
+    NotAMember,
+    /// C2063: `'x': not a function`.
+    NotAFunction,
+    /// C2084: `function 'int f(void)' already has a body`, with a note at
+    /// the first definition.
+    AlreadyHasBody,
+    /// C2100: `you cannot dereference an operand of type 'int'`.
+    Indirection,
+    /// C2106: `'=': left operand must be l-value`.
+    LeftOperand,
+    /// C2197: `'int g(int)': too many arguments for call`.
+    TooManyArguments,
+    /// C2198: `'int g(int,int)': too few arguments for call`.
+    TooFewArguments,
+    /// C2703: `illegal __leave statement`.
+    IllegalLeave,
+    /// C2705: `'label': illegal jump into '__try' scope`.
+    IllegalJumpIntoScope,
+}
+
+impl ClErrorCode {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            | Self::NotAMember => "C2039",
+            | Self::NotAFunction => "C2063",
+            | Self::AlreadyHasBody => "C2084",
+            | Self::Indirection => "C2100",
+            | Self::LeftOperand => "C2106",
+            | Self::TooManyArguments => "C2197",
+            | Self::TooFewArguments => "C2198",
+            | Self::IllegalLeave => "C2703",
+            | Self::IllegalJumpIntoScope => "C2705",
+        }
+    }
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +282,22 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
+    /// `cl`'s C4389: the same of an equality comparison, which `cl` numbers
+    /// apart from a relational one.
+    SignCompareEquality,
+    /// `cl`'s error C2124: an integer constant divided by a constant zero.
+    ClDivideByZero,
+    /// An error `cl` numbers, reported in its words (the name) under its
+    /// identity and formats, where bcc's own words would name the same
+    /// violation.
+    ClError(ClErrorCode),
+    /// `cl`'s code generator's C4715 (some path reaches the end of a
+    /// function that returns a value) or C4716 (`always`: no path returns
+    /// one); `promoted`, `/WX` made it an error.
+    ClReturnFlow {
+        always:   bool,
+        promoted: bool,
+    },
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
@@ -402,6 +462,25 @@ pub(crate) enum SemanticErrorKind {
     /// it cannot appear outside a function body.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
     LabelAddressOutsideFunction,
+    /// A goto into a `__try`, `__except` or `__finally` block, in Clang's
+    /// words. MSVC extension: Microsoft Learn, "Compiler Error C2705".
+    JumpIntoSehBlock,
+    /// Switch dispatch into one of those blocks.
+    /// MSVC extension: Microsoft Learn, "Compiler Error C2705".
+    SwitchIntoSehBlock,
+    /// A computed goto into or out of one of those blocks, which Clang
+    /// rejects. GNU extension: GCC manual, "Labels as Values".
+    IndirectJumpSehBlock,
+    /// A `goto`, `break`, `continue` or `return` that leaves a `__finally`
+    /// block, which a termination handler running for an exception must
+    /// not do; the name is what `cl` names: the label or the keyword.
+    /// MSVC extension: Microsoft Learn, "try-finally statement"; "Compiler
+    /// Warning (level 1) C4532".
+    JumpOutOfFinally,
+    /// `__leave` outside every `__try` block, in Clang's words.
+    /// MSVC extension: Microsoft Learn, "try-except statement"; "Compiler
+    /// Error C2703".
+    LeaveOutsideTry,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -1332,7 +1411,11 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::BoolOperation(_) => "a truth value's bits",
             | Self::Main(_) => "nonportable declaration of main",
-            | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::SignCompare | Self::SignCompareEquality =>
+                "signed operand converts to unsigned",
+            | Self::ClDivideByZero => "the divisor is zero",
+            | Self::ClError(_) => "here",
+            | Self::ClReturnFlow { .. } => "control reaches the end of the function",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
@@ -1395,6 +1478,11 @@ impl SemanticErrorKind {
             | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
             | Self::InvalidComputedGoto => "not convertible to `const void *`",
             | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::JumpIntoSehBlock | Self::SwitchIntoSehBlock =>
+                "jumps into a structured exception handling block",
+            | Self::IndirectJumpSehBlock => "may cross a structured exception handling block",
+            | Self::LeaveOutsideTry => "not in a __try block",
+            | Self::JumpOutOfFinally => "leaves a __finally block",
             | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
@@ -1579,6 +1667,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::SignCompareEquality
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
@@ -1614,6 +1703,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ReturnType
                     | crate::configuration::DiagnosticGroup::InvalidNoreturn
                     | crate::configuration::DiagnosticGroup::GccNoreturn
+                    | crate::configuration::DiagnosticGroup::JumpSehFinally
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Format
                     | crate::configuration::DiagnosticGroup::Format2
@@ -2132,12 +2222,20 @@ impl SemanticErrorKind {
                 "switch cases",
                 "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
             ),
-            | Self::ReturnFlow(_) => (
+            | Self::ReturnFlow(_) | Self::ClReturnFlow { .. } => (
                 "control reaches the end of the function",
                 "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
                  reaches the closing brace",
             ),
-            | Self::SignCompare => (
+            | Self::ClDivideByZero => (
+                "integer constant divided by zero",
+                "C99 §6.5.5p5: the result of dividing by zero is undefined",
+            ),
+            | Self::ClError(_) => (
+                "constraint violation",
+                "C99 §5.1.1.3p1: a violated constraint requires a diagnostic",
+            ),
+            | Self::SignCompare | Self::SignCompareEquality => (
                 "comparison of integers of different signs",
                 "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
                  unsigned, so a negative value compares as a large one",
@@ -2329,6 +2427,32 @@ impl SemanticErrorKind {
                 "switch dispatch enters the scope of a variably modified identifier",
                 "C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified \
                  identifier whose scope contains a case or default label",
+            ),
+            | Self::JumpIntoSehBlock => (
+                "cannot jump from this goto statement to its label",
+                "Microsoft Learn \"Compiler Error C2705\": a jump cannot enter a __try, __except \
+                 or __finally block, only leave it",
+            ),
+            | Self::SwitchIntoSehBlock => (
+                "cannot jump from switch statement to this case label",
+                "Microsoft Learn \"Compiler Error C2705\": switch dispatch cannot enter a __try, \
+                 __except or __finally block",
+            ),
+            | Self::IndirectJumpSehBlock => (
+                "cannot jump from this indirect goto statement to one of its possible targets",
+                "Clang: a computed goto can neither enter nor leave a __try, __except or \
+                 __finally block; GCC Labels as Values: it may reach every label whose address is \
+                 taken",
+            ),
+            | Self::JumpOutOfFinally => (
+                "jump out of __finally block has undefined behavior",
+                "Microsoft Learn \"try-finally statement\": a termination handler that an \
+                 exception runs must not leave its block by a jump",
+            ),
+            | Self::LeaveOutsideTry => (
+                "'__leave' statement not in __try block",
+                "Microsoft Learn \"try-except statement\": __leave ends the innermost __try \
+                 block, so it appears only inside one",
             ),
             | Self::CaseOutsideSwitch => (
                 "case or default label is outside a switch",
@@ -3069,7 +3193,15 @@ impl SemanticErrorKind {
                 crate::configuration::DiagnosticGroup::DanglingElse
                     | crate::configuration::DiagnosticGroup::ChainedComparison
             ),
-            | Self::SwitchCases(_) | Self::DeprecatedNonPrototype => true,
+            // `JumpScopeChecker`, `ActOnSEHLeaveStmt` and
+            // `CheckJumpOutOfSEHFinally` name the statement's place alone.
+            | Self::SwitchCases(_)
+            | Self::DeprecatedNonPrototype
+            | Self::JumpIntoSehBlock
+            | Self::SwitchIntoSehBlock
+            | Self::IndirectJumpSehBlock
+            | Self::LeaveOutsideTry
+            | Self::JumpOutOfFinally => true,
             | _ => false,
         }
     }
@@ -3093,6 +3225,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => Some(rule.group()),
             | Self::BoolOperation(_) => Some(G::BoolOperation),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::SignCompareEquality => Some(G::SignCompareEquality),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::DeprecatedNonPrototype => Some(G::DeprecatedNonPrototype),
             | Self::CallArgumentCount => Some(G::CallArgumentCount),
@@ -3108,8 +3241,40 @@ impl SemanticErrorKind {
             | Self::ReturnMismatch => Some(G::ReturnMismatch),
             | Self::VoidReturnMismatch => Some(G::VoidReturnMismatch),
             | Self::DeclarationMissingParameterType => Some(G::DeclarationMissingParameterType),
+            | Self::JumpOutOfFinally => Some(G::JumpSehFinally),
             | _ => self.attribute_group(),
         }
+    }
+
+    /// The number of `cl`'s warning that [`SemanticError::msvc_message`]
+    /// words this as, for one its settings name in [`CL_CODED_WARNINGS`].
+    ///
+    /// [`CL_CODED_WARNINGS`]: crate::configuration::CL_CODED_WARNINGS
+    pub(super) const fn cl_code(self) -> Option<u16> {
+        use crate::configuration::DiagnosticGroup as G;
+        Some(match self {
+            | Self::Unused(UnusedRule::ClParameter) => 4100,
+            | Self::Unused(UnusedRule::ClVariable) => 4101,
+            | Self::Unused(UnusedRule::ClInitialized) => 4189,
+            | Self::SignCompare => 4018,
+            | Self::SignCompareEquality => 4389,
+            | Self::Parentheses(G::Parentheses) => 4706,
+            | Self::ExceptionalConstant(G::ShiftCountOverflow | G::ShiftCountNegative, _) => 4293,
+            | Self::JumpOutOfFinally => 4532,
+            | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
+            | Self::VoidReturnMismatch => 4098,
+            | Self::ReturnMismatch => 4033,
+            | Self::PointerConstraint(G::IntConversion) => 4047,
+            | Self::PointerConstraint(G::IncompatiblePointerTypes) => 4133,
+            | Self::PointerConstraint(
+                G::PointerToIntCast
+                | G::VoidPointerToIntCast
+                | G::PointerToEnumCast
+                | G::VoidPointerToEnumCast,
+            ) => 4311,
+            | Self::PointerConstraint(G::IntToPointerCast | G::IntToVoidPointerCast) => 4312,
+            | _ => return None,
+        })
     }
 }
 
@@ -3308,7 +3473,12 @@ impl SemanticError {
     /// Warning (level 3) C4013", "Compiler Warning (level 1) C4033",
     /// "Compiler Warning (level 1) C4098", "Compiler Warning (level 1) C4047",
     /// "Compiler Warning (level 1 and level 3) C4133", "Compiler Warning
-    /// (level 1) C4311", "Compiler Warning (level 1) C4312".
+    /// (level 1) C4311", "Compiler Warning (level 1) C4312", "Compiler
+    /// Warning (level 4) C4100", "Compiler Warning (level 3) C4101",
+    /// "Compiler Warning (level 4) C4189", "Compiler Warning (level 3)
+    /// C4018", "Compiler Warning (level 4) C4389", "Compiler Warning (level
+    /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Warning
+    /// (level 1) C4532", "Compiler Error C2124".
     fn msvc_message<'d>(
         &self,
         context: &Context<'_>,
@@ -3318,8 +3488,56 @@ impl SemanticError {
         if !context.configuration.msvc_wording() {
             return None;
         }
+        match self.kind {
+            | SemanticErrorKind::ExceptionalConstant(
+                G::ShiftCountOverflow | G::ShiftCountNegative,
+                text,
+            ) => return Some(("C4293", arena.alloc_str(context.string_cache.at(text)))),
+            | SemanticErrorKind::ClDivideByZero => return Some(("C2124", "divide or mod by zero")),
+            | SemanticErrorKind::ClReturnFlow { always, .. } => {
+                let name = context.string_cache.at(self.name?);
+                return Some(if always {
+                    ("C4716", format_in!(arena, "'{name}': must return a value"))
+                } else {
+                    (
+                        "C4715",
+                        format_in!(arena, "'{name}': not all control paths return a value"),
+                    )
+                });
+            },
+            | _ => {},
+        }
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
+            | SemanticErrorKind::ClError(code) => (code.code(), arena.alloc_str(name)),
+            | SemanticErrorKind::JumpOutOfFinally => (
+                "C4532",
+                format_in!(
+                    arena,
+                    "'{name}': jump out of __finally block has undefined behavior during \
+                     termination handling"
+                ),
+            ),
+            | SemanticErrorKind::Unused(UnusedRule::ClParameter) => (
+                "C4100",
+                format_in!(arena, "'{name}': unreferenced parameter"),
+            ),
+            | SemanticErrorKind::Unused(UnusedRule::ClVariable) => (
+                "C4101",
+                format_in!(arena, "'{name}': unreferenced local variable"),
+            ),
+            | SemanticErrorKind::Unused(UnusedRule::ClInitialized) => (
+                "C4189",
+                format_in!(
+                    arena,
+                    "'{name}': local variable is initialized but not referenced"
+                ),
+            ),
+            // Worded by `Analyzer::check_sign_compare_as_cl` and
+            // `Analyzer::check_condition_parentheses`.
+            | SemanticErrorKind::SignCompare => ("C4018", arena.alloc_str(name)),
+            | SemanticErrorKind::SignCompareEquality => ("C4389", arena.alloc_str(name)),
+            | SemanticErrorKind::Parentheses(G::Parentheses) => ("C4706", arena.alloc_str(name)),
             | SemanticErrorKind::UndeclaredIdentifier
             | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",
@@ -3566,6 +3784,7 @@ impl ToDiagnostic for SemanticError {
         } else if matches!(
             self.kind,
             SemanticErrorKind::SignCompare
+                | SemanticErrorKind::SignCompareEquality
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
                 | SemanticErrorKind::Uninitialized(_)
@@ -3692,6 +3911,30 @@ impl ToDiagnostic for SemanticError {
             | None => explanation,
         };
         let mut diagnostic = explanation.at(self.severity(), source);
+        // `cl`'s code generator names the file by its full path and no
+        // column, and `/WX` announces each of its warnings.
+        if let SemanticErrorKind::ClReturnFlow { promoted, .. } = self.kind
+            && msvc.is_some()
+        {
+            diagnostic.back_end = true;
+            if promoted {
+                diagnostic.treated_as_error = TreatedAsError::First;
+            }
+        }
+        // `cl`'s notes name places of their own.
+        if let SemanticErrorKind::ClError(_) = self.kind {
+            for &(site, words) in self.related.notes.iter().flatten() {
+                let words = arena.alloc_str(context.string_cache.at(words));
+                diagnostic = diagnostic.msvc_note(Some(site), words);
+            }
+        }
+        if let Some(("C4706", _)) = msvc {
+            diagnostic = diagnostic.msvc_note(
+                None,
+                "if an assignment is intended you can enclose it in parentheses, '(e1 = e2)', to \
+                 silence this warning",
+            );
+        }
         // The reporter marks the first of these in the unit.
         if self.severity() == ErrorSeverity::Error
             && self
@@ -3755,6 +3998,15 @@ impl ToDiagnostic for SemanticError {
                 // Clang's notes name places.
                 diagnostic.related_points = true;
             }
+        }
+        // Clang's notes about a jump into or out of a SEH block name places.
+        if matches!(
+            self.kind,
+            SemanticErrorKind::JumpIntoSehBlock
+                | SemanticErrorKind::SwitchIntoSehBlock
+                | SemanticErrorKind::IndirectJumpSehBlock
+        ) {
+            diagnostic.related_points = true;
         }
         for (index, &(site, words)) in self
             .related

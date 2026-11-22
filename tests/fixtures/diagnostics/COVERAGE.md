@@ -1,5 +1,53 @@
 # Diagnostic golden corpus
 
+`cl`'s numbered warnings and errors (2026-11-21):
+`sema-cl-numbered-warnings-msvc` (the `cl` identity at level 4) pins C4100,
+C4101 and C4189 at the end of the function, the parameters and outermost
+block first, with neither a variable only assigned nor a `static` one; C4018
+and C4389 for operands of one width and other signs, a promoted `short`
+included and a constant left alone; C4706 with `cl`'s note, and none for an
+assignment in parentheses; C4293 and no warning for `1 << 31`; and a
+`#pragma warning(push, 3)` region that hides C4100 but not C4101.
+`sema-cl-numbered-errors-msvc` pins C2084 and C2039 with `cl`'s notes,
+C2100, C2197 at the first extra argument, C2198, C2063 at the name and C2106
+at a constant. Both match `cl` 19.44 under Wine (`/W4 /diagnostics:column`,
+`/diagnostics:column`) byte for byte. The code generator's C4715 and C4716,
+which name the file by its full path, are pinned by
+`tests/integration/personality_cli.rs` instead.
+`sema-cl-pragma-suppress-msvc` pins `#pragma warning(suppress: N)` on the
+pragma's line and the next (a blank line counts, a `__pragma` covers its own
+line, a `suppress` on a line another reaches extends both) and `once`.
+`sema-cl-seh-uses-msvc` pins names that only `__try`, `__except` and
+`__finally` use as used, and C4018, C4706 and C4293 inside them.
+`sema-cl-compound-shift-msvc` pins C4293 for `<<` and `>>` but not `<<=` and
+`>>=`. These three match `cl` 19.44 (`/diagnostics:column`) byte for byte.
+`sema-seh-jumps-msvc` pins C2705 for a `goto` or `case` label into a `__try`,
+`__except` or `__finally` block (once per label, the innermost block, `'null'`
+for a `case`), C2703 for a `__leave` outside every `__try` block, and C4532
+at a label a `goto` leaves a `__finally` block for, at `break` and `continue`
+(`'identifier'` when its loop is a do-while), and not at `return`, with no
+C2705 for a jump to a label shallower in SEH blocks (a handler one level
+inside its `__try` block), wherever it lands, and C2705 for one to a label as
+deep in another innermost block, and no C4532 for a `goto` from a `__try`
+block inside the `__finally` block;
+`sema-cl-pragma-suppress-push-msvc` pins a `suppress`
+whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
+19.44 (`/W4 /diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
+Clang's error at each `goto`, last first at the end of its function, with a
+note at each block entered, innermost first, the `case` and computed-goto
+forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
+`goto`, `break`, `continue` and `return`, with the error for a jump from a
+handler back into its own guarded block or into a later sibling's;
+`sema-seh-reachability-clang` pins that Clang reports nothing about code that runs in an `__except` handler,
+nothing from a filter's full-expression checks but its shift, `-Wreturn-type`
+as if no handler ran, and, in a function with `__finally`, every such warning
+and no `-Wreturn-type`; `sema-seh-filter-limits-clang` pins that a filter
+draws none of the comparison checks Clang makes as it finishes a full
+expression (`-Wtype-limits` and its kin) but keeps
+`-Wtautological-pointer-compare`. All three match Clang 23.1.5 byte for byte.
+`pragma-sign-compare-equality-gcc` and `-clang` pin that no pragma names the
+group of `cl`'s C4389, as before it existed.
+
 C23 directives before C23 (2026-11-15): `pp-c23-directives-gcc` (`-std=gnu17
 -pedantic`) and `pp-c23-directives-strict-gcc` (`-std=c17 -pedantic`) pin GCC
 14's reports of `#warning`, `#elifdef` and `#elifndef` and its invalid `#embed`;

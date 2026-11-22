@@ -75,6 +75,8 @@ pub(crate) use language::{
 };
 pub(crate) use warning_names::{
     CL_CODED_WARNINGS,
+    ClWarningState,
+    ClWarnings,
     clang_knows_warning,
     gcc_knows_flag,
     gcc_knows_warning,
@@ -245,6 +247,9 @@ pub(crate) struct CompilerConfiguration {
     /// [`DEFAULT_MAX_NESTING_DEPTH`].
     max_nesting_depth: u32,
     warning_options: [diagnostics::WarningSettings; DiagnosticGroup::COUNT],
+    /// `cl`'s warning level and numbered warnings, which its
+    /// `#pragma warning` reads and changes.
+    cl_warnings: ClWarnings,
 }
 
 /// Default ceiling on the recursive grammar productions active at once:

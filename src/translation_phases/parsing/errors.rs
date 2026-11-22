@@ -19,7 +19,11 @@ use std::fmt::{
 use super::{
     Parser,
     grammar::ProductionKind,
-    syntax::StorageClass,
+    syntax::{
+        Expression,
+        ExpressionType,
+        StorageClass,
+    },
 };
 use crate::{
     diagnostics::{
@@ -207,6 +211,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             severity_is_final: false,
             pragma_mapped: false,
             fatal: false,
+            cl_coded: false,
             warning_group,
             production: self.active_production,
             expected: error_type.expected_syntax(),
@@ -276,6 +281,70 @@ impl<'tu> Parser<'_, 'tu, '_> {
         }
     }
 
+    /// Makes the end-of-input error just reported about the block that
+    /// `open` begins `cl`'s fatal error C1075, at that `{`, under its
+    /// formats: `cl` stops there. Microsoft Learn: "Fatal Error C1075".
+    /// C99: §6.8.2p1, p. 132; PDF p. 144.
+    pub(super) fn cl_unmatched_brace(&mut self, open: SourceVectors) {
+        if !self.context.configuration.msvc_wording() {
+            return;
+        }
+        let ordering = self
+            .context
+            .user_source_end(open)
+            .map(|location| (location.source_file_index, location.index));
+        if let Some(TranslationError::Parsing(error)) = self.context.pending_errors.back_mut()
+            && matches!(
+                error.error_type,
+                ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None)
+            )
+        {
+            error.source_vectors = open;
+            error.ordering_location = ordering;
+            error.fatal = true;
+        }
+    }
+
+    /// Makes the error just reported about an assignment whose left operand
+    /// is no unary expression `cl`'s error C2106, at that operand's
+    /// operator, under its formats. Microsoft Learn: "Compiler Error C2106".
+    /// C99: §6.5.16p1, p. 91; PDF p. 103.
+    pub(super) fn cl_assignment_operand(&mut self, mut operand: &'tu Expression<'tu>) {
+        if !self.context.configuration.msvc_wording() {
+            return;
+        }
+        while let ExpressionType::Parenthesized { expression } = operand.kind {
+            operand = expression;
+        }
+        let Some(site) = operand.operator_source_vectors.filter(|_| {
+            matches!(
+                operand.kind,
+                ExpressionType::Binary { .. }
+                    | ExpressionType::Unary { .. }
+                    | ExpressionType::Conditional(_)
+            )
+        }) else {
+            return;
+        };
+        let ordering = self
+            .context
+            .user_source_end(site)
+            .map(|location| (location.source_file_index, location.index));
+        if let Some(TranslationError::Parsing(error)) = self.context.pending_errors.back_mut()
+            && matches!(
+                error.error_type,
+                ParserErrorType::ExpectedStatementExpression(
+                    "unary-expression left operand of assignment",
+                    Some(_)
+                )
+            )
+        {
+            error.source_vectors = site;
+            error.ordering_location = ordering;
+            error.cl_coded = true;
+        }
+    }
+
     /// Returns a zero-width anchor just after the previous token when `found`
     /// starts a later line of the same file: the likely place of a missing
     /// `;`.
@@ -340,6 +409,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
 /// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact of how the diagnostic is written."
+)]
 pub(crate) struct ParserError<'tu> {
     #[cfg_attr(
         not(test),
@@ -358,6 +431,9 @@ pub(crate) struct ParserError<'tu> {
     pub(crate) pragma_mapped:     bool,
     /// Clang's `#pragma clang diagnostic fatal` made it a fatal error.
     pub(crate) fatal:             bool,
+    /// It takes `cl`'s code and words, at the place
+    /// `Parser::cl_assignment_operand` moved it to.
+    pub(crate) cl_coded:          bool,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
     #[cfg_attr(
         not(test),
@@ -2015,6 +2091,24 @@ impl ToDiagnostic for ParserError<'_> {
             }
         }
         let tcc = self.tcc_message(context, arena);
+        // Moved to the left operand by `Parser::cl_assignment_operand`.
+        if self.cl_coded
+            && let Some(operator) = self.found_spelling
+        {
+            explanation.message = format_in!(arena, "'{operator}': left operand must be l-value");
+            explanation = explanation.msvc_code("C2106");
+        }
+        // Moved to the `{` by `Parser::cl_unmatched_brace`.
+        if self.fatal
+            && context.configuration.msvc_wording()
+            && matches!(
+                self.error_type,
+                ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None)
+            )
+        {
+            explanation.message = "'{': no matching token found";
+            explanation = explanation.msvc_code("C1075");
+        }
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.

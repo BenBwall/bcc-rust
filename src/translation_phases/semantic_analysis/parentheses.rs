@@ -62,7 +62,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         c: &'tu ConditionalExpression<'tu>,
     ) {
         self.check_conditional_precedence(e, c);
-        if self.unused.sign_compare {
+        if self.unused.sign_compare && !self.unused.cl {
             self.check_conditional_sign(c.then_expression, c.else_expression);
         }
     }
@@ -77,7 +77,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
     ) {
-        if !self.unused.parentheses {
+        if !self.unused.parentheses || self.unused.cl {
             return;
         }
         let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
@@ -495,6 +495,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let operator = binary_operator(e);
+        // `cl`'s C4706, at level 4: only `=`, compound assignments aside.
+        // Microsoft Learn: "Compiler Warning (level 4) C4706".
+        if self.unused.cl {
+            if operator == Some(B::Assignment) {
+                self.parentheses_warning(
+                    G::Parentheses,
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                    "assignment used as a condition",
+                    [SourceVectors::default(); 2],
+                );
+            }
+            return;
+        }
         if self.is_gcc() {
             if operator == Some(B::Assignment) {
                 self.parentheses_warning(
@@ -545,7 +558,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         e: &'tu Expression<'tu>,
         c: &'tu ConditionalExpression<'tu>,
     ) {
-        if !self.unused.parentheses || self.is_gcc() {
+        if !self.unused.parentheses || self.is_gcc() || self.unused.cl {
             return;
         }
         let E::Binary {
@@ -600,7 +613,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         site: SourceVectors,
         slot: ExpressionSlot<'tu>,
     ) {
-        if !self.unused.parentheses || self.is_gcc() {
+        if !self.unused.parentheses || self.is_gcc() || self.unused.cl {
             return;
         }
         if let Some(e) = super::statements::slot_expression(slot)
@@ -624,7 +637,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         s: &'tu Statement<'tu>,
         then_statement: &'tu Statement<'tu>,
     ) {
-        if !self.unused.parentheses {
+        if !self.unused.parentheses || self.unused.cl {
             return;
         }
         let gcc = self.is_gcc();

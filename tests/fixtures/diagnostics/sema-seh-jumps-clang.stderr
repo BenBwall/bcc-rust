@@ -1,0 +1,73 @@
+sema-seh-jumps-clang.c:7:9: error: cannot jump from this goto statement to its label
+    7 |         goto inside;
+      |         ^
+sema-seh-jumps-clang.c:8:5: note: jump bypasses initialization of __try block
+    8 |     __try {
+      |     ^
+sema-seh-jumps-clang.c:33:9: error: cannot jump from this goto statement to its label
+   33 |         goto cleanup;
+      |         ^
+sema-seh-jumps-clang.c:26:7: note: jump bypasses initialization of __finally block
+   26 |     } __finally {
+      |       ^
+sema-seh-jumps-clang.c:31:9: error: cannot jump from this goto statement to its label
+   31 |         goto handler;
+      |         ^
+sema-seh-jumps-clang.c:20:7: note: jump bypasses initialization of __except block
+   20 |     } __except (1) {
+      |       ^
+sema-seh-jumps-clang.c:39:9: error: cannot jump from this goto statement to its label
+   39 |         goto deep;
+      |         ^
+sema-seh-jumps-clang.c:43:9: note: jump bypasses initialization of __try block
+   43 |         __try {
+      |         ^
+sema-seh-jumps-clang.c:42:7: note: jump bypasses initialization of __except block
+   42 |     } __except (1) {
+      |       ^
+sema-seh-jumps-clang.c:56:5: error: cannot jump from switch statement to this case label
+   56 |     case 1:
+      |     ^
+sema-seh-jumps-clang.c:55:9: note: jump bypasses initialization of __try block
+   55 |         __try {
+      |         ^
+sema-seh-jumps-clang.c:87:9: error: '__leave' statement not in __try block
+   87 |         __leave;
+      |         ^
+sema-seh-jumps-clang.c:91:9: error: '__leave' statement not in __try block
+   91 |         __leave;
+      |         ^
+sema-seh-jumps-clang.c:110:17: warning: jump out of __finally block has undefined behavior [-Wjump-seh-finally]
+  110 |                 continue;
+      |                 ^
+sema-seh-jumps-clang.c:112:17: warning: jump out of __finally block has undefined behavior [-Wjump-seh-finally]
+  112 |                 break;
+      |                 ^
+sema-seh-jumps-clang.c:124:13: warning: jump out of __finally block has undefined behavior [-Wjump-seh-finally]
+  124 |             return 1;
+      |             ^
+sema-seh-jumps-clang.c:114:17: warning: jump out of __finally block has undefined behavior [-Wjump-seh-finally]
+  114 |                 goto done;
+      |                 ^
+sema-seh-jumps-clang.c:135:13: error: cannot jump from this goto statement to its label
+  135 |             goto again;
+      |             ^
+sema-seh-jumps-clang.c:130:5: note: jump bypasses initialization of __try block
+  130 |     __try {
+      |     ^
+sema-seh-jumps-clang.c:145:13: error: cannot jump from this goto statement to its label
+  145 |             goto in;
+      |             ^
+sema-seh-jumps-clang.c:147:5: note: jump bypasses initialization of __try block
+  147 |     __try {
+      |     ^
+sema-seh-jumps-clang.c:157:5: error: cannot jump from this indirect goto statement to one of its possible targets
+  157 |     goto *targets[p];
+      |     ^
+sema-seh-jumps-clang.c:159:5: note: possible target of indirect goto statement
+  159 |     target:
+      |     ^
+sema-seh-jumps-clang.c:158:5: note: jump bypasses initialization of __try block
+  158 |     __try {
+      |     ^
+4 warnings and 10 errors generated.

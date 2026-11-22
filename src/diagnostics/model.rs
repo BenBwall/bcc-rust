@@ -63,6 +63,20 @@ pub(crate) struct Diagnostic<'d> {
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
     pub(crate) reading:          Option<SourceVectors>,
+    /// `cl`'s code generator reported it, which `cl` leads with the file's
+    /// full path and the line alone: `C:\src\a.c(3) : warning C4715: ...`.
+    pub(crate) back_end:         bool,
+    /// `cl`'s notes, which the MSVC formats write after the message, each
+    /// on a line of its own led by its place: `file(line): note: text`.
+    pub(crate) msvc_notes:       ArenaVec<'d, MsvcNote<'d>>,
+}
+
+/// One of `cl`'s notes: its words, at the diagnostic's own place or at
+/// another (`see declaration of 'S'`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MsvcNote<'d> {
+    pub(crate) source: Option<SourceVectors>,
+    pub(crate) text:   &'d str,
 }
 
 /// Whether `cl`'s `/WX` made a warning an error. `cl` then writes `error
@@ -86,6 +100,13 @@ impl<'d> Diagnostic<'d> {
             message: label,
             primary: true,
         });
+        self
+    }
+
+    /// Adds one of `cl`'s notes, at `source` or else at the diagnostic's
+    /// place.
+    pub(crate) fn msvc_note(mut self, source: Option<SourceVectors>, text: &'d str) -> Self {
+        self.msvc_notes.push(MsvcNote { source, text });
         self
     }
 
@@ -233,6 +254,8 @@ impl<'d> Explanation<'d> {
             help: self.help,
             fix_its: ArenaVec::new_in(self.arena),
             reading: None,
+            back_end: false,
+            msvc_notes: ArenaVec::new_in(self.arena),
         }
         .primary(source, self.label)
     }

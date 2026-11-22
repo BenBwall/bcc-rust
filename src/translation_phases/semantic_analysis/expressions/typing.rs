@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     configuration::CStandard,
+    diagnostics::format_in,
     translation_phases::{
         parsing::{
             declaration_syntax::TypeQualifiers,
@@ -42,6 +43,7 @@ use crate::{
         semantic_analysis::{
             Analyzer,
             BindingKind,
+            ClErrorCode,
             Duration,
             Linkage,
             SemanticErrorKind,
@@ -63,7 +65,6 @@ use crate::{
             ArenaMap,
             ArenaVec,
         },
-        string_cache::StringCacheId,
     },
 };
 
@@ -170,6 +171,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if op == U::Indirection {
             let Some(target) = self.pointer_target(ty) else {
+                // `cl`'s error C2100 names an arithmetic operand's type.
+                // Microsoft Learn: "Compiler Error C2100".
+                if !e.recovered
+                    && self.context.configuration.msvc_wording()
+                    && self.arithmetic(ty)
+                    && let Some(spelled) = self.msvc_type_spelling(ty)
+                {
+                    let words = format_in!(
+                        self.scratch,
+                        "you cannot dereference an operand of type '{spelled}'"
+                    );
+                    let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                    self.cl_error(ClErrorCode::Indirection, site, words, None);
+                    return Self::expression_result(e, self.types.unknown());
+                }
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             };
             if self.void_type(target) && !self.indirection_cancelled(e) {
@@ -453,6 +469,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if left.category != ValueCategory::ModifiableLvalue
                 && !self.tcc_writes_read_only(e, &left)
             {
+                if !e.recovered && self.cl_not_lvalue(op, left) {
+                    return Self::expression_result(e, self.types.unknown());
+                }
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
             self.note_parameter_write(left.binding);
@@ -1132,6 +1151,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Self::expression_result(e, ty);
         }
         let Some(target) = self.pointer_target(ty) else {
+            if !e.recovered
+                && self.context.configuration.msvc_wording()
+                && let ExpressionType::Identifier(name) =
+                    self.selected_designator(function.expression).kind
+            {
+                // `cl`'s error C2063, at the name. Microsoft Learn:
+                // "Compiler Error C2063".
+                let words = format_in!(
+                    self.scratch,
+                    "'{}': not a function",
+                    self.context.string_cache.at(name.name)
+                );
+                self.cl_error(ClErrorCode::NotAFunction, name.source_vectors, words, None);
+                return Self::expression_result(e, self.types.unknown());
+            }
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
         // C99 §6.5.2.2p1: defer the function constraint for an unmodeled
@@ -1166,20 +1200,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
         // TCC say which way a call misses it.
+        // `cl` names the function by its declaration, and an extra
+        // argument at the first. bcc keeps its own words for a call through
+        // a pointer, and for a declaration that spells a type by a typedef
+        // name, whose spelling `cl` keeps and its type printer does not.
+        let cl_callee = named
+            .filter(|&binding| {
+                self.context.configuration.msvc_wording()
+                    && self.bindings[binding].kind == BindingKind::Function
+                    && !self.cl_spelled_by_name.contains_key(&binding)
+            })
+            .and_then(|binding| {
+                self.msvc_function_spelling(target, self.bindings[binding].name.name)
+            });
         if prototype && arguments.len() < parameters.len() {
-            self.error(
-                SemanticErrorKind::TooFewArguments,
-                e.source_vectors,
-                callee_name,
-                None,
-            );
+            if let Some(callee) = cl_callee {
+                let words = format_in!(self.scratch, "'{callee}': too few arguments for call");
+                self.cl_error(ClErrorCode::TooFewArguments, e.source_vectors, words, None);
+            } else {
+                self.error(
+                    SemanticErrorKind::TooFewArguments,
+                    e.source_vectors,
+                    callee_name,
+                    None,
+                );
+            }
         } else if prototype && !variadic && arguments.len() > parameters.len() {
-            self.error(
-                SemanticErrorKind::TooManyArguments,
-                e.source_vectors,
-                callee_name,
-                None,
-            );
+            if let Some(callee) = cl_callee {
+                let words = format_in!(self.scratch, "'{callee}': too many arguments for call");
+                let site = arguments[parameters.len()].source_vectors;
+                self.cl_error(ClErrorCode::TooManyArguments, site, words, None);
+            } else {
+                self.error(
+                    SemanticErrorKind::TooManyArguments,
+                    e.source_vectors,
+                    callee_name,
+                    None,
+                );
+            }
         }
         let mut failed = prototype
             && (arguments.len() < parameters.len()
@@ -1357,7 +1415,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
         };
         let Some(&index) = self.member_indices.get(&(id, member.name)) else {
-            return self.missing_member(e, ty, id, member.name);
+            return self.missing_member(e, ty, id, member);
         };
         let Some(field) = self.types.tags[id].fields.get().get(index).copied() else {
             return Self::expression_result(e, self.types.unknown());
@@ -3342,9 +3400,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         e: &'tu Expression<'tu>,
         record: TypeId,
         tag: usize,
-        member: StringCacheId,
+        member: Identifier,
     ) -> ExpressionInfo<'tu> {
         let incomplete = !self.types.tags[tag].complete.get();
+        if !e.recovered && !incomplete && self.cl_missing_member(tag, member) {
+            return Self::expression_result(e, self.types.unknown());
+        }
+        let member = member.name;
         let kind = if incomplete {
             SemanticErrorKind::IncompleteMemberAccess
         } else {
@@ -3360,6 +3422,75 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         Self::expression_result(e, self.types.unknown())
+    }
+
+    /// `cl`'s error C2106 for an assignment to a value that is no lvalue
+    /// (not a `void` one, which is its C2186), at the left operand's
+    /// operator, or the start of a constant or a call: whether it was
+    /// reported, under `cl`'s formats. Microsoft Learn: "Compiler Error
+    /// C2106".
+    /// C99: §6.5.16p2, p. 91; PDF p. 103.
+    fn cl_not_lvalue(&mut self, op: BinaryOperator, left: ExpressionInfo<'tu>) -> bool {
+        if left.category != ValueCategory::Rvalue
+            || !self.context.configuration.msvc_wording()
+            || self.void_type(left.ty)
+        {
+            return false;
+        }
+        let mut operand = left.expression;
+        while let ExpressionType::Parenthesized { expression } = operand.kind {
+            operand = expression;
+        }
+        let site = match operand.kind {
+            | ExpressionType::Constant(_) | ExpressionType::Call { .. } => operand.source_vectors,
+            | ExpressionType::Unary { .. }
+            | ExpressionType::Binary { .. }
+            | ExpressionType::Conditional(_) => operand
+                .operator_source_vectors
+                .unwrap_or(operand.source_vectors),
+            | _ => return false,
+        };
+        let words = format_in!(
+            self.scratch,
+            "'{}': left operand must be l-value",
+            super::super::always_nonnull::binary_spelling(op)
+        );
+        self.cl_error(ClErrorCode::LeftOperand, site, words, None);
+        true
+    }
+
+    /// `cl`'s error C2039 for a member a complete record lacks, at the
+    /// member's name, with a note at the tag's declaration: whether it was
+    /// reported, which needs `cl`'s formats and a named, visible tag.
+    /// Microsoft Learn: "Compiler Error C2039".
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    fn cl_missing_member(&mut self, tag: usize, member: Identifier) -> bool {
+        if !self.context.configuration.msvc_wording() {
+            return false;
+        }
+        let Some(name) = self.types.tags[tag].name else {
+            return false;
+        };
+        let Some(entry) = self
+            .lookup(Namespace::Tag, name)
+            .filter(|entry| entry.binding == tag)
+        else {
+            return false;
+        };
+        let tag_name = self.context.string_cache.at(name);
+        let words = format_in!(
+            self.scratch,
+            "'{}': is not a member of '{tag_name}'",
+            self.context.string_cache.at(member.name)
+        );
+        let note = format_in!(self.scratch, "see declaration of '{tag_name}'");
+        self.cl_error(
+            ClErrorCode::NotAMember,
+            member.source_vectors,
+            words,
+            Some((entry.name.source_vectors, note)),
+        );
+        true
     }
 
     /// An expression that uses the value of a void expression, which has

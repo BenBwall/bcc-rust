@@ -58,6 +58,9 @@ impl Analyzer<'_, '_, '_> {
         let Some(binding) = function.binding else {
             return;
         };
+        if self.without_clang_cfg(function.id) {
+            return;
+        }
         let noreturn = self.functions.emission.noreturn.contains_key(&binding);
         let result = self.types.non_atomic(function.result).unqualified();
         let void = matches!(
@@ -67,13 +70,15 @@ impl Analyzer<'_, '_, '_> {
         if (void && !noreturn) || self.types.unanalyzed(result) || self.declared_naked(binding) {
             return;
         }
-        // Nothing after a last `return` can run, which most functions end in.
+        // Nothing after a last `return` can run, which most functions end in;
+        // `cl` asks whether one without a value can.
         let body = function.syntax.body;
         if !noreturn
             && let S::Compound { items } = body.kind
             && matches!(
                 items.iter().next_back(),
-                Some(BlockItem::Statement(last)) if matches!(last.kind, S::Return(_))
+                Some(BlockItem::Statement(last))
+                    if matches!(last.kind, S::Return(value) if value.is_some() || !self.unused.cl)
             )
         {
             return;
@@ -93,7 +98,11 @@ impl Analyzer<'_, '_, '_> {
             }
             return;
         }
-        if gcc {
+        if self.unused.cl {
+            if !void {
+                self.cl_return_flow(binding, end_reached, end, &flow);
+            }
+        } else if gcc {
             self.gcc_return_flow(binding, noreturn, end_reached, end, &flow);
         } else {
             self.clang_return_flow(binding, noreturn, end_reached, end, &flow);
@@ -152,6 +161,34 @@ impl Analyzer<'_, '_, '_> {
                 end,
                 "control reaches end of non-void function",
             );
+        }
+    }
+
+    /// `cl`'s C4715 (not all control paths return a value) and C4716 (the
+    /// function has no `return` with a value, even one no path reaches),
+    /// level 1 warnings of its code generator: some path reaches the closing
+    /// brace or a `return` without a value. They wait for the end of the
+    /// unit, as the code generator runs after the front end, and only if
+    /// that reported no error, for a function it generates
+    /// (`Analyzer::report_late_return_flow`). A call to a function declared
+    /// `noreturn`, or `__assume(0)`, ends its path; `cl` takes `abort` and
+    /// its kin to return unless a declaration says otherwise, where bcc
+    /// knows them. Microsoft Learn: "Compiler Warning (level 1) C4715",
+    /// "Compiler Warning (level 1) C4716", "__assume".
+    /// C99: §6.9.1p12, p. 142; PDF p. 154.
+    fn cl_return_flow(
+        &mut self,
+        binding: usize,
+        end_reached: bool,
+        end: SourceVectors,
+        flow: &Flow<'_>,
+    ) {
+        let name = self.bindings[binding].name.name;
+        if self.context.string_cache.at(name) == "main" && self.context.configuration.hosted() {
+            return;
+        }
+        if end_reached || flow.exits.live_void {
+            self.late_cl_return_flow(binding, end, !flow.exits.any_value);
         }
     }
 
@@ -241,7 +278,10 @@ impl Analyzer<'_, '_, '_> {
         let Some(binding) = function.binding else {
             return;
         };
-        if !self.unused.return_flow || !self.functions.emission.noreturn.contains_key(&binding) {
+        if !self.unused.return_flow
+            || self.unused.cl
+            || !self.functions.emission.noreturn.contains_key(&binding)
+        {
             return;
         }
         if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {

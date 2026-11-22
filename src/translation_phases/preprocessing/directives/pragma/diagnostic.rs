@@ -31,6 +31,7 @@ use crate::{
         gcc_knows_warning,
     },
     translation_phases::{
+        SourcePosition,
         SourceVectors,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -259,9 +260,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// Microsoft Learn: "warning pragma".
     /// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1,
     /// p. 159; PDF p. 171.
-    pub(super) fn pragma_warning(&mut self) {
+    pub(super) fn pragma_warning(&mut self, at: Option<(u32, SourcePosition)>) {
+        let line = self.pragma_source_line(at);
         let (tokens, end) = self.pragma_line_tokens();
-        let problem = self.read_pragma_warning(tokens);
+        let problem = self.read_pragma_warning(tokens, line);
         if let Err((message, at)) = problem {
             let at = at.map_or(end, |token: PreprocessorToken| token.source_vectors);
             if self.context.configuration.compiler_identity() != CompilerIdentity::Msvc {
@@ -270,11 +272,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
     }
 
-    /// Reads and applies the operands of `#pragma warning`; the error is what
-    /// was expected, and the token found instead, if any.
+    /// Reads and applies the operands of `#pragma warning` on `line`; the
+    /// error is what was expected, and the token found instead, if any.
     fn read_pragma_warning(
         &mut self,
         tokens: &[PreprocessorToken],
+        line: (u32, u32),
     ) -> Result<(), (&'static str, Option<PreprocessorToken>)> {
         const KINDS: &str = "#pragma warning expected `push`, `pop`, `default`, `disable`, \
                              `error`, `once`, `suppress`, 1, 2, 3, or 4";
@@ -291,6 +294,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         match name {
             | Some("push") => {
                 self.context.pragma_diagnostic_push();
+                if cl {
+                    self.context.pragma_warning_push(line);
+                }
                 token = rest.next();
                 if token.is_some_and(|token| token.kind == PreprocessorTokenType::Comma) {
                     let level = rest.next();
@@ -298,15 +304,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         .filter(|level| level.kind == PreprocessorTokenType::Number)
                         .map(|level| self.pragma_spelling(level));
                     token = if number.is_some() { rest.next() } else { level };
-                    if !matches!(number, Some("0" | "1" | "2" | "3" | "4")) {
+                    let Some(level @ 0..=4) = number.and_then(|number| number.parse().ok()) else {
                         return Err((
                             "#pragma warning(push, level) requires a level between 0 and 4",
                             token,
                         ));
+                    };
+                    if cl {
+                        self.context.pragma_warning_level(level);
                     }
                 }
             },
             | Some("pop") => {
+                if cl {
+                    self.context.pragma_warning_pop(line.1);
+                }
                 if !self.context.pragma_diagnostic_pop() {
                     let at = match rest.clone().next() {
                         | Some(token) => token.source_vectors,
@@ -337,7 +349,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     token.filter(|token| token.kind == PreprocessorTokenType::Number)
                 {
                     if cl && let Ok(code) = self.pragma_spelling(number).parse() {
-                        self.context.pragma_warning_number(code, specifier);
+                        self.context.pragma_warning_number(code, specifier, line);
                     }
                     token = rest.next();
                 }
@@ -354,6 +366,16 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.pragma_warning_extra_tokens(extra);
         }
         Ok(())
+    }
+
+    /// The source file and line of the pragma that begins `at`, which `cl`'s
+    /// `suppress` reads: those of the outermost macro invocation that
+    /// produced it, or of the place it begins.
+    fn pragma_source_line(&self, at: Option<(u32, SourcePosition)>) -> (u32, u32) {
+        if let Some(invocation) = self.outermost_invocation() {
+            return (invocation.source_file_index, invocation.line);
+        }
+        at.map_or((0, 0), |(file, position)| (file, position.line))
     }
 
     fn pragma_warning_extra_tokens(&mut self, extra: PreprocessorToken) {
@@ -408,13 +430,13 @@ pub(crate) enum WarningSpecifier {
     Disable,
     /// `error`.
     Error,
-    /// `default`: back to the command line's setting.
+    /// `default`: shown from the warning's own level again.
     Default,
-    /// A level, or `once`: reports it, as a warning. bcc does not model
-    /// warning levels or `once`'s single report.
-    Enable,
-    /// `suppress`, which `cl` applies to the next line only. bcc does not
-    /// model that, so it changes nothing.
+    /// A level: shown from it.
+    Level(u8),
+    /// `once`: shown from the warning's own level, the first time only.
+    Once,
+    /// `suppress`: not shown on the pragma's line and the next one.
     Suppress,
 }
 
@@ -423,7 +445,11 @@ fn name_or_level(name: Option<&str>) -> Option<WarningSpecifier> {
         | "disable" => Some(WarningSpecifier::Disable),
         | "error" => Some(WarningSpecifier::Error),
         | "default" => Some(WarningSpecifier::Default),
-        | "once" | "1" | "2" | "3" | "4" => Some(WarningSpecifier::Enable),
+        | "once" => Some(WarningSpecifier::Once),
+        | "1" => Some(WarningSpecifier::Level(1)),
+        | "2" => Some(WarningSpecifier::Level(2)),
+        | "3" => Some(WarningSpecifier::Level(3)),
+        | "4" => Some(WarningSpecifier::Level(4)),
         | "suppress" => Some(WarningSpecifier::Suppress),
         | _ => None,
     }

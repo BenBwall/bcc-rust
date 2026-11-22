@@ -277,6 +277,11 @@ impl ToDiagnostic for TranslationError<'_> {
                 let mut diagnostic = classified.error.diagnostic_in(context, source, arena);
                 diagnostic.fatal = classified.fatal;
                 diagnostic.pragma_mapped = classified.mapped;
+                // `#pragma warning(error: N)` made it `cl`'s error, which
+                // `/WX` leaves as it is.
+                if classified.mapped && context.configuration.msvc_wording() {
+                    diagnostic.treated_as_error = crate::diagnostics::TreatedAsError::No;
+                }
                 diagnostic
             },
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),

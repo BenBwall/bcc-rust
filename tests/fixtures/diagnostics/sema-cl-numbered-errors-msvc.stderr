@@ -1,0 +1,9 @@
+sema-cl-numbered-errors-msvc.c(5,5): error C2084: function 'int f(void)' already has a body
+sema-cl-numbered-errors-msvc.c(4,5): note: see previous definition of 'f'
+sema-cl-numbered-errors-msvc.c(8,15): error C2039: 'b': is not a member of 'S'
+sema-cl-numbered-errors-msvc.c(2,8): note: see declaration of 'S'
+sema-cl-numbered-errors-msvc.c(8,19): error C2100: you cannot dereference an operand of type 'int'
+sema-cl-numbered-errors-msvc.c(9,15): error C2197: 'int g(int)': too many arguments for call
+sema-cl-numbered-errors-msvc.c(9,20): error C2198: 'int g(int)': too few arguments for call
+sema-cl-numbered-errors-msvc.c(9,26): error C2063: 'x': not a function
+sema-cl-numbered-errors-msvc.c(10,5): error C2106: '+=': left operand must be l-value

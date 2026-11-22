@@ -1,0 +1,4 @@
+sema-seh-filter-limits-clang.c:31:18: warning: comparison of address of 'p' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   31 |     } __except (&p == 0) {
+      |                  ^    ~
+1 warning generated.

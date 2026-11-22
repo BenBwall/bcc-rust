@@ -520,6 +520,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(current) = self.functions.current {
                     self.identifier_list_definition(current.syntax);
                 }
+                self.finish_seh_function();
                 self.report_reachable_warnings();
                 let order = self.function_end_order();
                 self.with_report_order(order, |analyzer| {
@@ -2099,12 +2100,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entity.first = entity.first.or(Some(index));
         entity.latest = index;
         if let Some(FunctionBody::Unique(previous)) = entity.function_body {
-            self.error(
-                SemanticErrorKind::DuplicateDefinition,
-                b.name.source_vectors,
-                Some(b.name.name),
-                Some(previous),
-            );
+            // `cl`'s error C2084 names the function by its declaration, which
+            // bcc writes only without a typedef name.
+            // Microsoft Learn: "Compiler Error C2084".
+            let spelled = if self.context.configuration.msvc_wording()
+                && !self.cl_spelled_by_name.contains_key(&index)
+            {
+                self.msvc_function_spelling(b.ty, b.name.name)
+            } else {
+                None
+            };
+            if let Some(function) = spelled {
+                let name = self.context.string_cache.at(b.name.name);
+                let words = crate::diagnostics::format_in!(
+                    self.scratch,
+                    "function '{function}' already has a body"
+                );
+                let note = crate::diagnostics::format_in!(
+                    self.scratch,
+                    "see previous definition of '{name}'"
+                );
+                self.cl_error(
+                    super::ClErrorCode::AlreadyHasBody,
+                    b.name.source_vectors,
+                    words,
+                    Some((previous, note)),
+                );
+            } else {
+                self.error(
+                    SemanticErrorKind::DuplicateDefinition,
+                    b.name.source_vectors,
+                    Some(b.name.name),
+                    Some(previous),
+                );
+            }
         } else {
             entity.function_body = Some(if entity.can_redefine {
                 FunctionBody::Replaceable(b.name.source_vectors)
@@ -2958,6 +2987,71 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .entities
                     .get(&self.function_identity(binding))
                     .is_some_and(|entity| self.body_external(entity)))
+    }
+
+    /// The functions, by identity, whose code `cl` generates: each external
+    /// definition that is not a discardable inline one, and each function a
+    /// generated function or any static object's initializer names, even in
+    /// code no path reaches, but not under `sizeof`. Its code generator
+    /// says nothing about the others, as a `static` or `inline` function
+    /// nothing calls. Microsoft Learn: "inline, __inline, __forceinline".
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125; §6.9p3, p. 140;
+    /// PDF p. 152.
+    pub(super) fn cl_generated_functions<'a>(
+        &mut self,
+        arena: &'a Bump,
+    ) -> ArenaMap<'a, StringCacheId, ()> {
+        let mut generated = ArenaMap::with_hasher_in(FxBuildHasher, arena);
+        let mut pending = ArenaVec::new_in(self.scratch);
+        let mut roots = ArenaVec::new_in(self.scratch);
+        roots.extend(self.functions.entities.values().map(|entity| entity.latest));
+        for latest in roots {
+            let data = self.bindings[latest];
+            if data.kind != BindingKind::Function {
+                continue;
+            }
+            let entity = self.entity_of(latest);
+            let identity = self.function_identity(latest);
+            let external = data.linkage == Linkage::External
+                && self
+                    .functions
+                    .entities
+                    .get(&identity)
+                    .is_some_and(|entity| self.body_external(entity));
+            if (external || self.retained_by_used(entity))
+                && generated.insert(identity, ()).is_none()
+            {
+                pending.push(identity);
+            }
+        }
+        // Each function's references, by the identity of the function that
+        // makes them.
+        let mut edges = ArenaVec::new_in(self.scratch);
+        for reference in &self.references {
+            let target = self.bindings[reference.binding];
+            if target.kind != BindingKind::Function || target.linkage == Linkage::None {
+                continue;
+            }
+            let target = self.function_identity(reference.binding);
+            if self.bindings[reference.owner].kind == BindingKind::Function {
+                edges.push((self.function_identity(reference.owner), target));
+            } else if generated.insert(target, ()).is_none() {
+                pending.push(target);
+            }
+        }
+        edges.sort_unstable_by_key(|&(owner, _): &(StringCacheId, _)| owner.to_u32());
+        while let Some(owner) = pending.pop() {
+            let start = edges.partition_point(|&(from, _)| from.to_u32() < owner.to_u32());
+            for &(from, target) in &edges[start..] {
+                if from != owner {
+                    break;
+                }
+                if generated.insert(target, ()).is_none() {
+                    pending.push(target);
+                }
+            }
+        }
+        generated
     }
 
     /// Whether every file-scope declaration selects a C99 inline-only

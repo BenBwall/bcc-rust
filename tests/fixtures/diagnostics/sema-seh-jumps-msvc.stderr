@@ -1,0 +1,19 @@
+sema-seh-jumps-msvc.c(10,5): error C2705: 'inside': illegal jump into '__try' scope
+sema-seh-jumps-msvc.c(22,5): error C2705: 'handler': illegal jump into '__except' scope
+sema-seh-jumps-msvc.c(28,5): error C2705: 'cleanup': illegal jump into '__finally' scope
+sema-seh-jumps-msvc.c(45,9): error C2705: 'deep': illegal jump into '__try' scope
+sema-seh-jumps-msvc.c(57,5): error C2705: 'null': illegal jump into '__try' scope
+sema-seh-jumps-msvc.c(88,9): error C2703: illegal __leave statement
+sema-seh-jumps-msvc.c(92,9): error C2703: illegal __leave statement
+sema-seh-jumps-msvc.c(111,17): warning C4532: 'continue': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(113,17): warning C4532: 'break': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(120,1): warning C4532: 'done': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(142,9): error C2705: 'inner': illegal jump into '__try' scope
+sema-seh-jumps-msvc.c(159,5): warning C4532: 'again': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(208,9): error C2705: 'cousin': illegal jump into '__try' scope
+sema-seh-jumps-msvc.c(201,5): error C2705: 'handler': illegal jump into '__except' scope
+sema-seh-jumps-msvc.c(201,5): warning C4532: 'handler': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(229,17): warning C4532: 'identifier': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(231,17): warning C4532: 'identifier': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(241,21): warning C4532: 'break': jump out of __finally block has undefined behavior during termination handling
+sema-seh-jumps-msvc.c(249,21): warning C4532: 'continue': jump out of __finally block has undefined behavior during termination handling

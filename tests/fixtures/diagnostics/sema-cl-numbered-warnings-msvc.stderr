@@ -1,0 +1,10 @@
+sema-cl-numbered-warnings-msvc.c(2,17): warning C4100: 'p': unreferenced parameter
+sema-cl-numbered-warnings-msvc.c(4,9): warning C4101: 'a': unreferenced local variable
+sema-cl-numbered-warnings-msvc.c(6,13): warning C4189: 'b': local variable is initialized but not referenced
+sema-cl-numbered-warnings-msvc.c(17,15): warning C4018: '<': signed/unsigned mismatch
+sema-cl-numbered-warnings-msvc.c(18,12): warning C4389: '==': signed/unsigned mismatch
+sema-cl-numbered-warnings-msvc.c(19,12): warning C4018: '<': signed/unsigned mismatch
+sema-cl-numbered-warnings-msvc.c(21,11): warning C4706: assignment used as a condition
+sema-cl-numbered-warnings-msvc.c(21,11): note: if an assignment is intended you can enclose it in parentheses, '(e1 = e2)', to silence this warning
+sema-cl-numbered-warnings-msvc.c(25,19): warning C4293: '<<': shift count negative or too big, undefined behavior
+sema-cl-numbered-warnings-msvc.c(31,9): warning C4101: 'd': unreferenced local variable

@@ -459,6 +459,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     if !clang_cl {
         common.extend(state.coded_warning_options());
+        common.push(format!("--cl-warning-level={}", state.warning_level).into());
+        for &(code, setting) in &state.warning_settings {
+            let value = match setting {
+                | WarningSetting::Disabled => "d".to_owned(),
+                | WarningSetting::Error => "e".to_owned(),
+                | WarningSetting::Level(level) => level.to_string(),
+                | WarningSetting::Once => "o".to_owned(),
+            };
+            common.push(format!("--cl-warning={code}:{value}").into());
+        }
     }
     common.append(&mut clang_options);
     // `cl` compiles every source even after one fails, then skips the link;
@@ -1681,27 +1691,38 @@ impl State {
     /// and C4133 are warnings unless `/WX` makes every warning an error.
     fn coded_warning_options(&self) -> Vec<OsString> {
         let mut options = Vec::new();
-        for (code, level, group) in CL_CODED_WARNINGS {
+        // The groups a setting or the level has turned off or made errors,
+        // which a code sharing one of them does not turn on again.
+        let mut settled: Vec<&str> = Vec::new();
+        // A group without a name follows `--cl-warning` alone.
+        for (warning, group) in CL_CODED_WARNINGS.iter().flat_map(|warning| {
+            warning
+                .groups
+                .iter()
+                .filter_map(move |group| Some((warning, group.name()?)))
+        }) {
             let setting = self
                 .warning_settings
                 .iter()
-                .find(|&&(other, _)| other == code)
+                .find(|&&(other, _)| other == warning.code)
                 .map(|&(_, setting)| setting);
             let level = match setting {
                 | Some(WarningSetting::Level(level)) => level,
-                | _ => level,
+                | _ => warning.level,
             };
             if setting == Some(WarningSetting::Error) {
                 options.push(format!("-Werror={group}").into());
+                settled.push(group);
             } else if setting == Some(WarningSetting::Disabled) || level > self.warning_level {
                 options.push(format!("-Wno-{group}").into());
+                settled.push(group);
             } else {
-                // C4133's group holds these in bcc's options, so a setting
-                // of C4133 above must not reach them.
-                if matches!(code, 4090 | 4113) {
+                // A group bcc leaves off, or one whose parent a setting of
+                // an earlier code (C4133) may have turned off.
+                if warning.enable && !settled.contains(&group) {
                     options.push(format!("-W{group}").into());
                 }
-                if !self.warnings_error && matches!(code, 4047 | 4090 | 4113 | 4133) {
+                if !self.warnings_error && matches!(warning.code, 4047 | 4090 | 4113 | 4133) {
                     options.push(format!("-Wno-error={group}").into());
                 }
             }

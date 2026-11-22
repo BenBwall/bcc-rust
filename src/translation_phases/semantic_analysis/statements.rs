@@ -6,6 +6,8 @@
 
 use rustc_hash::FxBuildHasher;
 
+mod structured_exceptions;
+pub(super) use structured_exceptions::FinallyExit;
 mod switch_warnings;
 
 use super::{
@@ -87,6 +89,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.statement_effects(statement);
                 self.retain_statement_tail(statement);
             },
+            | StatementWork::OpenSehBlock(block, keyword) => self.open_seh_block(block, keyword),
+            | StatementWork::CloseSehBlock(previous) => self.control.close_to(previous),
+            | StatementWork::SehFilter(filter) => self.statements.seh_filter = filter,
             | StatementWork::RestoreStatementExpression { region, previous } => {
                 if let Some(region) = region {
                     self.control.regions[region.0].kind =
@@ -735,7 +740,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(source),
                 );
             }
-            if label.definition.is_some()
+            if self.statements.seh_jumps.contains_key(&i) {
+                // Reported by `check_seh_jumps`.
+            } else if label.definition.is_some()
                 && label.function == jump.function
                 && let Some(binding) = jump
                     .control
@@ -770,6 +777,89 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.finish_indirect_jumps();
+    }
+
+    /// Checks each goto of the function `function`, which has a SEH
+    /// statement, into a `__try`, `__except` or `__finally` block, or out of
+    /// a `__finally` block, as its analysis ends. Clang checks a function's
+    /// gotos last first as it finishes the function
+    /// (`JumpScopeChecker::VerifyJumps`); `cl` reports each label once, in
+    /// order. The function's gotos follow every goto of an earlier function,
+    /// and those of a nested function lie among them.
+    pub(super) fn check_seh_jumps(&mut self, function: usize) {
+        let mut indices = ArenaVec::new_in(self.scratch);
+        for (i, jump) in self.statements.jumps.iter().enumerate().rev() {
+            if jump.function < function {
+                break;
+            }
+            if jump.function == function {
+                indices.push(i);
+            }
+        }
+        if self.context.configuration.msvc_wording() {
+            indices.reverse();
+        }
+        let mut cl_labels = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut cl_finally_labels = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for i in indices {
+            let jump = self.statements.jumps[i];
+            let label = self.statements.labels[jump.label];
+            let (Some(definition), Some((from, to))) =
+                (label.definition, jump.point.zip(label.point))
+            else {
+                continue;
+            };
+            if label.function != jump.function {
+                continue;
+            }
+            let site = match jump.statement.kind {
+                | crate::translation_phases::parsing::syntax::StatementType::Goto(_) =>
+                    jump.statement.source_vectors,
+                | _ => jump.source.source_vectors,
+            };
+            let entry = structured_exceptions::SehEntry::Goto {
+                site,
+                label: definition,
+            };
+            if self.check_seh_entry(from, to, entry, cl_labels.contains_key(&jump.label)) {
+                _ = self.statements.seh_jumps.insert(i, ());
+                _ = cl_labels.insert(jump.label, ());
+            } else if matches!(
+                jump.statement.kind,
+                crate::translation_phases::parsing::syntax::StatementType::Goto(_)
+            ) && self.goto_leaves_finally(from.region, to.region)
+            {
+                // Clang's `-Wjump-seh-finally` at each goto, as it finishes
+                // the function; `cl`'s C4532 at the label, once.
+                let cl = self.context.configuration.msvc_wording();
+                if cl && cl_finally_labels.insert(jump.label, ()).is_some() {
+                    continue;
+                }
+                let order = if cl {
+                    super::ReportOrder::AtSite
+                } else {
+                    super::ReportOrder::After(self.context.file_location(
+                        crate::translation_phases::Context::last_source_vector(
+                            self.function_records[function].syntax.body.source_vectors,
+                        ),
+                    ))
+                };
+                let site = if cl {
+                    definition.source_vectors
+                } else {
+                    crate::translation_phases::Context::first_token_vector(site)
+                };
+                self.with_report_order(order, |analyzer| {
+                    analyzer.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::JumpSehFinally,
+                        SemanticErrorKind::JumpOutOfFinally,
+                        site,
+                        cl.then_some(definition.name),
+                        None,
+                    );
+                });
+            }
+        }
     }
 
     /// Checks every computed goto against every address-taken label of its
@@ -828,6 +918,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             if region.nearest_vm.is_some()
                                 || region.nearest_statement_expression.is_some()
                                 || region.nearest_cleanup_declaration.is_some()
+                                || region.nearest_seh.is_some()
                             {
                                 protected.push(target);
                             }
@@ -854,6 +945,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                     Some(target.source),
                 );
+                continue;
+            }
+            if let Some((target, block)) = self.seh_left(jump.point.region, span) {
+                self.report_indirect_seh_jump(jump.source, target.source, block, true);
                 continue;
             }
             for index in run {
@@ -890,6 +985,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     break;
                 }
+                if let [Some(block)] = self
+                    .control
+                    .entered_seh_blocks::<1>(jump.point.region, target)
+                {
+                    self.report_indirect_seh_jump(jump.source, target_source, block, false);
+                    break;
+                }
                 if self.cleanup_entered(jump.point.region, target).is_some() {
                     self.error(
                         SemanticErrorKind::IndirectJumpCleanupScope,
@@ -919,6 +1021,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             Some(first)
         } else {
             (last.preorder >= scope.subtree_end).then_some(last)
+        }
+    }
+
+    /// [`Self::cleanup_left`] for the innermost `__try`, `__except` or
+    /// `__finally` block around `from`, which a computed goto may not leave
+    /// either, with the block. Clang: `JumpScopeChecker`.
+    fn seh_left(
+        &self,
+        from: RegionId,
+        span: Option<(IndirectTarget, IndirectTarget)>,
+    ) -> Option<(IndirectTarget, RegionId)> {
+        let block = self.control.regions[from.0].nearest_seh?;
+        let (first, last) = span?;
+        let scope = self.control.regions[block.0];
+        if first.preorder < scope.preorder {
+            Some((first, block))
+        } else {
+            (last.preorder >= scope.subtree_end).then_some((last, block))
         }
     }
 
@@ -979,6 +1099,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     source,
                     None,
                     Some(expression),
+                );
+            }
+            if let Some((from, to)) = points {
+                _ = self.check_seh_entry(
+                    from,
+                    to,
+                    structured_exceptions::SehEntry::Case { site: source },
+                    false,
                 );
             }
             if let Some((from, to)) = points
@@ -1227,6 +1355,12 @@ pub(super) enum StatementWork<'tu> {
         region:   Option<RegionId>,
         previous: Option<RegionId>,
     },
+    /// Microsoft's `__try`, `__except` or `__finally` block begins at its
+    /// keyword, and ends back in the region around the statement.
+    OpenSehBlock(super::SehBlock, SourceVectors),
+    CloseSehBlock(Option<RegionId>),
+    /// Whether an `__except` filter is being analyzed, from here on.
+    SehFilter(bool),
     /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
     /// PDF p. 147. Associated substatements are blocks, including expressions.
     Substatement(&'tu Statement<'tu>),
@@ -1346,6 +1480,12 @@ pub(super) struct State<'tu, 's> {
     indirect_jumps: ArenaVec<'s, IndirectJump>,
     switches: ArenaVec<'s, Switch<'tu, 's>>,
     case_count: usize,
+    /// The functions with a SEH statement.
+    seh_functions: ArenaVec<'s, usize>,
+    /// The gotos reported for entering a SEH block, by index.
+    seh_jumps: ArenaMap<'s, usize, ()>,
+    /// An `__except` filter is being analyzed.
+    seh_filter: bool,
 }
 
 impl<'s> State<'_, 's> {
@@ -1363,6 +1503,9 @@ impl<'s> State<'_, 's> {
             indirect_jumps: ArenaVec::new_in(scratch),
             switches: ArenaVec::new_in(scratch),
             case_count: 0,
+            seh_functions: ArenaVec::new_in(scratch),
+            seh_jumps: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            seh_filter: false,
         }
     }
 }

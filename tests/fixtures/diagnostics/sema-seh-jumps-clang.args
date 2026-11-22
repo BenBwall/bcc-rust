@@ -1,0 +1,1 @@
+--compiler-extensions --compiler-identity=clang --diagnostic-format=clang --target=x86_64-pc-windows-msvc -fms-extensions

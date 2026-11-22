@@ -186,6 +186,9 @@ impl Analyzer<'_, '_, '_> {
         else {
             return;
         };
+        if self.unused.cl && self.cl_shown_before(kind, settings_at) {
+            return;
+        }
         let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
@@ -223,6 +226,25 @@ impl Analyzer<'_, '_, '_> {
         );
     }
 
+    /// Whether `cl` withholds its warning `kind`, which its settings at
+    /// `settings_at` show only once (`/wo`, `#pragma warning(once: N)`), as
+    /// it has already shown it so; otherwise this shows it.
+    /// Microsoft Learn: "warning pragma".
+    fn cl_shown_before(&mut self, kind: SemanticErrorKind, settings_at: SourceVectors) -> bool {
+        let Some(index) = kind.cl_code().and_then(|code| {
+            self.context
+                .configuration_at(settings_at)
+                .cl_warnings()
+                .shown_once(code)
+        }) else {
+            return false;
+        };
+        let bit = 1 << index;
+        let before = self.unused.cl_once & bit != 0;
+        self.unused.cl_once |= bit;
+        before
+    }
+
     /// [`Self::group_diagnostic`] for a warning GCC also withholds when a
     /// system header spells its token, as a system macro's body does; most of
     /// GCC's type-conversion warnings move to the invocation instead, and
@@ -242,6 +264,97 @@ impl Analyzer<'_, '_, '_> {
         {
             self.group_diagnostic_read_at(group, kind, source_vectors, name, None, settings_at);
         }
+    }
+
+    /// Reports `cl`'s error `code` in its `words`, at `site`, with its note
+    /// `note` at a place of its own.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn cl_error(
+        &mut self,
+        code: super::ClErrorCode,
+        site: SourceVectors,
+        words: &str,
+        note: Option<(SourceVectors, &str)>,
+    ) {
+        let name = self.context.string_cache.intern(words);
+        let mut related = super::RelatedNotes::default();
+        if let Some((place, text)) = note {
+            related.notes[0] = Some((
+                self.context.file_location(place),
+                self.context.string_cache.intern(text),
+            ));
+        }
+        self.with_related_notes(related, |analyzer| {
+            analyzer.error_with_notes(SemanticErrorKind::ClError(code), site, Some(name));
+        });
+    }
+
+    /// [`Self::error`] keeping the related notes, which `cl`'s errors carry,
+    /// as do Clang's about a jump into a SEH block.
+    pub(super) fn error_with_notes(
+        &mut self,
+        kind: SemanticErrorKind,
+        site: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
+        if self.tainted {
+            return;
+        }
+        self.semantic_errors += 1;
+        self.error_diagnostics += 1;
+        self.hard_errors += 1;
+        let error = SemanticError {
+            extension_severity: None,
+            gcc_werror: false,
+            kind,
+            source_vectors: self.context.file_location(site),
+            name,
+            previous: None,
+            highlights: self.format_highlights(),
+            origin: site,
+            order: self.report_order,
+            parameter: None,
+            related: self.related_notes,
+            fix_it: None,
+        };
+        self.context
+            .classified_error(site, TranslationError::Semantic(error));
+    }
+
+    /// Reports a diagnostic of no group at `severity`, which the caller has
+    /// decided: `cl`'s code generator's warnings, which its own settings
+    /// govern.
+    pub(super) fn report_with_severity(
+        &mut self,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+        severity: crate::translation_phases::ErrorSeverity,
+    ) {
+        if self.tainted || self.context.withholds(severity, false, source_vectors) {
+            return;
+        }
+        let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+        self.semantic_errors += errors;
+        self.error_diagnostics += errors;
+        let at = source_vectors;
+        let error = SemanticError {
+            extension_severity: Some(severity),
+            gcc_werror: false,
+            kind,
+            source_vectors: self.context.file_location(source_vectors),
+            name,
+            previous: None,
+            highlights: self.format_highlights(),
+            origin: at,
+            order: self.report_order,
+            parameter: None,
+            related: super::RelatedNotes::default(),
+            fix_it: None,
+        };
+        self.context
+            .classified_error(at, TranslationError::Semantic(error));
     }
 
     #[cold]
