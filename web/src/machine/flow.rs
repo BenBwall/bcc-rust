@@ -342,16 +342,10 @@ impl Chips<'_, '_> {
 
     /// A condition and whether C counts it as true.
     fn branch(&self, condition: Option<&Operand>) -> Vec<Option<FlowPart>> {
-        let truth = condition.is_some_and(|operand| match operand {
-            | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
-            | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
-            | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
-            | _ => false,
-        });
         vec![
             condition.map(|operand| self.operand(operand)),
             Some(arrow("counts as")),
-            Some(part("label", if truth { "true" } else { "false" })),
+            Some(part("label", if truth(condition) { "true" } else { "false" })),
         ]
     }
 
@@ -377,7 +371,7 @@ impl Chips<'_, '_> {
                     match (event.kind, result) {
                         | (EventKind::Logical, Some(_)) => "skip the right",
                         | (EventKind::Logical, None) => "evaluate the right",
-                        | _ if event.title.contains(": true") => "choose the second",
+                        | _ if truth(first) => "choose the second",
                         | _ => "choose the third",
                     },
                 )));
@@ -526,6 +520,17 @@ fn part(role: &str, text: &str) -> FlowPart {
         text: text.to_owned(),
         ..FlowPart::default()
     }
+}
+
+/// Whether C counts `condition` as true: it compares unequal to 0, and a
+/// pointer is true unless it is null (C99 §6.8.4.1p2, §6.5.15p4).
+fn truth(condition: Option<&Operand>) -> bool {
+    condition.is_some_and(|operand| match operand {
+        | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
+        | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
+        | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
+        | _ => false,
+    })
 }
 
 fn arrow(verb: &str) -> FlowPart {

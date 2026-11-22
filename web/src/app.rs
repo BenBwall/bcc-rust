@@ -2593,8 +2593,9 @@ fn About() -> impl IntoView {
                          union and _Bool; void and static functions; pointers to functions; arrays of structures or \
                          of arrays; subtracting or ordering two pointers (p - q, p < q); an assignment or increment \
                          used as an operand, such as a = b++ or f(i++) (a statement may still join several with \
-                         commas, as in i++, j--, and a condition may update one variable, as in i-- > 0); and the \
-                         other library functions. A program that uses one of them stops before its first step, and \
+                         commas, as in i++, j--, and a condition may update variables, as in i-- > 0 && n < 5, if a \
+                         sequence point separates each update from every other use of its variable, from *, [] \
+                         and ->, and from any call it is not an argument of); and the other library functions. A program that uses one of them stops before its first step, and \
                          its note says so. One that needs more of the preprocessor (another header, a function-like \
                          macro, #if) stops there too, and its note has a button to the compiler's Preprocessor \
                          stage, which shows what bcc makes of it."
