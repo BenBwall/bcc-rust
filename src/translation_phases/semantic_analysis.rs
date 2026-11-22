@@ -867,7 +867,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let mut ty = self.take_type();
                 for direct in list {
                     if let DirectDeclarator::Attributes(a) = direct {
-                        ty = self.mode_attribute(ty, a);
+                        ty = self.mode_attribute(ty, a, false);
                     }
                 }
                 for construction in [true, false] {
@@ -1054,7 +1054,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let mut chain = level.attributes;
                     while let Some(item) = chain {
                         if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
-                            base = self.mode_attribute(base, attribute);
+                            base = self.mode_attribute(base, attribute, false);
                             base = self.vector_attribute(base, attribute, true);
                         }
                         chain = item.next;

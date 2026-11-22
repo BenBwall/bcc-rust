@@ -563,6 +563,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// does not already have, which TCC would add. C99: §6.10.6p1, p. 159;
     /// PDF p. 171.
     TccPragmaLibrary(&'tu str),
+    /// An integer constant whose digits overflow 64 bits, or a decimal one
+    /// without `u` of 2^63 or more, which TCC 0.9.27 takes with a warning,
+    /// as its wrapped value (`parse_number` in `tccpp.c`). C99: §6.4.4.1
+    /// paragraph 6, p. 56; PDF p. 68.
+    TccIntegerOverflow,
     /// `#include_next` or `__has_include_next`, named by the payload, in the
     /// primary source file, where there is no entry to continue after; the
     /// lookup searches as `#include` would, as GCC's and Clang's do. The
@@ -1449,6 +1454,7 @@ impl PreprocessorErrorType<'_> {
                 "'{option}' is not supported in `#pragma comment(option)`: {reason}"
             ))
             .label("TCC would apply it from here on"),
+            | Self::TccIntegerOverflow => new("integer constant overflow"),
             | Self::TccPragmaLibrary(library) => new(format_in!(
                 arena,
                 "'#pragma comment(lib, \"{library}\")' is ignored: bcc adds no library from a \
@@ -1665,6 +1671,33 @@ impl PreprocessorErrorType<'_> {
             | _ => return None,
         })
     }
+
+    /// TCC 0.9.27's words for the warnings of `tccpp.c` bcc reports where
+    /// it does: `define_push` (a redefinition), `preprocess` (an unknown
+    /// directive) and `parse_escape_string` (an unknown escape, which names
+    /// its byte in hexadecimal unless it is a printable ASCII character).
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 leaves the form of a
+    /// diagnostic implementation-defined.
+    fn tcc_message<'d>(&self, arena: &'d Bump, spelling: Option<&str>) -> Option<&'d str> {
+        Some(match self {
+            | Self::MacroRedefinedWithDifferentDefinition(name, _) =>
+                format_in!(arena, "{name} redefined"),
+            | Self::UnknownDirective => format_in!(
+                arena,
+                "Ignoring unknown preprocessing directive #{}",
+                spelling.unwrap_or_default()
+            ),
+            | Self::UnknownEscapeSequence(character) => {
+                let mut bytes = [0; 4];
+                match character.encode_utf8(&mut bytes).as_bytes()[0] {
+                    | byte @ b'!'..=b'~' =>
+                        format_in!(arena, "unknown escape sequence: '\\{}'", char::from(byte)),
+                    | byte => format_in!(arena, "unknown escape sequence: '\\x{byte:x}'"),
+                }
+            },
+            | _ => return None,
+        })
+    }
 }
 
 impl Display for PreprocessorError<'_> {
@@ -1707,6 +1740,14 @@ impl ToDiagnostic for PreprocessorError<'_> {
                 if context.configuration.diagnostic_format()
                     == crate::configuration::DiagnosticFormat::Clang
                     && let Some(words) = self.error_type.clang_message(arena)
+                {
+                    explanation.message = words;
+                }
+                if context.configuration.diagnostic_format()
+                    == crate::configuration::DiagnosticFormat::Tcc
+                    && let Some(words) = self
+                        .error_type
+                        .tcc_message(arena, context.source_spelling(source))
                 {
                     explanation.message = words;
                 }
@@ -2103,7 +2144,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::StorageOrderPragmaOperand { .. }
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
             | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..)
-            | PreprocessorErrorType::TccPragmaLibrary(..) => ErrorSeverity::Warning,
+            | PreprocessorErrorType::TccPragmaLibrary(..)
+            | PreprocessorErrorType::TccIntegerOverflow => ErrorSeverity::Warning,
         }
     }
 }

@@ -701,6 +701,10 @@ pub(crate) enum ParserErrorType<'tu> {
     /// C99: §6.7 paragraph 2, p. 97; PDF p. 109; §6.7.7 paragraph 3, p. 123;
     /// PDF p. 135.
     TypedefDeclaresNoName,
+    /// A label that ends a compound statement, which TCC 0.9.27 accepts
+    /// with a warning (`block` in `tccgen.c`), as C23 makes it valid.
+    /// C23 (N3220): §6.8.2 paragraph 1, p. 152; PDF p. 165.
+    TccLabelAtBlockEnd,
     /// A declaration required a named declarator but none could be parsed.
     /// C99: §6.7, p. 97; PDF p. 109.
     ExpectedDeclaratorInDeclaration(Option<TokenType>),
@@ -1158,6 +1162,7 @@ impl ParserErrorType<'_> {
             | Self::InlineSpecifiedTwice
             | Self::ThreadLocalSpecifiedTwice(_)
             | Self::TypedefDeclaresNoName
+            | Self::TccLabelAtBlockEnd
             | Self::MemberDeclaresNothing => ParserDiagnosticCode::Quality,
             | Self::StorageClassRedefinition(..)
             | Self::ThreadStorageConflict { .. }
@@ -1368,6 +1373,7 @@ impl ParserErrorType<'_> {
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::TypedefDeclaresNoName
+            | Self::TccLabelAtBlockEnd
             | Self::MemberDeclaresNothing
             | Self::DuplicateDefaultLabel
             | Self::NestedFunctionDefinition(_) => ExpectedSyntax::None,
@@ -1550,6 +1556,8 @@ impl ParserErrorType<'_> {
                 .label("no name follows the type")
                 .note("C99 §6.7p2: the declaration still declares its tag or enumeration constants")
                 .help("name the type before `;`, or remove `typedef`"),
+            | Self::TccLabelAtBlockEnd =>
+                new("deprecated use of label at end of compound statement"),
             | Self::ExpectedDeclaratorInDeclaration(token) =>
                 expected_with_label("a declarator", "expected a name to declare", *token),
             | Self::ExpectedDeclarationContinuationAfterDeclarator(token, continuation) => {

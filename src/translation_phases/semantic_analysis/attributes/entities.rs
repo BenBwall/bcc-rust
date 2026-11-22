@@ -784,11 +784,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         });
     }
 
-    /// GCC `section("name")` on functions and static-storage objects.
+    /// GCC `section("name")` on functions and static-storage objects. TCC
+    /// places only those in the section too, but says nothing of the
+    /// attribute on anything else, as a typedef or a member: it reads the
+    /// attribute with the declaration's others and only a static
+    /// definition looks at it (`decl_initializer_alloc` and `gen_function`
+    /// in `tccgen.c`).
     fn section_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
         let Some(section) = self.string_argument(attribute) else {
             return;
         };
+        let symbol = match subject {
+            | Subject::Function { .. } => true,
+            | Subject::Object { binding, .. } =>
+                self.bindings[binding].duration.is_static_or_thread(),
+            | _ => false,
+        };
+        if !symbol && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+            return;
+        }
         let Some(binding) = self.static_subject(subject, attribute, true) else {
             return;
         };

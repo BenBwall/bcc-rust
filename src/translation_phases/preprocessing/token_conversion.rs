@@ -1180,6 +1180,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// extended integer types here. It is given `unsigned long long`, as
     /// Clang does, with a warning, whichever of `l` or `ll` it carries.
     ///
+    /// TCC 0.9.27 warns instead of either diagnostic and keeps the wrapped
+    /// value, which it types `unsigned long` in the second case unless the
+    /// constant asks for `long long` (`parse_number` in `tccpp.c`).
+    ///
     /// The widening warnings, for a constant that leaves `int` for `long` or
     /// `unsigned int` for `unsigned long`, flag valid code and are not
     /// required by C99.
@@ -1257,9 +1261,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         {
             return token;
         }
+        let tcc = self.context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         if did_overflow {
             self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
+                error_type:     if tcc {
+                    PreprocessorErrorType::TccIntegerOverflow
+                } else {
+                    PreprocessorErrorType::IntegerLiteralOverflow
+                },
                 source_vectors: token.source_vectors,
             });
         }
@@ -1362,13 +1371,23 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 );
                 if !did_overflow {
                     self.context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                            to: UnsignedIntegerLiteralType::UnsignedLongLong,
+                        error_type:     if tcc {
+                            PreprocessorErrorType::TccIntegerOverflow
+                        } else {
+                            PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                                to: UnsignedIntegerLiteralType::UnsignedLongLong,
+                            }
                         },
                         source_vectors: token.source_vectors,
                     });
                 }
-                IntegerConstantType::UnsignedLongLong
+                // TCC makes it unsigned, keeping the `long` the value's
+                // size chose or an `ll` suffix asked for.
+                if tcc && suffix_type != Some(IntegerSuffix::LongLong) {
+                    IntegerConstantType::UnsignedLong
+                } else {
+                    IntegerConstantType::UnsignedLongLong
+                }
             },
         };
         if !did_overflow

@@ -25,6 +25,7 @@ use crate::{
         parsing::{
             declaration_syntax::{
                 Declaration,
+                FunctionSpecifiers,
                 TypeSpecifiers,
             },
             syntax::{
@@ -106,10 +107,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// `-Wmultichar`, on by default in both. Clang leaves a four-character
-    /// constant to `-Wfour-char-constants`, which is off.
+    /// constant to `-Wfour-char-constants`, which is off. TCC 0.9.27 warns of
+    /// every one (`parse_escape_string` in `tccpp.c`).
     /// C99: §6.4.4.4 paragraph 10, p. 62; PDF p. 74.
     pub(super) fn report_multicharacter_constant(&mut self, e: &'tu Expression<'tu>, packed: i32) {
-        if !self.context.configuration.compiler_extensions() {
+        if !self.context.configuration.compiler_extensions()
+            && self.context.configuration.compiler_identity() != CompilerIdentity::Tcc
+        {
             return;
         }
         if self.clang_personality() && packed.cast_unsigned() > 0x00FF_FFFF {
@@ -181,18 +185,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    /// TCC's warning of a structure or union with neither a tag nor a
-    /// declarator, a `typedef` among them, at the `;` that ends it (`decl0`
-    /// in `tccgen.c`); TCC refuses `int;` instead, and bcc accepts it
-    /// silently there.
+    /// What TCC says of a declaration with no declarator, at the `;` that
+    /// ends it (`decl0` in `tccgen.c`): it warns of a structure or union with
+    /// neither a tag nor a declarator, a `typedef` among them, accepts a
+    /// tagged one and an enumeration silently, and refuses any other type,
+    /// `int;` and `typedef int;` alike, as its declarator parser finds no
+    /// name. Specifiers that name no type at all, only attributes, declare
+    /// nothing it parses.
     /// C99: §6.7 paragraph 2, p. 97; PDF p. 109.
     fn report_tcc_empty_declaration(&mut self, d: &'tu Declaration<'tu>) {
-        if self.old_parameter_mode
-            || !d.init_declarators.is_empty()
-            || !matches!(d.declaration_specifiers.type_specifiers,
-                TypeSpecifiers::StructOrUnion(record) if record.identifier.is_none())
-        {
+        if self.old_parameter_mode || !d.init_declarators.is_empty() {
             return;
+        }
+        let spec = d.declaration_specifiers;
+        let semicolon = Context::last_source_vector(d.source_vectors);
+        match spec.type_specifiers {
+            | TypeSpecifiers::StructOrUnion(record) if record.identifier.is_none() => {},
+            | TypeSpecifiers::StructOrUnion(_) | TypeSpecifiers::Enum(_) => return,
+            | TypeSpecifiers::Empty
+                if spec.storage_class.is_none()
+                    && spec.type_qualifiers.is_empty()
+                    && spec.function_specifiers == FunctionSpecifiers::default() =>
+                return,
+            | _ => {
+                self.compiler_refusal("identifier expected", semicolon);
+                return;
+            },
         }
         let group = DiagnosticGroup::GccEmptyDeclaration;
         let text = self
@@ -202,7 +220,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.group_diagnostic(
             group,
             SemanticErrorKind::ExceptionalConstant(group, text),
-            Context::last_source_vector(d.source_vectors),
+            semicolon,
             None,
             None,
         );

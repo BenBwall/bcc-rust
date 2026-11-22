@@ -14,6 +14,7 @@
 
 use super::{
     super::{
+        BindingKind,
         Linkage,
         SemanticErrorKind,
         types::{
@@ -36,7 +37,14 @@ use crate::{
     translation_phases::{
         SourceVectors,
         context::Context,
-        parsing::syntax::BlockItem,
+        parsing::syntax::{
+            BlockItem,
+            StorageClass,
+        },
+    },
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
     },
 };
 
@@ -198,8 +206,9 @@ impl Analyzer<'_, '_, '_> {
     /// warning naming it. `VT_INT` is every 32-bit integer type of `int`'s
     /// rank or above: `int` and `unsigned int`, an enumeration TCC
     /// represents as one of those, and a 32-bit `long` (`VT_LONG` in
-    /// `tcc.h`). TCC compiles an `inline` function only if something calls
-    /// it, and then after the rest of the unit, so bcc warns about none.
+    /// `tcc.h`). TCC compiles an `inline` definition it defers only if
+    /// something uses it, after the rest of the unit
+    /// ([`Self::report_tcc_deferred_return_flow`]), so its warning waits.
     fn tcc_return_flow(&mut self, binding: usize, result: TypeId, end: SourceVectors) {
         let data = self.bindings[binding];
         let name = self.context.string_cache.at(data.name.name);
@@ -218,14 +227,132 @@ impl Analyzer<'_, '_, '_> {
                 .is_some_and(|(bits, _)| bits == 32),
             | _ => false,
         });
-        if (name == "main" && int) || self.inline_declared(binding) {
+        if name == "main" && int {
             return;
         }
+        if let Some(deferred) = self.unused.tcc_deferred.last_mut()
+            && deferred.0 == binding
+        {
+            deferred.1 = Some(end);
+            return;
+        }
+        self.tcc_return_flow_warning(binding, end);
+    }
+
+    fn tcc_return_flow_warning(&mut self, binding: usize, end: SourceVectors) {
+        let name = self
+            .context
+            .string_cache
+            .at(self.bindings[binding].name.name);
         let text = crate::diagnostics::format_in!(
             self.scratch,
             "function might return no value: '{name}'"
         );
         self.return_flow_warning(G::ReturnType, end, text);
+    }
+
+    /// Follows TCC's `inline` flag through a declaration of the function
+    /// `name` (`patch_type` in `tccgen.c`), and says whether TCC defers the
+    /// definition it may be. An `extern` declaration drops the flag; a
+    /// redeclaration keeps it where both say `inline` or either, or the
+    /// first declaration, is `static`, and a declaration that is no
+    /// definition can only clear it. A definition left `inline` is kept as
+    /// tokens (`decl0`).
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
+    pub(in crate::translation_phases::semantic_analysis) fn note_tcc_inline(
+        &mut self,
+        name: StringCacheId,
+        inline: bool,
+        storage: Option<StorageClass>,
+        definition: bool,
+    ) -> bool {
+        let inline = inline && storage != Some(StorageClass::Extern);
+        let written_static = storage == Some(StorageClass::Static);
+        let state = match self.unused.tcc_inline.get(&name) {
+            | None => (inline, written_static),
+            | Some(&(old, first_static)) => {
+                let merged = (old || inline) && (old == inline || first_static || written_static);
+                (
+                    if definition { merged } else { old && merged },
+                    first_static,
+                )
+            },
+        };
+        _ = self.unused.tcc_inline.insert(name, state);
+        definition && state.0
+    }
+
+    /// What TCC says of the deferred `inline` definitions it compiles once
+    /// the unit is read (`gen_inline_functions` in `tccgen.c`): in passes
+    /// over them in order, each one that code compiled so far uses, or that a
+    /// later declaration left without `inline`, and then each one that uses
+    /// in turn, until a pass compiles none. A use in code bcc knows is never
+    /// generated, or in an operand that is not evaluated, compiles nothing.
+    /// TCC replays the saved tokens from a buffer of its own, so it names the
+    /// line before the closing brace, which the TCC format writes for a
+    /// diagnostic reported after the unit; an error stops TCC before these.
+    pub(in crate::translation_phases::semantic_analysis) fn report_tcc_deferred_return_flow(
+        &mut self,
+    ) {
+        let deferred_count = self.unused.tcc_deferred.len();
+        if deferred_count == 0 || self.context.error_count() != 0 {
+            return;
+        }
+        let mut identities = ArenaVec::new_in(self.scratch);
+        for i in 0..deferred_count {
+            identities.push(self.function_identity(self.unused.tcc_deferred[i].0));
+        }
+        let position = |identities: &ArenaVec<'_, StringCacheId>, identity: StringCacheId| {
+            identities.iter().position(|&deferred| deferred == identity)
+        };
+        // Each use of a deferred function: its index, and the index of the
+        // deferred function that makes it, if one does.
+        let mut uses = ArenaVec::new_in(self.scratch);
+        for reference in &self.references {
+            if reference.dead
+                || reference.unlowered
+                || self.bindings[reference.binding].kind != BindingKind::Function
+            {
+                continue;
+            }
+            let Some(target) = position(&identities, self.function_identity(reference.binding))
+            else {
+                continue;
+            };
+            let owner = (self.bindings[reference.owner].kind == BindingKind::Function)
+                .then(|| position(&identities, self.function_identity(reference.owner)))
+                .flatten();
+            uses.push((target, owner));
+        }
+        let mut generated = ArenaVec::new_in(self.scratch);
+        generated.resize(deferred_count, false);
+        loop {
+            let mut progress = false;
+            for i in 0..deferred_count {
+                let (binding, end) = self.unused.tcc_deferred[i];
+                let forced = !self
+                    .unused
+                    .tcc_inline
+                    .get(&self.bindings[binding].name.name)
+                    .is_some_and(|&(inline, _)| inline);
+                if generated[i]
+                    || !(forced
+                        || uses.iter().any(|&(target, owner)| {
+                            target == i && owner.is_none_or(|owner| generated[owner])
+                        }))
+                {
+                    continue;
+                }
+                generated[i] = true;
+                progress = true;
+                if let Some(end) = end {
+                    self.tcc_return_flow_warning(binding, end);
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
     }
 
     fn clang_return_flow(

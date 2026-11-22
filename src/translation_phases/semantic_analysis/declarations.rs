@@ -40,6 +40,7 @@ use crate::{
     configuration::{
         CStandard,
         CompilerIdentity,
+        DiagnosticGroup,
         RuleSet,
     },
     translation_phases::{
@@ -491,9 +492,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     || self
                         .context
                         .configuration_at(width.source_vectors)
-                        .diagnostic_requested(
-                            crate::configuration::DiagnosticGroup::GnuFoldingConstant,
-                        ))
+                        .diagnostic_requested(DiagnosticGroup::GnuFoldingConstant))
             {
                 self.error(
                     SemanticErrorKind::FoldedIntegerConstant,
@@ -704,7 +703,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let ty = if self.layout_attribute(attribute) {
                     self.types.unmodeled(UnmodeledType::ExtendedVector)
                 } else {
-                    let base = self.mode_attribute(base, attribute);
+                    let base = self.mode_attribute(base, attribute, false);
                     self.vector_attribute(base, attribute, true)
                 };
                 self.values.push(ty);
@@ -951,6 +950,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
+        let linkage = if linkage != Linkage::None
+            && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+        {
+            self.tcc_redeclared_linkage(name, spec, ty, kind, linkage, prior_index)
+        } else {
+            linkage
+        };
+        if kind == BindingKind::Function
+            && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+        {
+            let definition = self.functions.current.is_none()
+                && self
+                    .functions
+                    .reference_function
+                    .is_some_and(|function| self.function_controls.contains_key(&function));
+            if self.note_tcc_inline(
+                name.name,
+                spec.function_specifiers.is_inline,
+                spec.storage_class,
+                definition,
+            ) {
+                self.unused.tcc_deferred.push((self.bindings.len(), None));
+            }
+        }
         self.check_main_declaration(name, declarator, spec, ty, kind, linkage);
         if self.unused.tracking {
             self.note_declared_type(self.bindings.len(), spec, declarator, (kind, linkage), name);
@@ -1217,6 +1240,70 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
             | _ => ty.unqualified(),
         }
+    }
+
+    /// The linkage TCC gives a redeclaration of an object or function with
+    /// linkage, which keeps the first declaration's (`patch_type` in
+    /// `tccgen.c`). Where C's rules would give the identifier both
+    /// linkages, which C99 §6.2.2p7 leaves undefined, TCC warns: of a
+    /// `static` function declaration after a declaration with external
+    /// linkage, unless either is `inline`, and of any object declaration
+    /// whose `static` differs from its first declaration's, `extern` after
+    /// `static` among them. It warns of compatible declarations only, and
+    /// refuses the others, as bcc does; an `inline` one keeps the linkage
+    /// silently.
+    /// C99: §6.2.2 paragraphs 4-7, p. 32; PDF p. 44.
+    fn tcc_redeclared_linkage(
+        &mut self,
+        name: Identifier,
+        spec: DeclarationSpecifiers<'tu>,
+        ty: TypeId,
+        kind: BindingKind,
+        linkage: Linkage,
+        prior: Option<usize>,
+    ) -> Linkage {
+        let Some(index) = prior
+            .filter(|&index| self.bindings[index].linkage != Linkage::None)
+            .or_else(|| self.external.get(&name.name).copied())
+            .filter(|&index| {
+                self.bindings[index].kind == kind && self.bindings[index].linkage != Linkage::None
+            })
+        else {
+            return linkage;
+        };
+        let old = self.bindings[index];
+        let written_static = spec.storage_class == Some(StorageClass::Static);
+        let old_internal = old.linkage == Linkage::Internal;
+        let (warned, text) = match kind {
+            | BindingKind::Function if written_static && !old_internal => (
+                !spec.function_specifiers.is_inline
+                    && !self.inline_declared(index)
+                    && self.types.composite(old.ty, ty).is_some(),
+                "static storage ignored for redefinition of",
+            ),
+            | BindingKind::Object => (
+                written_static != old_internal && self.types.object_composite(old.ty, ty).is_some(),
+                "storage mismatch for redefinition of",
+            ),
+            | _ => return linkage,
+        };
+        if warned {
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "{text} '{}'",
+                self.context.string_cache.at(name.name)
+            );
+            let text = self.context.string_cache.intern(text);
+            let group = DiagnosticGroup::TccWarning;
+            self.group_diagnostic(
+                group,
+                SemanticErrorKind::ExceptionalConstant(group, text),
+                name.source_vectors,
+                None,
+                None,
+            );
+        }
+        old.linkage
     }
 
     pub(super) fn bind(

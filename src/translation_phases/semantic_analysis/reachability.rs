@@ -47,6 +47,7 @@ use super::{
 };
 use crate::{
     configuration::{
+        CompilerIdentity,
         DiagnosticGroup,
         RuleSet,
     },
@@ -604,7 +605,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | Some(filter) => {
                         let thrown = live
                             && self.context.configuration.compiler_identity()
-                                == crate::configuration::CompilerIdentity::Msvc;
+                                == CompilerIdentity::Msvc;
                         let handler = self.flow_expression(flow, filter, thrown);
                         self.flow_statement(flow, seh.handler, handler) || end
                     },
@@ -1017,6 +1018,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 base_expression: expression,
                 ..
             } => self.flow_expression(flow, expression, live),
+            // TCC restores its code generation state after a statement
+            // expression, which nothing can enter from outside, so what ends
+            // a path inside one, as a `return`, does not end the path past
+            // it (`unary` in `tccgen.c`).
+            | E::StatementExpression(statement)
+                if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc =>
+            {
+                _ = self.flow_statement(flow, statement, live);
+                live
+            },
             | E::StatementExpression(statement) => self.flow_statement(flow, statement, live),
             | E::Binary {
                 operator: B::LogicalAnd | B::LogicalOr,

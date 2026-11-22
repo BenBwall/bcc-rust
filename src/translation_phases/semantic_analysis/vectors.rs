@@ -46,7 +46,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut current = chain;
         while let Some(item) = current {
             if let super::SpecifierExtensionKind::Attributes(a) = item.kind {
-                ty = self.mode_attribute(ty, a);
+                ty = self.mode_attribute(ty, a, !storage_alignment);
             }
             current = item.next;
         }

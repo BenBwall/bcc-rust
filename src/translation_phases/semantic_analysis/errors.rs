@@ -1662,6 +1662,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Multichar
                     | crate::configuration::DiagnosticGroup::MissingDeclarations
                     | crate::configuration::DiagnosticGroup::GccEmptyDeclaration
+                    | crate::configuration::DiagnosticGroup::TccWarning
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
@@ -3920,6 +3921,16 @@ impl ToDiagnostic for SemanticError {
             if promoted {
                 diagnostic.treated_as_error = TreatedAsError::First;
             }
+        }
+        // TCC compiles a deferred `inline` function after the unit, from
+        // tokens it replays, and names the line before the one it reads
+        // (`error1` in `libtcc.c` subtracts the line break it is at).
+        if matches!(self.kind, SemanticErrorKind::ReturnFlow(_))
+            && self.order == ReportOrder::UnitEnd
+            && context.configuration.diagnostic_format()
+                == crate::configuration::DiagnosticFormat::Tcc
+        {
+            diagnostic.back_end = true;
         }
         // `cl`'s notes name places of their own.
         if let SemanticErrorKind::ClError(_) = self.kind {
