@@ -2697,16 +2697,15 @@ fn About() -> impl IntoView {
                          one, at file or block scope; subtracting two pointers into one array and ordering two \
                          pointers into one object (p - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
                          such as 1 << 3, string literals or the names of functions; functions that return a number, \
-                         an enumeration, a structure or a pointer to a function, called anywhere in an expression; \
-                         pointers to functions, kept in variables, tables, parameters and structure members, called \
+                         an enumeration, a structure, or a pointer to one of these objects or to a function, called \
+                         anywhere in an expression; pointers to functions, kept in variables, tables, parameters and structure members, called \
                          as fp(x), (*fp)(x), s.f(x) or p->f(x), compared and tested for null; assignments, compound \
                          assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c = \
                          next()) != 0), except in an initializer list and before a . that selects a member of their \
-                         value; if and else, while and for, switch with its case and default labels directly in its \
-                         block, and break; printf, puts and putchar after #include <stdio.h>; and #define of a name \
-                         as one number, character or string. Outside it are, among others: do, continue and goto, \
-                         and a case label nested deeper in a switch's body; union and _Bool; void and static \
-                         functions; a function that returns any other pointer, and a pointer to a library function; \
+                         value; if and else, while, do and for, switch with its case and default labels anywhere in \
+                         its block, break, continue, and goto with the labels it jumps to; printf, puts and putchar \
+                         after #include <stdio.h>; and #define of a name as one number, character or string. Outside it are, among others: a declaration directly in a \
+                         switch's block; union and _Bool; void and static functions; a pointer to a library function; \
                          a static pointer initialized to an object's address; arrays of structures or of arrays; and \
                          the other library functions. A program that uses one of them stops before its first step, \
                          and its note says so. One that needs more of the preprocessor (another header, a \
