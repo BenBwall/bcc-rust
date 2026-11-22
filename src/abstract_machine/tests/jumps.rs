@@ -539,6 +539,18 @@ fn a_function_returns_pointers_to_objects_and_its_own_dangle() {
          {\n    counter();\n    counter();\n    return *counter();\n}\n",
         3,
     );
+    // `f()->m` selects a member of the structure the result points to.
+    let _arrow = finished(
+        "struct point { int x; int y; };\nstruct point origin = {3, 4};\nstruct point *get(void) \
+         { return &origin; }\nint main(void) {\n    get()->x = 30;\n    return get()->x + \
+         get()->y;\n}\n",
+        34,
+    );
+    let _compound = finished(
+        "int v[2] = {1, 2};\nint *second(void) { return &v[1]; }\nint main(void) {\n    *second() \
+         += 40;\n    second()[0] = second()[0] * 2;\n    return v[1];\n}\n",
+        84,
+    );
     let _chars = finished(
         "char *skip(char *s) { while (*s == ' ') s++; return s; }\nint main(void) {\n    char \
          text[] = \"  hi\";\n    return *skip(text);\n}\n",
