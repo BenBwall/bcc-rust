@@ -1130,6 +1130,36 @@ fn annotation_takes_wide_string_literals() {
     }
 }
 
+/// Microsoft's `__assume` of an operand with side effects ignores it, of
+/// which Clang warns under `-Wassume` and `cl` says nothing; without
+/// Microsoft extensions the name is undeclared.
+#[test]
+fn microsoft_assumptions_with_side_effects_warn_as_clang_does() {
+    use crate::configuration::{
+        CompilerIdentity,
+        DiagnosticGroup,
+    };
+    let microsoft = CompilerConfiguration::default()
+        .with_target(crate::target::Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    let source = "int g(int);\nvoid f(int x) { __assume(x > 0); __assume(x++); __assume(g(x)); }\n";
+    assert_eq!(
+        kinds(source, microsoft),
+        [SemanticErrorKind::ValueWarning(DiagnosticGroup::Assume); 2]
+    );
+    assert_eq!(
+        kinds(
+            source,
+            microsoft.with_compiler_identity(CompilerIdentity::Msvc)
+        ),
+        []
+    );
+    assert!(
+        kinds(source, microsoft.with_msvc_extensions(false))
+            .contains(&SemanticErrorKind::ImplicitFunctionDeclaration),
+    );
+}
+
 /// A Microsoft intrinsic that a header declares with its own type stays the
 /// intrinsic; a declaration of another type and a definition are errors,
 /// as Clang's `conflicting types for '__va_start'` and `definition of

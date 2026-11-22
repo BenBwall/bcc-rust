@@ -783,16 +783,18 @@ fn attribute_queries_answer_as_clang() {
 }
 
 /// Clang declares x86 `__rdtsc` for every x86 target and mode, and
-/// Microsoft's `__debugbreak` only with Microsoft extensions.
+/// Microsoft's `__debugbreak`, `__annotation` and `__assume` only with
+/// Microsoft extensions.
 #[test]
 fn intrinsic_queries_follow_their_availability() {
     let source = "#if __has_builtin(__rdtsc)\n1\n#else\n0\n#endif\n#if \
                   __has_builtin(__debugbreak)\n1\n#else\n0\n#endif\n#if \
-                  __has_builtin(__annotation)\n1\n#else\n0\n#endif\n";
+                  __has_builtin(__annotation)\n1\n#else\n0\n#endif\n#if \
+                  __has_builtin(__assume)\n1\n#else\n0\n#endif\n";
     for (target, expected) in [
-        (crate::target::Target::LinuxGnu, "1 0 0"),
-        (crate::target::Target::WindowsGnu, "1 0 0"),
-        (crate::target::Target::WindowsMsvc, "1 1 1"),
+        (crate::target::Target::LinuxGnu, "1 0 0 0"),
+        (crate::target::Target::WindowsGnu, "1 0 0 0"),
+        (crate::target::Target::WindowsMsvc, "1 1 1 1"),
     ] {
         let mut configuration = mode(CStandard::C99).with_target(target);
         if target == crate::target::Target::WindowsMsvc {

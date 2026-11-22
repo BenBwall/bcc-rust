@@ -8970,6 +8970,121 @@ mod tests {
         }
     }
 
+    /// `cl`'s conversion warnings, as `cl` 19.44 writes them under Wine:
+    /// none where the warning level is below 2, whatever `/we` or a pragma
+    /// says, and from a `push, 2` region on; no C4244 of any level under
+    /// `/wd4244`, and all of them at `/w4`'s level; an automatic object's
+    /// initializer after the function's other warnings, also once `/WX`
+    /// makes them errors; and, under `/Wall`, C4242 for the narrowing of a
+    /// value `cl` has not computed.
+    #[test]
+    fn cl_reports_conversions_where_cl_does() {
+        let directory = Directory::new();
+        directory.write(
+            "levels.c",
+            "void f(int i, double d)\n{\n    char c;\n    c = i;\n    i = d;\n#pragma \
+             warning(push, 2)\n    i = d;\n#pragma warning(pop)\n#pragma warning(error: \
+             4244)\n    i = d;\n    (void)c;\n}\n",
+        );
+        directory.write(
+            "order.c",
+            "int g(int);\nvoid f(int i, double d)\n{\n    char a = i;\n    i = d;\n    if \
+             (2) g(i);\n    (void)a;\n}\n",
+        );
+        let cl = |args: &[&str]| {
+            let output = directory.bcc("--msvc-mode", &[&["/nologo", "/c"], args].concat());
+            stdout(&output)
+                .lines()
+                .filter(|line| line.contains(": warning C") || line.contains(": error C"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let double = "'=': conversion from 'double' to 'int', possible loss of data";
+        for (args, lines) in [
+            (
+                &["/W1", "levels.c"][..],
+                vec![format!("levels.c(7): warning C4244: {double}")],
+            ),
+            (
+                &["/W1", "/we4244", "levels.c"],
+                vec![format!("levels.c(7): error C4244: {double}")],
+            ),
+            (
+                &["/W4", "levels.c"],
+                vec![
+                    "levels.c(4): warning C4244: '=': conversion from 'int' to 'char', possible \
+                     loss of data"
+                        .to_owned(),
+                    format!("levels.c(5): warning C4244: {double}"),
+                    format!("levels.c(7): warning C4244: {double}"),
+                    format!("levels.c(10): error C4244: {double}"),
+                ],
+            ),
+            (
+                &["/W4", "/wd4244", "levels.c"],
+                vec![format!("levels.c(10): error C4244: {double}")],
+            ),
+            (
+                &["/W3", "/w44244", "levels.c"],
+                vec![format!("levels.c(10): error C4244: {double}")],
+            ),
+            (
+                &["/Wall", "levels.c"],
+                vec![
+                    "levels.c(4): warning C4242: '=': conversion from 'int' to 'char', possible \
+                     loss of data"
+                        .to_owned(),
+                    format!("levels.c(5): warning C4244: {double}"),
+                    format!("levels.c(7): warning C4244: {double}"),
+                    format!("levels.c(10): error C4244: {double}"),
+                ],
+            ),
+            (
+                &["/W4", "/WX", "order.c"],
+                vec![
+                    "order.c(5): error C2220: the following warning is treated as an error"
+                        .to_owned(),
+                    format!("order.c(5): warning C4244: {double}"),
+                    "order.c(6): warning C4127: conditional expression is constant".to_owned(),
+                    "order.c(4): warning C4244: 'initializing': conversion from 'int' to 'char', \
+                     possible loss of data"
+                        .to_owned(),
+                ],
+            ),
+        ] {
+            assert_eq!(cl(args), lines, "{args:?}");
+        }
+    }
+
+    /// Microsoft's `__assume` is an intrinsic in every identity with
+    /// Microsoft extensions: `cl` no longer takes it for an undeclared
+    /// function (C4013), and clang-cl warns, as Clang does, of an operand
+    /// with side effects, which neither evaluates.
+    #[test]
+    fn microsoft_assume_is_an_intrinsic() {
+        let directory = Directory::new();
+        directory.write(
+            "assume.c",
+            "int g(int);\nint f(int x)\n{\n    __assume(x > 0);\n    __assume(g(x));\n    \
+             switch (x) {\n    case 1: return 1;\n    default: __assume(0);\n    }\n}\n#if \
+             !__has_builtin(__assume)\n#error no __assume\n#endif\n",
+        );
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/W4", "assume.c"]);
+        succeeds(&cl);
+        assert_eq!(stdout(&cl), "assume.c\n");
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/nologo", "/c", "/W4", "assume.c"]);
+        succeeds(&clang_cl);
+        let text = stderr(&clang_cl);
+        assert_eq!(
+            text.matches("assumption is ignored because it contains (potential) side-effects")
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(text.contains("[-Wassume]"), "{text}");
+        assert!(!text.contains("does not return a value"), "{text}");
+    }
+
     /// A jump out of a `__finally` block is `cl`'s level 1 C4532, which its
     /// number controls, and Clang's `-Wjump-seh-finally`, which its option
     /// controls; a jump into a SEH block is `cl`'s error C2705, as `cl`

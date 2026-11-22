@@ -232,6 +232,39 @@ fn timestamp_and_breakpoint_intrinsics_lower() {
     );
 }
 
+/// Microsoft's `__assume`: a promise LLVM receives as `llvm.assume`, an
+/// unreachable point for `__assume(0)`, and an operand with side effects
+/// that is never evaluated, as in `cl` and Clang. MSVC extension: Microsoft
+/// Learn, "__assume".
+#[test]
+fn microsoft_assumptions_lower() {
+    let source = "int calls;\nint count(void) { return ++calls; }\nint f(int x) {\n    \
+                  __assume(x > 0);\n    __assume(count());\n    switch (x & 1) {\n    case \
+                  0: return x / 2;\n    case 1: return x;\n    default: __assume(0);\n    \
+                  }\n}\nint main(void) { return f(4) + f(3) - 5 + calls; }";
+    let configuration = CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    for optimize in [false, true] {
+        with_configured_module(
+            source,
+            Target::WindowsMsvc,
+            optimize,
+            Profile::PostAbi,
+            configuration,
+            |module, target| {
+                assert_eq!(interpret(module, target).0, 0, "{module}");
+                let text = module.to_string();
+                assert!(text.contains("assume.i1"), "{text}");
+                let mut llvm = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
+                assert!(llvm.contains("call void @llvm.assume(i1"), "{llvm}");
+                assert!(llvm.contains("unreachable"), "{llvm}");
+            },
+        );
+    }
+}
+
 /// Microsoft's `__va_start(&ap, last)`, through which `<vadefs.h>` defines
 /// `va_start` on x64, starts the list `ap` points to, and stays the
 /// intrinsic, as `__debugbreak` does, when a header declares it with a

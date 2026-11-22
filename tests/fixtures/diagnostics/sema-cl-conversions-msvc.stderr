@@ -1,0 +1,18 @@
+sema-cl-conversions-msvc.c(6,15): warning C4305: 'initializing': truncation from 'int' to 'Byte'
+sema-cl-conversions-msvc.c(7,27): warning C4305: 'initializing': truncation from 'double' to 'float'
+sema-cl-conversions-msvc.c(11,12): warning C4244: 'return': conversion from 'U32' to 'Byte', possible loss of data
+sema-cl-conversions-msvc.c(21,12): warning C4244: '=': conversion from 'int' to 'Byte', possible loss of data
+sema-cl-conversions-msvc.c(24,10): warning C4244: '=': conversion from 'const int' to 'char', possible loss of data
+sema-cl-conversions-msvc.c(27,11): warning C4244: '+=': conversion from 'int' to 'char', possible loss of data
+sema-cl-conversions-msvc.c(29,9): warning C4244: '=': conversion from 'int' to 'float', possible loss of data
+sema-cl-conversions-msvc.c(31,9): warning C4244: '=': conversion from '__int64' to 'int', possible loss of data
+sema-cl-conversions-msvc.c(32,11): warning C4244: '=': conversion from 'double' to 'int', possible loss of data
+sema-cl-conversions-msvc.c(33,10): warning C4244: 'function': conversion from 'int' to 'Byte', possible loss of data
+sema-cl-conversions-msvc.c(33,13): warning C4244: 'function': conversion from 'double' to 'float', possible loss of data
+sema-cl-conversions-msvc.c(35,14): warning C4244: '=': conversion from '__int64' to 'int', possible loss of data
+sema-cl-conversions-msvc.c(36,9): warning C4127: conditional expression is constant
+sema-cl-conversions-msvc.c(39,25): warning C4127: conditional expression is constant
+sema-cl-conversions-msvc.c(17,15): warning C4244: 'initializing': conversion from 'int' to 'char', possible loss of data
+sema-cl-conversions-msvc.c(18,20): warning C4305: 'initializing': truncation from 'int' to 'short'
+sema-cl-conversions-msvc.c(19,25): warning C4245: 'initializing': conversion from 'int' to 'unsigned int', signed/unsigned mismatch
+sema-cl-conversions-msvc.c(20,15): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
