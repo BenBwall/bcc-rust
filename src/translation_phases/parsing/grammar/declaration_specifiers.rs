@@ -323,6 +323,9 @@ struct SpecifierList<'tu> {
     source_vectors:        Option<SourceVectors>,
     /// The type specifiers before the last attribute specifier, if any.
     type_at_attributes:    Option<TypeSpecifiers<'tu>>,
+    /// Whether `inline` (any spelling) and Microsoft's `__forceinline`
+    /// have appeared, which `cl` and clang-cl take as two specifiers.
+    inline_keywords:       (bool, bool),
 }
 
 impl<'tu> SpecifierList<'tu> {
@@ -339,6 +342,7 @@ impl<'tu> SpecifierList<'tu> {
             complex_integer: false,
             source_vectors: None,
             type_at_attributes: None,
+            inline_keywords: (false, false),
         }
     }
 
@@ -677,7 +681,34 @@ impl<'tu> SpecifierList<'tu> {
                 self.consumed = true;
                 return true;
             }
-            if self.specifiers.function_specifiers.is_inline {
+            // `cl` and clang-cl take `inline __forceinline` as two
+            // specifiers, and only a keyword written twice as repeated
+            // (`cl`'s C4141, Clang's `-Wduplicate-decl-specifier`).
+            // MSVC extension: Microsoft Learn, "inline, __inline,
+            // __forceinline".
+            let forced = matches!(
+                token.kind,
+                TokenType::Keyword(KeywordTokenType::Forceinline)
+            );
+            let repeated = if matches!(
+                parser.context.configuration.compiler_identity(),
+                crate::configuration::CompilerIdentity::Msvc
+                    | crate::configuration::CompilerIdentity::ClangCl
+            ) {
+                if forced {
+                    self.inline_keywords.1
+                } else {
+                    self.inline_keywords.0
+                }
+            } else {
+                self.specifiers.function_specifiers.is_inline
+            };
+            if forced {
+                self.inline_keywords.1 = true;
+            } else {
+                self.inline_keywords.0 = true;
+            }
+            if repeated {
                 parser.report(ParserErrorType::InlineSpecifiedTwice, Some(token));
             }
             self.specifiers.function_specifiers.is_inline = true;
