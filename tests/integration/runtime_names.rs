@@ -2,10 +2,10 @@
 //! that name to something else. An external function of the name is
 //! called as Clang calls it, through its address when its type is not the
 //! routine's. A static function or an object of the name is refused in
-//! lowering, by the native back end for the names it calls, and renamed by
-//! the LLVM back end for the `memcpy` LLVM's code generator calls. Each
-//! case is checked on a Windows and a Linux target, at `-O0` and `-O2` on
-//! both back ends.
+//! lowering and by the native back end for the names it calls; the
+//! `memcpy` LLVM's code generator calls reaches a static function of the
+//! name, as in Clang. Each case is checked on a Windows and a Linux target,
+//! at `-O0` and `-O2` on both back ends.
 
 #[cfg(test)]
 #[expect(
@@ -266,58 +266,89 @@ mod tests {
     }
 
     /// The `memcpy`, `memmove` and `memset` LLVM's code generator calls for
-    /// copies and fills bind to a module's symbol of the name, so the LLVM
-    /// back end renames static functions of other types, and the copies
-    /// reach the C library's functions, where Clang calls the static ones.
-    /// A static `memcpy` of the library's type keeps its name.
+    /// copies and fills bind to a module's function of the name, whatever
+    /// its type, as in Clang: the LLVM back end keeps a static function's
+    /// name. Clang then calls a static `int memcpy(int)` with the library
+    /// function's arguments; a file that names one so without including
+    /// `<string.h>` is valid, and that call is the known difference.
     #[test]
-    fn llvm_copies_reach_the_library_past_static_functions_of_its_names() {
-        let source = "static int memcpy(int a) { return a + 1; }\nstatic int memmove(int a) { \
-                      return a + 2; }\nstatic int memset(int a) { return a + 3; }\nstruct S { \
-                      char b[4096]; };\n__attribute__((noinline)) void f(struct S *a, struct S \
-                      *b) { *a = *b; }\n__attribute__((noinline)) void g(struct S *a) { struct S \
-                      z = {0}; *a = z; }\n__attribute__((noinline)) void k(char *p, int n) { for \
-                      (int i = 0; i < n; i++) p[i] = 0; }\nstatic struct S x, y;\nstatic char \
-                      buf[1000];\nint main(void) {\n  for (int i = 0; i < 4096; i++) y.b[i] = \
-                      (char)i;\n  for (int i = 0; i < 1000; i++) buf[i] = 1;\n  f(&x, &y);\n  for \
-                      (int i = 0; i < 4096; i++) if (x.b[i] != (char)i) return 1;\n  g(&x);\n  \
-                      for (int i = 0; i < 4096; i++) if (x.b[i]) return 2;\n  k(buf, 1000);\n  \
-                      for (int i = 0; i < 1000; i++) if (buf[i]) return 3;\n  return memcpy(0) + \
-                      memmove(0) + memset(0) - 6;\n}\n";
-        for target in [WINDOWS[0], WINDOWS[1], LINUX] {
-            for level in ["-O0", "-O2"] {
-                let llvm = emit(source, &["--emit=llvm", "--target", target, level]);
-                for name in ["memcpy", "memmove", "memset"] {
-                    assert!(
-                        llvm.contains(&format!("define internal i32 @{name}.internal(")),
-                        "{target} {level}: {llvm}"
-                    );
-                }
-                assert!(!llvm.contains("define internal i32 @memcpy("), "{llvm}");
-            }
-        }
-        if cfg!(all(
-            target_arch = "x86_64",
-            target_os = "linux",
-            target_env = "gnu"
-        )) {
-            for level in ["-O0", "-O2"] {
-                let executable = temporary("copies");
-                let built = compile(
-                    source,
-                    &["--backend=llvm", level, "-o", executable.to_str().unwrap()],
-                );
-                assert!(built.status.success(), "{level}: {}", text(&built.stderr));
-                let run = run_native(&mut Command::new(&executable)).unwrap();
-                assert_eq!(run.status.code(), Some(0), "{level}");
-            }
-        }
+    fn static_functions_of_the_copy_routines_keep_their_names() {
+        let other = "static int memcpy(int a) { return a + 1; }\nstatic int memset(int a) { \
+                     return a + 3; }\nint use(void) { return memcpy(0) + memset(0); }\n";
         let library = "typedef __SIZE_TYPE__ size_t;\nstatic void *memcpy(void *d, const void *s, \
                        size_t n) { char *a = d; const char *b = s; while (n--) *a++ = *b++; \
                        return d; }\nvoid f(char *a, char *b) { memcpy(a, b, 3); }\n";
         for target in [WINDOWS[0], LINUX] {
+            let llvm = emit(other, &["--emit=llvm", "--target", target]);
+            assert!(llvm.contains("define internal i32 @memcpy("), "{llvm}");
+            assert!(llvm.contains("define internal i32 @memset("), "{llvm}");
             let llvm = emit(library, &["--emit=llvm", "--target", target]);
             assert!(llvm.contains("define internal ptr @memcpy("), "{llvm}");
+        }
+    }
+
+    /// A freestanding program without `<string.h>` that defines its own
+    /// `memcpy` and a `memset` of a looser type, statically, and is linked
+    /// with `-nostdlib`: the copies and fills LLVM's code generator calls by
+    /// name reach those functions, as in GCC and Clang, so the program links
+    /// and runs. `used` keeps the statics at `-O2`, where LLVM would drop
+    /// them, once inlined, before its code generator calls them, as Clang
+    /// does. The `memmove` the native back end calls is external, since that
+    /// back end refuses a static one. C99: §4p6, p. 8; PDF p. 20; §7.1.3p1,
+    /// p. 166; PDF p. 178.
+    #[test]
+    fn freestanding_copies_reach_the_programs_static_routines() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = "typedef __SIZE_TYPE__ size_t;\n__attribute__((used)) static char *memcpy(d, \
+                      s, n) char *d; const char *s; int n; { char *a = d; while (n--) *a++ = \
+                      *s++; return d; }\nvoid *memmove(void *d, const void *s, size_t n) { char \
+                      *a = d; const char *b = s; if (a < b) while (n--) *a++ = *b++; else while \
+                      (n--) a[n] = b[n]; return d; }\n__attribute__((used)) static void \
+                      memset(void *d, int c, size_t n) { char *a = d; while (n--) *a++ = (char)c; \
+                      }\nstruct S { char b[512]; };\nstatic struct S x, \
+                      y;\n__attribute__((noinline)) static int run(void) { x.b[7] = 1; struct S z \
+                      = {0}; x = z; memset(&y, 0, 1); y = x; return memmove(&y, &x, 1) != &y || \
+                      x.b[7] || memcpy((char *)&y, (char *)&x, 2) != (char *)&y; }\nvoid \
+                      _start(void) { int r = run(); __asm__ volatile(\"mov $60, %%eax; syscall\" \
+                      :: \"D\"(r)); __builtin_unreachable(); }\n";
+        let path = temporary("freestanding.c");
+        std::fs::write(&path, source).unwrap();
+        let path = path.to_str().unwrap();
+        // TCC's command line chooses no back end; bcc's driver gives TCC's
+        // identity to both.
+        let mut lines = vec![vec!["--tcc-mode", "-O0"], vec!["--tcc-mode", "-O2"]];
+        for identity in ["tcc", "gcc", "clang"] {
+            for backend in ["--backend=llvm", "--backend=native"] {
+                for level in ["-O0", "-O2"] {
+                    lines.push(vec!["--compiler-identity", identity, backend, level]);
+                }
+            }
+        }
+        for line in lines {
+            let executable = temporary("freestanding");
+            let executable = executable.to_str().unwrap();
+            let args = [
+                &line[..],
+                &[
+                    "-ffreestanding",
+                    "-static",
+                    "-nostdlib",
+                    "-o",
+                    executable,
+                    path,
+                ],
+            ]
+            .concat();
+            let built = bcc(&args);
+            assert_compiles(&built, &args);
+            let run = run_native(&mut Command::new(executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{args:?}");
         }
     }
 
