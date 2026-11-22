@@ -703,7 +703,7 @@ pub(crate) enum ParserErrorType<'tu> {
     TypedefDeclaresNoName,
     /// A label that ends a compound statement, which TCC 0.9.27 accepts
     /// with a warning (`block` in `tccgen.c`), as C23 makes it valid.
-    /// C23 (N3220): §6.8.2 paragraph 1, p. 152; PDF p. 165.
+    /// C23 (N3220): §6.8.3 paragraph 1, p. 153; PDF p. 166.
     TccLabelAtBlockEnd,
     /// A declaration required a named declarator but none could be parsed.
     /// C99: §6.7, p. 97; PDF p. 109.

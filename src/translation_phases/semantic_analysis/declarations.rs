@@ -1252,7 +1252,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `static` among them. It warns of compatible declarations only, and
     /// refuses the others, as bcc does; an `inline` one keeps the linkage
     /// silently.
-    /// C99: §6.2.2 paragraphs 4-7, p. 32; PDF p. 44.
+    /// C99: §6.2.2 paragraphs 4-7, pp. 30-31; PDF pp. 42-43.
     fn tcc_redeclared_linkage(
         &mut self,
         name: Identifier,

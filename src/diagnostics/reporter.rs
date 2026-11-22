@@ -108,27 +108,6 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | TranslationError::Parsing(error) => error.ordering_location,
             // Preprocessing errors may still point into a macro definition.
             | _ if diagnostic.severity != ErrorSeverity::Warning => None,
-            // TCC reports as it reads, one pass over the unit, and what it
-            // says of one line comes in the order of its own code generation,
-            // which semantic analysis follows, rather than where in the line
-            // each report points: `return c ? p : q;` reports the
-            // conditional's mismatch before the conversion the `return`
-            // makes, though that conversion's range starts first.
-            | _ if is_semantic(error)
-                && report_order(error) == ReportOrder::AtSite
-                && context.configuration.diagnostic_format()
-                    == crate::configuration::DiagnosticFormat::Tcc =>
-                location.first().map(|source| {
-                    let line_start = context
-                        .source_text(source.source_file_index)
-                        .and_then(|text| text.get(..source.index as usize))
-                        .and_then(|before| before.rfind('\n'))
-                        .map_or(0, |newline| newline + 1);
-                    (
-                        source.source_file_index,
-                        u32::try_from(line_start).unwrap_or(source.index),
-                    )
-                }),
             | _ => match report_order(error) {
                 | ReportOrder::AtSite => location
                     .first()
@@ -143,6 +122,31 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                     .map(|source| (source.source_file_index, u32::MAX)),
             },
         };
+        // TCC reports as it reads, in one pass, so the warnings of one line
+        // come in the order it compiles them, which semantic analysis
+        // follows, rather than in the order of the places they point at:
+        // `return c ? p : q;` reports the conditional's mismatch before the
+        // conversion the `return` makes, whose range starts first. A line
+        // that also has a warning of the other phases keeps the order of
+        // places ([`Self::order_source_runs`]).
+        let tcc_line = ordering_location
+            .filter(|_| {
+                diagnostic.severity == ErrorSeverity::Warning
+                    && report_order(error) == ReportOrder::AtSite
+                    && context.configuration.diagnostic_format()
+                        == crate::configuration::DiagnosticFormat::Tcc
+            })
+            .map(|(file, index)| {
+                let line_start = context
+                    .source_text(file)
+                    .and_then(|text| text.get(..index as usize))
+                    .and_then(|before| before.rfind('\n'))
+                    .map_or(0, |newline| newline + 1);
+                (
+                    u32::try_from(line_start).unwrap_or(index),
+                    is_semantic(error),
+                )
+            });
         let (parser, consumed) = match error {
             | TranslationError::Parsing(error) => (true, error.consumed_tokens),
             | _ => (false, 0),
@@ -188,6 +192,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                 diagnostic,
                 location,
                 ordering_location,
+                tcc_line,
                 sequence: self.pending.len(),
                 foldable,
                 preserve_empty_translation_unit: matches!(
@@ -219,6 +224,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             diagnostic,
             location: &[],
             ordering_location: None,
+            tcc_line: None,
             sequence: self.pending.len(),
             foldable: false,
             preserve_empty_translation_unit: false,
@@ -250,6 +256,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                         .at(severity, SourceVectors::default()),
                         location: &[],
                         ordering_location: None,
+                        tcc_line: None,
                         sequence: 0,
                         foldable: false,
                         preserve_empty_translation_unit: false,
@@ -466,6 +473,24 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
     /// [`Self::flush`], since the pending indices that folding remembers no
     /// longer hold.
     fn order_source_runs(&mut self) {
+        // Under TCC's format, a line whose warnings all come from semantic
+        // analysis orders them as they were reported.
+        let mut mixed_lines = ArenaMap::with_hasher_in(FxBuildHasher, self.arena);
+        for pending in &self.pending {
+            if let (Some((file, _)), Some((line, semantic))) =
+                (pending.ordering_location, pending.tcc_line)
+            {
+                *mixed_lines.entry((file, line)).or_insert(false) |= !semantic;
+            }
+        }
+        for pending in &mut self.pending {
+            if let (Some((file, _)), Some((line, true))) =
+                (pending.ordering_location, pending.tcc_line)
+                && mixed_lines.get(&(file, line)) == Some(&false)
+            {
+                pending.ordering_location = Some((file, line));
+            }
+        }
         for run in self.pending.chunk_by_mut(|left, right| {
             left.ordering_location.is_some()
                 && left.ordering_location.map(|(file, _)| file)
@@ -498,8 +523,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
     }
 }
 
-/// Where a diagnostic falls among the others: some of GCC's semantic warnings
-/// come after the place they name.
+/// Whether semantic analysis reported `error`.
 fn is_semantic(error: &TranslationError<'_>) -> bool {
     match error {
         | TranslationError::Semantic(_) => true,
@@ -508,6 +532,8 @@ fn is_semantic(error: &TranslationError<'_>) -> bool {
     }
 }
 
+/// Where a diagnostic falls among the others: some of GCC's semantic warnings
+/// come after the place they name.
 fn report_order(error: &TranslationError<'_>) -> ReportOrder {
     match error {
         | TranslationError::Semantic(error) => error.order,
@@ -533,6 +559,9 @@ struct PendingDiagnostic<'r, 'tu> {
     diagnostic: Diagnostic<'tu>,
     location: &'r [SourceVector],
     ordering_location: Option<(u32, u32)>,
+    /// Under TCC's format, a warning's line, by where it starts, and whether
+    /// semantic analysis reported it.
+    tcc_line: Option<(u32, bool)>,
     /// Its place among the pending diagnostics when it was reported, which
     /// keeps the order of diagnostics at one location stable.
     sequence: usize,
