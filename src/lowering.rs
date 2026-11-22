@@ -55,7 +55,8 @@
 //!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
 //!   `cleanup.rs`; `target_features.rs` refuses what an x86 `target` attribute
 //!   asks that bcc cannot compile, and calls both compilers refuse across
-//!   features.
+//!   features; `runtime_calls.rs` calls the runtime functions lowering names on
+//!   its own, such as `pow` for a Windows `__builtin_powi`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `debug_locations.rs` and `debug_types.rs` what `-g` records beside it;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
@@ -96,6 +97,7 @@ mod nested;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
+mod runtime_calls;
 mod sanitizer;
 mod saturation;
 mod statements;

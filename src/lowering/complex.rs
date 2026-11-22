@@ -8,7 +8,6 @@ use super::{
     FunctionLowerer,
     LoweringError,
     module_items::at,
-    ssa::Op,
     types::{
         self,
         Repr,
@@ -26,11 +25,9 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
-        Linkage,
         Opcode,
         ParamAbi,
         Signature,
-        Symbol,
         Type,
         Value,
     },
@@ -669,24 +666,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             variadic_noundef: false,
             chain:            false,
         };
-        let signature = self.unit.module.intern(signature);
-        let function = match self.unit.module.symbol(name) {
-            | Some(Symbol::Function(function)) => function,
-            | Some(_) =>
-                return Err(LoweringError::missing(
-                    "complex runtime symbol collision",
-                    source,
-                )),
-            | None => self
-                .unit
-                .module
-                .declare_function(name, signature, Linkage::External),
-        };
+        let caller = super::errors::RuntimeCaller::Operation(if divide {
+            "complex division"
+        } else {
+            "complex multiplication"
+        });
+        let function = self
+            .unit
+            .runtime_function(name, signature, caller, source)?;
         let object = self.fresh_object(layout.size, layout.align, source)?;
-        let args = self
-            .scratch
-            .alloc_slice_copy(&[object, a[0], a[1], b[0], b[1]]);
-        _ = self.draft.push(Op::Call(function, args), None);
+        _ = self.call_runtime(function, &[object, a[0], a[1], b[0], b[1]], None);
         let half = layout.size / 2;
         let align = crate::ir::Align::from_bytes(layout.align.bytes().min(half))
             .expect("component alignment");

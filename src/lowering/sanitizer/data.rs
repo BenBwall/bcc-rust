@@ -19,6 +19,7 @@ use super::{
     super::{
         FunctionLowerer,
         module_items::Unit,
+        runtime_calls::RuntimeFunction,
         types::{
             self,
             Repr,
@@ -29,7 +30,6 @@ use super::{
 use crate::{
     ir::{
         Align,
-        FuncId,
         GlobalDecl,
         GlobalId,
         GlobalInit,
@@ -263,7 +263,7 @@ impl Unit<'_, '_, '_> {
         handler: Handler,
         operands: usize,
         recover: bool,
-    ) -> FuncId {
+    ) -> RuntimeFunction {
         let suffix = if recover || handler.always_ends() {
             ""
         } else {
@@ -294,17 +294,29 @@ impl Unit<'_, '_, '_> {
             chain:            false,
         });
         let function = match self.module.symbol(name) {
-            | Some(Symbol::Function(function)) => function,
+            // The unit's own function of the name, as Clang calls it, through
+            // its address if its type is another (`runtime_calls.rs`).
+            | Some(Symbol::Function(func)) => RuntimeFunction {
+                func,
+                retyped: self.retyped(func, signature),
+            },
             // A unit that defines an object of the name keeps it, and the
             // report calls a handler of another name the library lacks.
             | Some(Symbol::Global(_)) => {
                 let name = self.unique_name(name);
-                self.module
-                    .declare_function(name, signature, Linkage::External)
+                RuntimeFunction {
+                    func:    self
+                        .module
+                        .declare_function(name, signature, Linkage::External),
+                    retyped: None,
+                }
             },
-            | None => self
-                .module
-                .declare_function(name, signature, Linkage::External),
+            | None => RuntimeFunction {
+                func:    self
+                    .module
+                    .declare_function(name, signature, Linkage::External),
+                retyped: None,
+            },
         };
         _ = self.sanitizer.handlers.insert(name, function);
         function

@@ -71,7 +71,6 @@ use super::{
 use crate::{
     ir::{
         Align,
-        FuncId,
         GlobalId,
         InstData,
         Opcode,
@@ -138,8 +137,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
             let mut arguments = bumpalo_vec(self.scratch, report.arguments.len() + 1);
             arguments.push(address);
             arguments.extend_from_slice(report.arguments);
-            let arguments = self.scratch.alloc_slice_copy(&arguments);
-            _ = self.draft.push(Op::Call(handler, arguments), None);
+            _ = self.call_runtime(handler, &arguments, None);
             if recover {
                 self.draft.jump(next, &[]);
             } else {
@@ -197,7 +195,7 @@ pub(super) struct UnitSanitizer<'a> {
     /// Each type descriptor, by its kind, information and name.
     descriptors:        ArenaMap<'a, (u16, u16, &'a str), GlobalId>,
     /// Each handler declared, by name.
-    handlers:           ArenaMap<'a, &'a str, FuncId>,
+    handlers:           ArenaMap<'a, &'a str, super::runtime_calls::RuntimeFunction>,
 }
 
 impl<'a> UnitSanitizer<'a> {

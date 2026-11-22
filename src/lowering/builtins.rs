@@ -829,7 +829,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Powi(_) => {
                 let base = self.value(items[0], source)?;
                 let exponent = self.value(items[1], source)?;
-                Operand::Value(self.powi(base, exponent, source)?)
+                let builtin = instance.descriptor.descriptor().spelling;
+                Operand::Value(self.powi(base, exponent, builtin, source)?)
             },
             | CommonBuiltin::Rotate(width, right) => {
                 let value = self.value(items[0], source)?;
@@ -1254,7 +1255,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let gcc = self.unit.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Gcc;
         let result = gcc.then_some(Type::I32);
-        let signature = self.unit.module.intern(crate::ir::Signature {
+        let signature = crate::ir::Signature {
             params: &[],
             aggregates: &[],
             noundef: &[],
@@ -1266,21 +1267,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             result_noundef: false,
             variadic_noundef: false,
             chain: false,
-        });
-        let name = "__cpu_indicator_init";
-        let function = match self.unit.module.symbol(name) {
-            | Some(crate::ir::Symbol::Function(function)) => function,
-            | Some(_) =>
-                return Err(LoweringError::missing(
-                    "__cpu_indicator_init is not a function",
-                    source,
-                )),
-            | None =>
-                self.unit
-                    .module
-                    .declare_function(name, signature, crate::ir::Linkage::External),
         };
-        Ok(match self.draft.push(Op::Call(function, &[]), result) {
+        let function = self.unit.runtime_function(
+            "__cpu_indicator_init",
+            signature,
+            super::errors::RuntimeCaller::Builtin("__builtin_cpu_init"),
+            source,
+        )?;
+        Ok(match self.call_runtime(function, &[], result) {
             | Some(value) => Operand::Value(value),
             | None => Operand::Void,
         })
@@ -1295,11 +1289,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// `__powidf2` on every target, MinGW-w64's too. Off Windows the IR's
     /// `powi` intrinsic says so, which every back end and the interpreter
     /// compute alike; on Windows the call is made here, so that they all call
-    /// the same function. GNU extension: GCC manual, "Other Builtins".
+    /// the same function. A unit that gives the routine's name to a static
+    /// function, which Clang then calls with the routine's arguments, is
+    /// refused (`runtime_calls.rs`). GNU extension: GCC manual, "Other
+    /// Builtins".
     fn powi(
         &mut self,
         base: Value,
         exponent: Value,
+        builtin: &'static str,
         source: crate::translation_phases::SourceVectors,
     ) -> Result<Value, LoweringError> {
         let ty = self.draft.value_type(base);
@@ -1341,7 +1339,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let params = self
             .scratch
             .alloc_slice_copy(&[ty, self.draft.value_type(exponent)]);
-        let signature = self.unit.module.intern(crate::ir::Signature {
+        let signature = crate::ir::Signature {
             params,
             aggregates: &[],
             noundef: &[],
@@ -1353,23 +1351,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             result_noundef: false,
             variadic_noundef: false,
             chain: false,
-        });
-        let function = match self.unit.module.symbol(name) {
-            | Some(crate::ir::Symbol::Function(function)) => function,
-            | Some(_) =>
-                return Err(LoweringError::missing(
-                    "a power routine is not a function",
-                    source,
-                )),
-            | None =>
-                self.unit
-                    .module
-                    .declare_function(name, signature, crate::ir::Linkage::External),
         };
-        let args = self.scratch.alloc_slice_copy(&[base, exponent]);
+        let function = self.unit.runtime_function(
+            name,
+            signature,
+            super::errors::RuntimeCaller::Builtin(builtin),
+            source,
+        )?;
         Ok(self
-            .draft
-            .push(Op::Call(function, args), Some(ty))
+            .call_runtime(function, &[base, exponent], Some(ty))
             .expect("a power has a result"))
     }
 

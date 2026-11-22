@@ -96,6 +96,32 @@ pub(crate) enum LoweringErrorKind {
         builtin: &'static str,
         feature: &'static str,
     },
+    /// `caller` calls the external function `routine` by name, which the
+    /// unit gives to something else (`runtime_calls.rs`).
+    /// C99: §7.1.3 paragraphs 1-2, p. 166; PDF p. 178.
+    RuntimeName {
+        routine: &'static str,
+        caller:  RuntimeCaller,
+        taken:   TakenName,
+    },
+}
+
+/// What calls a runtime function: a builtin, by its spelling, or an
+/// operation lowering carries out with it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RuntimeCaller {
+    Builtin(&'static str),
+    Operation(&'static str),
+}
+
+/// What a unit gives a runtime function's name to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TakenName {
+    /// A function with internal linkage, which is not the runtime's.
+    InternalFunction,
+    Object,
+    /// A function of another type, where the call needs the function itself.
+    OtherType,
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -333,6 +359,7 @@ impl LoweringErrorKind {
                 "an always_inline function needs a target feature the calling function lacks",
             | Self::BuiltinFeature { .. } =>
                 "a builtin needs a target feature the calling function lacks",
+            | Self::RuntimeName { .. } => "a runtime function's name is taken",
         }
     }
 }
@@ -395,6 +422,29 @@ impl ToDiagnostic for LoweringError {
                 } else {
                     format_in!(arena, "'{builtin}' needs target feature {feature}")
                 },
+            | LoweringErrorKind::RuntimeName {
+                routine,
+                caller,
+                taken,
+            } => {
+                let taken = match taken {
+                    | TakenName::InternalFunction => "names a function with internal linkage",
+                    | TakenName::Object => "names an object",
+                    | TakenName::OtherType => "is declared with another type",
+                };
+                match caller {
+                    | RuntimeCaller::Builtin(caller) => format_in!(
+                        arena,
+                        "'{caller}' calls the external function '{routine}', but '{routine}' \
+                         {taken} here"
+                    ),
+                    | RuntimeCaller::Operation(caller) => format_in!(
+                        arena,
+                        "{caller} calls the external function '{routine}', but '{routine}' \
+                         {taken} here"
+                    ),
+                }
+            },
             | kind => kind.message(),
         };
         let explanation = Explanation::new(arena, message);
