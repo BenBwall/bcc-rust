@@ -276,9 +276,14 @@ clauses! {
     SEQUENCE_POINTS = "Cp1", "p. 439; PDF p. 451", "Sequence points (Annex C)",
         "The sequence points: each call, after its arguments; the end of the first operand of &&, \
          ||, ?: and the comma operator; the end of each full declarator and of each full \
-         expression; and in the library, just before a function returns, after the actions of \
-         each printf or scanf conversion, and around each call to a qsort or bsearch comparison \
-         function.";
+         expression; and in the library, just before a function returns; after the actions of \
+         each conversion specifier of a formatted input/output function, which are fprintf, \
+         fscanf, printf, scanf, snprintf, sprintf, sscanf, vfprintf, vfscanf, vprintf, vscanf, \
+         vsnprintf, vsprintf and vsscanf, and their wide versions fwprintf, fwscanf, swprintf, \
+         swscanf, vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf and \
+         wscanf; and just before and just after each call qsort or bsearch makes to its \
+         comparison function, and between that call and any movement of the objects passed to \
+         it.";
     /// C99: §6.5.2.1 paragraph 1, p. 70; PDF p. 82.
     SUBSCRIPT_OPERANDS = "6.5.2.1p1", "p. 70; PDF p. 82", "Array subscripting",
         "One operand of [] must be a pointer to an object and the other an integer, in either \
@@ -387,6 +392,21 @@ clauses! {
     POINTER_ARITHMETIC = "6.5.6p8", "p. 83; PDF p. 95", "Additive operators",
         "Adding n to a pointer moves it n elements within its array. Pointing one past the last \
          element is allowed, but dereferencing that position or going further is undefined.";
+    /// C99: §6.5.6 paragraph 3, pp. 82-83; PDF pp. 94-95.
+    SUBTRACTION_CONSTRAINT = "6.5.6p3", "pp. 82-83; PDF pp. 94-95", "Additive operators",
+        "For -, both operands are numbers, or both are pointers to the same type, or the left is \
+         a pointer and the right an integer.";
+    /// C99: §6.5.6 paragraph 9, pp. 83-84; PDF pp. 95-96.
+    POINTER_SUBTRACTION = "6.5.6p9", "pp. 83-84; PDF pp. 95-96", "Additive operators",
+        "Subtracting two pointers into the same array gives how many elements apart they are, a \
+         ptrdiff_t; for pointers into different arrays it is undefined.";
+    /// C99: §6.5.8 paragraph 2, p. 85; PDF p. 97.
+    RELATIONAL_CONSTRAINT = "6.5.8p2", "p. 85; PDF p. 97", "Relational operators",
+        "<, >, <= and >= compare two numbers, or two pointers to the same type.";
+    /// C99: §6.5.8 paragraph 5, pp. 85-86; PDF pp. 97-98.
+    POINTER_ORDER = "6.5.8p5", "pp. 85-86; PDF pp. 97-98", "Relational operators",
+        "Pointers into one array order like their subscripts, and pointers to one structure's \
+         members like the members; ordering pointers to different objects is undefined.";
     /// C99: §6.5.8 paragraph 6, p. 86; PDF p. 98.
     RELATIONAL = "6.5.8p6", "p. 86; PDF p. 98", "Relational operators",
         "<, >, <= and >= yield the int 1 when the relation is true and 0 when it is false.";
@@ -400,6 +420,10 @@ clauses! {
     POINTER_ASSIGNMENT = "6.5.16.1p1", "p. 92; PDF p. 104", "Simple assignment",
         "A pointer may be assigned to one whose pointed-to type has all its qualifiers: a \
          pointer to const never converts to a pointer to non-const without a cast.";
+    /// C99: §6.5.16 paragraph 3, p. 91; PDF p. 103.
+    ASSIGNMENT_VALUE = "6.5.16p3", "p. 91; PDF p. 103", "Assignment operators",
+        "An assignment expression has the value stored in its left operand, and that store is a \
+         side effect C completes by the next sequence point.";
     /// C99: §6.5.16 paragraph 2, p. 91; PDF p. 103.
     ASSIGNMENT_CONSTRAINT = "6.5.16p2", "p. 91; PDF p. 103", "Assignment operators",
         "The left operand of =, += and the other assignment operators must be a modifiable \
@@ -492,6 +516,10 @@ clauses! {
     /// C99: §6.7.8 paragraph 21, p. 127; PDF p. 139.
     PARTIAL_INITIALIZER = "6.7.8p21", "p. 127; PDF p. 139", "Initialization",
         "Array elements without an initializer of their own are initialized to zero.";
+    /// C99: §6.7.8 paragraph 23, p. 128; PDF p. 140.
+    LIST_SIDE_EFFECTS = "6.7.8p23", "p. 128; PDF p. 140", "Initialization",
+        "C leaves unspecified the order in which the side effects of an initializer list's \
+         expressions happen.";
     /// C99: §6.8 paragraph 4, p. 131; PDF p. 143.
     FULL_EXPRESSION = "6.8p4", "p. 131; PDF p. 143", "Statements and blocks",
         "The end of a full expression (an initializer, an expression statement, a condition, a \
@@ -507,6 +535,10 @@ clauses! {
     /// C99: §6.8.3 paragraph 2, p. 132; PDF p. 144.
     EXPRESSION_STATEMENT = "6.8.3p2", "p. 132; PDF p. 144", "Expression and null statements",
         "An expression statement is evaluated only for its side effects; its value is discarded.";
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+    SELECTION_BLOCK = "6.8.4p3", "p. 133; PDF p. 145", "Selection statements",
+        "An if statement is a block, and each of its branches is a block inside it, with or \
+         without braces.";
     /// C99: §6.8.4.1 paragraph 2, pp. 133-134; PDF pp. 145-146.
     IF_STATEMENT = "6.8.4.1p2", "pp. 133-134; PDF pp. 145-146", "The if statement",
         "The first branch runs if the condition is nonzero; the else branch runs if it is zero.";

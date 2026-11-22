@@ -71,8 +71,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         macros: Vec::new(),
         declaration_macros: Vec::new(),
         returns: Type::INT,
-        updates: false,
-        next_point: SequencePoint::Condition,
+        in_condition: false,
+        next_point: SequencePoint::Full,
         blocks: Vec::new(),
         loop_body: false,
     };
@@ -280,11 +280,11 @@ pub(super) struct Parser<'a> {
     pub declaration_macros: Vec<usize>,
     /// The return type of the function being compiled.
     pub returns:            Type,
-    /// Whether the expression being parsed is a condition, which may
-    /// contain `++` and `--` (see `check_update`).
-    pub updates:            bool,
-    /// The sequence point that next follows the operand being emitted, in
-    /// a condition: where an update there completes its store.
+    /// Whether the expression being checked or emitted is the
+    /// controlling expression of an `if`, `while` or `for`.
+    pub in_condition:       bool,
+    /// The sequence point that next follows the operand being emitted:
+    /// where an update there completes its store.
     pub next_point:         SequencePoint,
     /// The `Enter` instruction of each open block, innermost last, which
     /// lists the automatic objects the block declares.
@@ -359,6 +359,7 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 let expression = self.expression(0)?;
                 self.require_type(expression, self.returns)?;
+                self.check_update(expression)?;
                 let value = self.emit_expression(expression, false)?;
                 let range = combined(token.range, self.expressions[expression].range);
                 self.expect(";")?;
@@ -450,7 +451,7 @@ impl<'a> Parser<'a> {
             branch
         } else {
             let condition = self.controlling_expression()?;
-            let value = self.emit_expression(condition, false)?;
+            let value = self.emit_condition(condition)?;
             let range = self.expressions[condition].range;
             let node = self.tree("for", range, vec![value])?;
             let branch = self.code.len();
@@ -493,22 +494,34 @@ impl<'a> Parser<'a> {
     fn condition(&mut self, statement: &'static str) -> Result<(SourceRange, usize), Diagnostic> {
         self.expect("(")?;
         let expression = self.controlling_expression()?;
-        let value = self.emit_expression(expression, false)?;
+        let value = self.emit_condition(expression)?;
         self.expect(")")?;
         let range = self.expressions[expression].range;
         Ok((range, self.tree(statement, range, vec![value])?))
     }
 
     /// The controlling expression of an `if`, `while` or `for`: a scalar,
-    /// which may update variables with `++` or `--` (`i-- > 0`).
+    /// which may update objects with `++`, `--` or an assignment (`i-- >
+    /// 0`, `(c = next()) != 0`).
     fn controlling_expression(&mut self) -> Result<usize, Diagnostic> {
-        self.updates = true;
-        let expression = self.expression(0);
-        self.updates = false;
-        let expression = expression?;
+        let expression = self.expression(0)?;
         self.require_scalar(expression)?;
-        self.check_update(expression)?;
+        self.in_condition = true;
+        let checked = self.check_update(expression);
+        self.in_condition = false;
+        checked?;
         Ok(expression)
+    }
+
+    /// Emit the controlling expression `expression`, whose updates
+    /// complete by the end of the condition at the latest.
+    fn emit_condition(&mut self, expression: usize) -> Result<usize, Diagnostic> {
+        self.in_condition = true;
+        self.next_point = SequencePoint::Condition;
+        let value = self.emit_expression(expression, false);
+        self.in_condition = false;
+        self.next_point = SequencePoint::Full;
+        value
     }
 
     /// A block-scope declaration: one declarator, with an optional
@@ -722,6 +735,7 @@ impl<'a> Parser<'a> {
         )?;
         let expression = self.expression(0)?;
         self.require_type(expression, ty)?;
+        self.check_update(expression)?;
         let value = self.emit_expression(expression, false)?;
         let range = combined(name.range, self.expressions[expression].range);
         let node = self.tree("=", range, vec![target, value])?;
@@ -732,6 +746,7 @@ impl<'a> Parser<'a> {
                 full_expression: true,
                 from,
                 structure: structure_of(ty),
+                nested: None,
             },
             range,
             node,
@@ -890,6 +905,16 @@ impl<'a> Parser<'a> {
                     let label = self.label(name.text, shape, at, structure_of(member_type));
                     let element = self.element(name, &label, at, structure_of(member_type))?;
                     let expression = self.expression(0)?;
+                    if self.expressions[expression].effect {
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            self.expressions[expression].range,
+                            "C99 leaves unspecified the order in which the side effects of an \
+                             initializer list's expressions happen (§6.7.8p23), so this subset \
+                             keeps ++, -- and assignments out of them; update the object in a \
+                             statement before the declaration",
+                        ));
+                    }
                     if matches!(member_type, Type::Struct(_))
                         && !matches!(self.expressions[expression].ty, Type::Struct(_))
                     {
@@ -1059,6 +1084,7 @@ impl<'a> Parser<'a> {
                 full_expression: false,
                 from,
                 structure,
+                nested: None,
             },
             range,
             node,
@@ -1089,7 +1115,9 @@ impl<'a> Parser<'a> {
     /// assignment, an increment or another expression. Returns its tree's
     /// root and whether it leaves a value for a comma after it to discard;
     /// a part that no comma follows ends the full expression, discarding
-    /// its value.
+    /// its value. An assignment or increment that is the whole part is a
+    /// store that ends the full expression itself; one nested in the part
+    /// is an operand whose value the part uses.
     fn statement_part(&mut self) -> Result<(usize, bool), Diagnostic> {
         let prefix_token = self.current();
         let prefix = if self.take("++") {
@@ -1101,61 +1129,15 @@ impl<'a> Parser<'a> {
         };
         let expression = self.expression(0)?;
         let range = self.expressions[expression].range;
-        let compound = compound_operator(self.current().text);
-        let modifies = self.at("=")
-            || compound.is_some()
-            || prefix.is_some()
-            || self.at("++")
-            || self.at("--");
-        if modifies && self.expressions[expression].readonly {
-            return Err(self.readonly_error(
-                expression,
-                prefix.is_some() || compound.is_none() && !self.at("="),
-            ));
-        }
-        if let Some(operator) = compound {
-            if prefix.is_some() {
+        if let Some(delta) = prefix {
+            if matches!(self.expressions[expression].kind, ExprKind::Assign { .. }) {
                 return Err(self.error("nested increments are outside this subset"));
             }
-            return self.compound_assignment(expression, operator);
-        }
-        if self.take("=") {
-            if prefix.is_some() {
-                return Err(self.error("nested increments are outside this subset"));
+            if self.expressions[expression].readonly {
+                return Err(self.readonly_error(expression, true));
             }
-            let target = self.emit_expression(expression, true)?;
-            let value = self.expression(0)?;
-            self.require_type(value, self.expressions[expression].ty)?;
-            let node = self.emit_expression(value, false)?;
-            let range = combined(range, self.expressions[value].range);
-            let root = self.tree("=", range, vec![target, node])?;
-            let from = self.expressions[value].ty;
-            self.emit_node(
-                Op::Store {
-                    initializer: false,
-                    full_expression: !self.at(","),
-                    from,
-                    structure: structure_of(self.expressions[expression].ty),
-                },
-                range,
-                root,
-            )?;
-            return Ok((root, false));
-        }
-        let postfix_token = self.current();
-        let postfix = if prefix.is_some() {
-            None
-        } else if self.take("++") {
-            Some(1)
-        } else if self.take("--") {
-            Some(-1)
-        } else {
-            None
-        };
-        if let Some(delta) = prefix.or(postfix) {
-            let operand = &self.expressions[expression];
             if !matches!(
-                operand.ty,
+                self.expressions[expression].ty,
                 Type::Integer(_) | Type::Floating(_) | Type::Pointer(..) | Type::Indirect(..)
             ) {
                 return Err(Diagnostic::new(
@@ -1164,43 +1146,38 @@ impl<'a> Parser<'a> {
                     "++ and -- update a number or a pointer to one in this subset",
                 ));
             }
-            if prefix.is_none()
-                && matches!(operand.kind, ExprKind::Unary("*", _))
-                && !operand.parenthesized
-            {
-                return Err(Diagnostic::new(
-                    "unsupported",
-                    range,
-                    "unparenthesized *p++ and *p-- mean *(p++) and *(p--), an increment nested in \
-                     an operand, which is outside this subset; write (*p)++ to increment the \
-                     object p points to, or p++ to move p",
-                ));
-            }
-            let target = self.emit_expression(expression, true)?;
-            let (range, label) = if prefix.is_some() {
-                (combined(prefix_token.range, range), prefix_token.text)
-            } else {
-                (combined(range, postfix_token.range), postfix_token.text)
-            };
-            let root = self.tree(label, range, vec![target])?;
-            self.emit_node(
-                Op::Increment {
-                    delta,
-                    prefix: prefix.is_some(),
-                    nested: None,
-                    full_expression: !self.at(","),
-                },
-                range,
-                root,
-            )?;
-            Ok((root, false))
-        } else {
-            let value = self.emit_expression(expression, false)?;
-            if self.at(",") {
-                return Ok((value, true));
-            }
-            self.emit(Op::Pop, range)?;
-            Ok((value, false))
+            self.check_update(expression)?;
+            let range = combined(prefix_token.range, range);
+            let full_expression = !self.at(",");
+            let root =
+                self.emit_increment(expression, delta, true, range, None, full_expression)?;
+            return Ok((root, false));
+        }
+        self.check_update(expression)?;
+        let full_expression = !self.at(",");
+        match self.expressions[expression].kind {
+            | ExprKind::Assign { .. } => {
+                let root = self.emit_assignment(expression, None, full_expression)?;
+                Ok((root, false))
+            },
+            | ExprKind::Update {
+                target,
+                delta,
+                prefix: false,
+                ..
+            } => {
+                let root =
+                    self.emit_increment(target, delta, false, range, None, full_expression)?;
+                Ok((root, false))
+            },
+            | _ => {
+                let value = self.emit_expression(expression, false)?;
+                if self.at(",") {
+                    return Ok((value, true));
+                }
+                self.emit(Op::Pop, range)?;
+                Ok((value, false))
+            },
         }
     }
 
@@ -1238,19 +1215,19 @@ impl<'a> Parser<'a> {
         Diagnostic::constraint(operand.range, &format!("{what}; {operation}"), clause)
     }
 
-    /// `E1 op= E2` as a statement, after `E1`: one step designates `E1`
-    /// (it is evaluated once), `E2` is evaluated, and one step reads `E1`,
-    /// applies `op` and stores the result, as `E1 = E1 op (E2)` would.
+    /// The types `expression op= value` computes in: the type `op` applies
+    /// in (`None` for pointer arithmetic) and the right operand's type,
+    /// promoted when both are integers. The operands must suit `op`, as in
+    /// `E1 = E1 op (E2)`; a compound assignment evaluates `E1` once.
     ///
     /// C99: §6.5.16.2 paragraphs 1-3, p. 93; PDF p. 105.
-    fn compound_assignment(
-        &mut self,
+    pub fn compound_types(
+        &self,
         expression: usize,
-        operator: &'static str,
-    ) -> Result<(usize, bool), Diagnostic> {
-        let token = self.current();
-        self.position += 1;
-        let value = self.expression(0)?;
+        value: usize,
+        text: &str,
+    ) -> Result<(Option<Arithmetic>, Option<Arithmetic>), Diagnostic> {
+        let operator = compound_operator(text).unwrap_or("+");
         let left = self.expressions[expression].ty;
         let right = self.expressions[value].ty;
         let range = combined(
@@ -1278,10 +1255,9 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::constraint(
                     range,
                     &format!(
-                        "`{}` needs integer operands: the bitwise operators combine the bits of \
-                         integers, and a floating value has none to give (C99 §6.5.16.2p2, \
-                         §6.5.10p2)",
-                        token.text
+                        "`{text}` needs integer operands: the bitwise operators combine the bits \
+                         of integers, and a floating value has none to give (C99 §6.5.16.2p2, \
+                         §6.5.10p2)"
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
                 )),
@@ -1290,9 +1266,8 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::constraint(
                     range,
                     &format!(
-                        "`{}` needs integer operands; a floating operand has no remainder or bits \
-                         to shift (C99 §6.5.16.2p2, §6.5.5p2, §6.5.7p2)",
-                        token.text
+                        "`{text}` needs integer operands; a floating operand has no remainder or \
+                         bits to shift (C99 §6.5.16.2p2, §6.5.5p2, §6.5.7p2)"
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
                 )),
@@ -1309,9 +1284,8 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::constraint(
                     range,
                     &format!(
-                        "`{}` needs an arithmetic left operand, or a pointer for += and -=; a \
-                         structure is neither (C99 §6.5.16.2p1, p2)",
-                        token.text
+                        "`{text}` needs an arithmetic left operand, or a pointer for += and -=; a \
+                         structure is neither (C99 §6.5.16.2p1, p2)"
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
                 ));
@@ -1320,25 +1294,14 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::constraint(
                     range,
                     &format!(
-                        "`{}` takes an arithmetic left operand and an arithmetic right one \
+                        "`{text}` takes an arithmetic left operand and an arithmetic right one \
                          (integer ones for <<= and >>=), or for += and -= a pointer on the left \
-                         and an integer on the right (C99 §6.5.16.2p1, p2)",
-                        token.text
+                         and an integer on the right (C99 §6.5.16.2p1, p2)"
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
                 ));
             },
         }
-        let target = self.emit_expression(expression, true)?;
-        let operand = self.emit_expression(value, false)?;
-        if let Type::Integer(from) = right
-            && from.promoted() != from
-            && matches!(left, Type::Integer(_))
-        {
-            let value_range = self.expressions[value].range;
-            self.emit_node(Op::Promote(from), value_range, operand)?;
-        }
-        let root = self.tree(token.text, range, vec![target, operand])?;
         let right_type = right.arithmetic().map(|right_type| {
             if matches!(left, Type::Integer(_)) {
                 right_type.promoted()
@@ -1346,13 +1309,7 @@ impl<'a> Parser<'a> {
                 right_type
             }
         });
-        let full_expression = !self.at(",");
-        self.emit_node(
-            Op::Compound(operator, common, right_type, full_expression),
-            range,
-            root,
-        )?;
-        Ok((root, false))
+        Ok((common, right_type))
     }
 
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
@@ -2711,7 +2668,7 @@ pub(super) struct Joined {
 }
 
 /// The binary operator of a compound assignment operator: `+` for `+=`.
-fn compound_operator(text: &str) -> Option<&'static str> {
+pub(super) fn compound_operator(text: &str) -> Option<&'static str> {
     match text {
         | "+=" => Some("+"),
         | "-=" => Some("-"),

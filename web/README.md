@@ -591,6 +591,18 @@ screen; sums `0.1` ten times into `0.99999999999999989`; truncates
 `(int)2.99` to 2; and prints the stored values with `%.17g`. Like the printf
 lesson it includes `<stdio.h>`.
 
+The lesson "Walking a string with a pointer" (`demos/strings.c`), after
+"Pointers and arrays", copies `"walk"` into a char array with the loop
+every C text shows, `while ((*to++ = *from++) != '\0')`: `*to++` is
+`*(to++)`, so the `*` follows the old value of `to` while `to` moves on, and
+the assignment hands the char it stored to the comparison, the copied null
+character ending the loop. `length` then walks the copy with `while (*s)
+s++;` and returns `s - start`, the count of elements between two pointers
+into one array, a `ptrdiff_t` (`long` on x86-64). Each nested update says
+what value it yields and by which sequence point its store completes, and
+the machine checks that no unsequenced access reaches the same object. It
+includes `<stdio.h>`.
+
 How live compilation runs:
 
 - **Off the UI thread, in its own Worker.** The compiler Worker's Wasm is many

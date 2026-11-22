@@ -41,6 +41,10 @@ use super::{
         Designation,
     },
     parser,
+    sequencing::{
+        Access,
+        Touch,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -173,7 +177,8 @@ impl Machine {
                     self.state.objects[id - 1].declared = false;
                     begun.push(id);
                 }
-                self.enter_block(range, begun, *iteration)
+                let written = source.get(range.start..range.end).unwrap_or("");
+                self.enter_block(range, written, begun, *iteration)
             },
             | Op::Leave => {
                 let frame = &self.activations[top];
@@ -295,12 +300,21 @@ impl Machine {
             },
             | Op::Load => {
                 let (target, offset) = self.pop_address()?;
+                self.access(program, instruction.node, (target, offset, 1), false, false)?;
                 let value = self.read(target, offset)?;
                 self.push(Operand::Value(value.clone()))?;
                 self.load(range, target, offset, value)
             },
             | &Op::LoadStruct(structure) => {
                 let (target, offset) = self.pop_address()?;
+                let leaves = self.leaf_count(Type::Struct(structure));
+                self.access(
+                    program,
+                    instruction.node,
+                    (target, offset, leaves),
+                    false,
+                    false,
+                )?;
                 let value = self.read_structure(target, offset, structure)?;
                 self.push(Operand::Value(value.clone()))?;
                 self.load_structure(range, target, offset, structure, value)
@@ -414,6 +428,7 @@ impl Machine {
                 parts,
             } => {
                 let (target, offset) = self.pop_address()?;
+                self.activations[top].listing = !*full_expression;
                 let mut stored = Vec::new();
                 for at in 0..*length {
                     let byte = bytes.get(at).copied().unwrap_or(0);
@@ -536,41 +551,15 @@ impl Machine {
                 full_expression,
                 from,
                 structure,
-            } => {
-                let value = self.pop_value()?;
-                let (target, offset) = self.pop_address()?;
-                if !initializer {
-                    self.check_writable(target, offset)?;
-                }
-                if let Some(structure) = structure {
-                    let previous = self.read_structure(target, offset, structure)?;
-                    let stored = self.store(target, offset, value)?;
-                    self.copied(
-                        range,
-                        initializer,
-                        full_expression,
-                        target,
-                        offset,
-                        structure,
-                        &previous,
-                        stored,
-                    )
-                } else {
-                    let previous = self.peek(target, offset);
-                    let stored = self.store(target, offset, value.clone())?;
-                    self.stored(
-                        range,
-                        initializer,
-                        full_expression,
-                        from,
-                        target,
-                        offset,
-                        previous.as_ref(),
-                        value,
-                        stored,
-                    )
-                }
-            },
+                nested,
+            } => self.store_operation(
+                program,
+                instruction,
+                (initializer, full_expression),
+                from,
+                structure,
+                nested,
+            )?,
             | &Op::Increment {
                 delta,
                 prefix,
@@ -579,6 +568,7 @@ impl Machine {
             } => {
                 let (target, offset) = self.pop_address()?;
                 self.check_writable(target, offset)?;
+                self.access(program, instruction.node, (target, offset, 1), true, false)?;
                 let current = self.read(target, offset)?;
                 // `--` subtracts 1, so an overflow reads as a subtraction.
                 // An integer narrower than int is promoted first, and the
@@ -612,13 +602,13 @@ impl Machine {
                     stored,
                 )
             },
-            | &Op::Compound(operator, common, right_type, full_expression) => self
+            | &Op::Compound(operator, common, right_type, full_expression, nested) => self
                 .compound_assign(
-                    range,
-                    source,
+                    program,
+                    instruction,
                     operator,
                     (common, right_type),
-                    full_expression,
+                    (full_expression, nested),
                 )?,
             | Op::Test { .. } | Op::Yield { .. } | Op::Comma { .. } =>
                 self.sequenced(instruction, program)?,
@@ -664,19 +654,94 @@ impl Machine {
         })
     }
 
+    /// A store into the lvalue below the value on the stack: an
+    /// assignment's or an initializer's, of one scalar or of a whole
+    /// structure. A nested assignment leaves the value stored on the
+    /// stack for the expression around it (C99 §6.5.16p3).
+    fn store_operation(
+        &mut self,
+        program: &Program,
+        instruction: &Instruction,
+        (initializer, full_expression): (bool, bool),
+        from: Type,
+        structure: Option<usize>,
+        nested: Option<super::model::Nested>,
+    ) -> Result<Event, Diagnostic> {
+        let (range, source) = (instruction.range, program.source.as_str());
+        let top = self.activations.len() - 1;
+        let value = self.pop_value()?;
+        let (target, offset) = self.pop_address()?;
+        if !initializer {
+            self.check_writable(target, offset)?;
+        }
+        // An initializer list's store that does not end it.
+        self.activations[top].listing = initializer && !full_expression;
+        // An initializer's stores happen in list order, each one
+        // replacing an earlier one for the same subobject (C99
+        // §6.7.8p19); only an assignment's store is a side effect.
+        if !initializer {
+            let leaves = structure.map_or(1, |structure| self.leaf_count(Type::Struct(structure)));
+            self.access(
+                program,
+                instruction.node,
+                (target, offset, leaves),
+                true,
+                false,
+            )?;
+        }
+        if let Some(structure) = structure {
+            let previous = self.read_structure(target, offset, structure)?;
+            let stored = self.store(target, offset, value)?;
+            if nested.is_some() {
+                self.push(Operand::Value(stored.clone()))?;
+            }
+            let event = self.copied(
+                range,
+                initializer,
+                full_expression,
+                target,
+                offset,
+                structure,
+                &previous,
+                stored.clone(),
+            );
+            Ok(self.nested_store(event, source, nested, target, offset, &stored))
+        } else {
+            let previous = self.peek(target, offset);
+            let stored = self.store(target, offset, value.clone())?;
+            if nested.is_some() {
+                self.push(Operand::Value(stored.clone()))?;
+            }
+            let event = self.stored(
+                range,
+                initializer,
+                full_expression,
+                from,
+                target,
+                offset,
+                previous.as_ref(),
+                value,
+                stored.clone(),
+            );
+            Ok(self.nested_store(event, source, nested, target, offset, &stored))
+        }
+    }
+
     /// `E1 op= E2`: read the object, apply `op` in `common`, store the
     /// result (C99 §6.5.16.2p3).
     fn compound_assign(
         &mut self,
-        range: super::SourceRange,
-        source: &str,
+        program: &Program,
+        instruction: &Instruction,
         operator: &'static str,
         (common, right_type): (Option<Arithmetic>, Option<Arithmetic>),
-        full_expression: bool,
+        (full_expression, nested): (bool, Option<super::model::Nested>),
     ) -> Result<Event, Diagnostic> {
+        let (range, source) = (instruction.range, program.source.as_str());
         let right = self.pop_value()?;
         let (target, offset) = self.pop_address()?;
         self.check_writable(target, offset)?;
+        self.access(program, instruction.node, (target, offset, 1), true, false)?;
         let current = self.read(target, offset)?;
         // Both operands convert to the type the operator computes
         // in, as in `E1 = E1 op (E2)` (C99 §6.5.16.2p3).
@@ -691,7 +756,10 @@ impl Machine {
         };
         let result = self.binary_value(operator, common, left.clone(), right_converted.clone())?;
         let stored = self.store(target, offset, result.clone())?;
-        Ok(self.compound(
+        if nested.is_some() {
+            self.push(Operand::Value(stored.clone()))?;
+        }
+        let event = self.compound(
             range,
             source,
             operator,
@@ -700,9 +768,10 @@ impl Machine {
             offset,
             [current, right, left, right_converted],
             &result,
-            stored,
+            stored.clone(),
             full_expression,
-        ))
+        );
+        Ok(self.nested_store(event, source, nested, target, offset, &stored))
     }
 
     /// The operations around a sequence point inside a full expression:
@@ -891,6 +960,7 @@ impl Machine {
         }
         let id = self.next_frame;
         self.next_frame += 1;
+        let watermark = self.state.objects.len();
         self.activations.push(Activation {
             id,
             function,
@@ -898,6 +968,10 @@ impl Machine {
             scope: 0,
             operands: Vec::new(),
             evaluation: None,
+            accesses: Vec::new(),
+            footprint: Vec::new(),
+            watermark,
+            listing: false,
         });
         let mut parameters = Vec::new();
         for ((name, ty), value) in program.functions[function]
@@ -951,7 +1025,7 @@ impl Machine {
                 ended.push(object.id);
             }
         }
-        let _frame = self.activations.pop();
+        let frame = self.activations.pop();
         let call = if self.activations.is_empty() {
             self.state.return_value = Some(value.clone());
             self.state.status = "finished";
@@ -965,6 +1039,10 @@ impl Machine {
                 .and_then(|evaluation| evaluation.calling.take());
             if let Some(node) = node {
                 self.record(node, Operand::Value(value.clone()));
+                // What the body read and wrote outside itself now belongs to
+                // the call in the caller's full expression.
+                let footprint = frame.map_or_else(Vec::new, |frame| frame.footprint);
+                self.returned_footprint(program, node, &footprint)?;
             }
             node.map(|node| {
                 let caller = &program.functions[self.activations[caller].function];
@@ -995,6 +1073,8 @@ impl Machine {
                 Op::Enter { .. } | Op::Leave | Op::Declare { .. } | Op::Jump(_)
             ) {
                 activation.evaluation = None;
+                activation.accesses.clear();
+                activation.listing = false;
             } else if let Some(evaluation) = &mut activation.evaluation {
                 evaluation.last = None;
             }
@@ -1007,6 +1087,11 @@ impl Machine {
             .as_ref()
             .is_none_or(|evaluation| evaluation.root != root)
         {
+            // The elements of an initializer list are one full expression,
+            // though each has a tree of its own.
+            if !activation.listing {
+                activation.accesses.clear();
+            }
             activation.evaluation = Some(Evaluation {
                 function,
                 root,
@@ -1138,6 +1223,10 @@ impl Machine {
             scope:      0,
             operands:   Vec::new(),
             evaluation: None,
+            accesses:   Vec::new(),
+            footprint:  Vec::new(),
+            watermark:  0,
+            listing:    false,
         }]);
         let first = program
             .directives
@@ -1249,7 +1338,9 @@ impl Machine {
                 + value_bytes(&object.value);
         }
         for frame in &self.activations {
-            bytes += frame.operands.capacity() * size_of::<Operand>();
+            bytes += frame.operands.capacity() * size_of::<Operand>()
+                + frame.accesses.capacity() * size_of::<Access>()
+                + frame.footprint.capacity() * size_of::<Touch>();
             if let Some(evaluation) = &frame.evaluation {
                 bytes += 2 * evaluation.values.capacity() * size_of::<(usize, Operand)>();
             }
@@ -1297,6 +1388,19 @@ pub(super) struct Activation {
     pub operands:   Vec<Operand>,
     /// The full expression this activation is evaluating.
     pub evaluation: Option<Evaluation>,
+    /// The reads and stores of that full expression so far, which
+    /// `sequencing.rs` checks each new access against.
+    pub accesses:   Vec<Access>,
+    /// The reads and stores this call, and the calls it made, performed on
+    /// objects that existed before it began: what the caller's expression
+    /// must not also touch in an order C leaves open.
+    pub footprint:  Vec<Touch>,
+    /// How many objects existed when the call began; IDs up to it are the
+    /// caller's world.
+    pub watermark:  usize,
+    /// Whether the last store was an element of an initializer list that
+    /// more elements follow, so the full expression goes on.
+    pub listing:    bool,
 }
 
 #[derive(Debug, Clone)]

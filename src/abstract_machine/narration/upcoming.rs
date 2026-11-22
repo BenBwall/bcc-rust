@@ -41,7 +41,7 @@ impl Machine {
         next: &Instruction,
     ) -> Upcoming {
         let source = &program.source;
-        let code = || code(snippet(source, next.range));
+        let code = || code(&snippet(source, next.range));
         // The spellings of the operands of the node `next` evaluates, in
         // source order: `i` and `1` for `i + 1`.
         let operands = || self.operand_spellings(program, next);
@@ -65,7 +65,7 @@ impl Machine {
                     (
                         EventKind::LeaveBlock,
                         String::from("leave the block"),
-                        clauses::COMPOUND_STATEMENT,
+                        self.block_clause(program, next),
                     )
                 } else {
                     (
@@ -585,13 +585,21 @@ impl Machine {
         let pointers = self
             .top_values()
             .map(|values| values.map(|value| matches!(value, Value::Pointer { .. })));
+        let both = pointers == Some([true, true]);
         if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
-            let clause = if matches!(operator, "==" | "!=") {
-                clauses::EQUALITY
-            } else {
-                clauses::RELATIONAL
+            let clause = match operator {
+                | "==" | "!=" => clauses::EQUALITY,
+                | _ if both => clauses::POINTER_ORDER,
+                | _ => clauses::RELATIONAL,
             };
             return (EventKind::Comparison, format!("compare {whole}"), clause);
+        }
+        if both && operator == "-" {
+            return (
+                EventKind::PointerArithmetic,
+                format!("count the elements between the pointers: {whole}"),
+                clauses::POINTER_SUBTRACTION,
+            );
         }
         if let Some([left, right]) = pointers
             && left != right
@@ -683,6 +691,48 @@ impl Machine {
         }
     }
 
+    /// The paragraph that makes the block `leave` ends a block: a compound
+    /// statement's, or for a for statement or a substatement without braces,
+    /// the loop body's or the selection statement's, as the step that
+    /// entered it said. A substatement's block begins and ends at its first
+    /// token, so the entry with the same range says whether it is a loop
+    /// body.
+    ///
+    /// C99: §6.8.2 paragraph 2, p. 132; PDF p. 144.
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+    /// C99: §6.8.5 paragraph 5, p. 135; PDF p. 147.
+    fn block_clause(&self, program: &Program, leave: &Instruction) -> Clause {
+        match program
+            .source
+            .get(leave.range.start..leave.range.end)
+            .unwrap_or("")
+        {
+            | "}" => return clauses::COMPOUND_STATEMENT,
+            | "for" => return clauses::LOOP_BODY,
+            | _ => {},
+        }
+        let iteration = self.activations.last().is_some_and(|frame| {
+            program.functions[frame.function]
+                .code
+                .iter()
+                .any(|instruction| {
+                    instruction.range == leave.range
+                        && matches!(
+                            instruction.op,
+                            Op::Enter {
+                                iteration: true,
+                                ..
+                            }
+                        )
+                })
+        });
+        if iteration {
+            clauses::LOOP_BODY
+        } else {
+            clauses::SELECTION_BLOCK
+        }
+    }
+
     /// The objects leaving the innermost block ends, by name.
     fn ending(&self) -> Vec<&str> {
         let Some(frame) = self.activations.last() else {
@@ -714,7 +764,7 @@ impl Machine {
                 node.children
                     .iter()
                     .filter_map(|&child| nodes.get(child))
-                    .map(|child| code(snippet(&program.source, child.range)))
+                    .map(|child| code(&snippet(&program.source, child.range)))
                     .collect()
             })
     }

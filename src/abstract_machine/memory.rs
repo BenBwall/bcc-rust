@@ -221,6 +221,11 @@ impl Machine {
             .map(|metadata| metadata.ty)
     }
 
+    /// How many scalars (leaves) an object of type `ty` holds.
+    pub fn leaf_count(&self, ty: Type) -> i32 {
+        i32::try_from(ty.leaves(&self.structures)).unwrap_or(i32::MAX)
+    }
+
     /// The type of the scalar at leaf `offset` of an object.
     pub fn leaf_type(&self, target: usize, offset: i32) -> Option<Type> {
         self.object_type(target)?
@@ -527,6 +532,9 @@ impl Machine {
             | (Value::Integer(delta), pointer @ Value::Pointer { .. }) if operator == "+" =>
                 self.offset(&pointer, delta),
             | (left @ Value::Pointer { .. }, right @ Value::Pointer { .. })
+                if matches!(operator, "-" | "<" | "<=" | ">" | ">=") =>
+                self.pointer_relation(operator, &left, &right),
+            | (left @ Value::Pointer { .. }, right @ Value::Pointer { .. })
                 if matches!(operator, "==" | "!=") =>
             {
                 // C permits adjacent one-past pointers to compare equal. That
@@ -561,6 +569,86 @@ impl Machine {
                 Ok(Value::Integer(i128::from(null == (operator == "=="))))
             },
             | _ => Err(self.error("unsupported binary operand types")),
+        }
+    }
+
+    /// `left - right` or `left < right` (or `<=`, `>`, `>=`) of two
+    /// pointers. Subtraction counts the elements between two pointers into
+    /// one array, a `ptrdiff_t`; ordering compares their places in one
+    /// object, by subscript in an array and by declaration in a structure.
+    /// Pointers into different objects, or different arrays for a
+    /// subtraction, or a null pointer, are undefined.
+    ///
+    /// C99: §6.5.6 paragraph 9, pp. 83-84; PDF pp. 95-96.
+    /// C99: §6.5.8 paragraph 5, pp. 85-86; PDF pp. 97-98.
+    fn pointer_relation(
+        &self,
+        operator: &str,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value, Diagnostic> {
+        let subtract = operator == "-";
+        let (rule, kind) = if subtract {
+            (&clauses::POINTER_SUBTRACTION, Undefined::PointerDifference)
+        } else {
+            (&clauses::POINTER_ORDER, Undefined::PointerOrder)
+        };
+        let (
+            &Value::Pointer {
+                target: Some(a),
+                offset: x,
+                first: first_a,
+                length: length_a,
+                ..
+            },
+            &Value::Pointer {
+                target: Some(b),
+                offset: y,
+                first: first_b,
+                length: length_b,
+                ..
+            },
+        ) = (left, right)
+        else {
+            let message = if subtract {
+                "subtracting a null pointer: a null pointer points into no array, so there is no \
+                 count of elements between it and another pointer"
+            } else {
+                "ordering a null pointer: a null pointer points to no object, so it has no place \
+                 to compare with another pointer's"
+            };
+            return Err(Diagnostic::ub(self.state.source_range, message, rule, kind));
+        };
+        let same_array = a == b && first_a == first_b && length_a == length_b;
+        if subtract && !same_array || a != b {
+            let (left, right) = (self.array_name(a, first_a), self.array_name(b, first_b));
+            let message = if subtract {
+                format!(
+                    "the left pointer points into {left} and the right one into {right}: C \
+                     defines the difference of two pointers only when both point into the same \
+                     array, or one past its end"
+                )
+            } else {
+                format!(
+                    "the left pointer points into {left} and the right one into {right}: C orders \
+                     two pointers only when both point into the same object, or one past the end \
+                     of the same array"
+                )
+            };
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &message,
+                rule,
+                kind,
+            ));
+        }
+        let truth = |holds: bool| Ok(Value::Integer(i128::from(holds)));
+        match operator {
+            | "-" => Ok(Value::Integer(i128::from(x) - i128::from(y))),
+            | "<" => truth(x < y),
+            | "<=" => truth(x <= y),
+            | ">" => truth(x > y),
+            | _ => truth(x >= y),
         }
     }
 

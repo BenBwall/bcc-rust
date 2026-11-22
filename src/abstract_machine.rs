@@ -18,7 +18,8 @@
 //! `memory.rs` for execution, `integers.rs` for the integer types and their
 //! conversions, `floating.rs` for the floating types, their arithmetic and
 //! conversions, and `decimal.rs` for their exact decimal forms and
-//! `printf`'s conversions of them, `narration.rs` for the explanations and
+//! `printf`'s conversions of them, `sequencing.rs` for the run-time check of
+//! C's sequencing rules, `narration.rs` for the explanations and
 //! `clauses.rs` for the cited rules, `model.rs` for the public observation
 //! types, and `json.rs` for the versioned wire format. `lexer.rs` retains
 //! byte ranges. `tests.rs` exercises actual execution, events, rejection, UB
@@ -32,7 +33,9 @@
 //! for long double, computed in software), structures laid out as bcc lays them
 //! out for x86-64 (`layout.rs`), and scalar-based pointer offsets. File-scope
 //! and `static` objects are created and initialized one per step before `main`
-//! runs. Operand evaluation is left-to-right; nested side effects are rejected.
+//! runs. Operand evaluation is left-to-right; nested assignments and
+//! increments run, and the machine stops where C leaves their order
+//! undefined, or where the order it chose would decide the result.
 //! It is an educational execution model, not a C conformance checker.
 //!
 //! C99: §6.7.8 paragraph 10, p. 126; PDF p. 138 (indeterminate locals).
@@ -67,6 +70,7 @@ mod library;
 mod machine;
 mod memory;
 mod model;
+mod sequencing;
 
 // Explanations
 pub mod clauses;

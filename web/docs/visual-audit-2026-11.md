@@ -3659,3 +3659,652 @@ sequence-point note.
   `src/abstract_machine/parser.rs`, as before. `cargo +nightly fmt
   --check` passes for the engine and the site, and `git diff --check` is
   clean.
+
+## Part 14: pointer idioms, assignments as operands and pointer differences (2026-11)
+
+Part 13 left the machine refusing the C a beginner meets right after
+arrays: `while (*s++)`, `a[i++] = x`, `*p++ = c`, `x = y = 0`, `while ((c =
+next()) != 0)`, `p - q` and `p < q`. Each needs the machine to know which
+object an lvalue reaches, since C's rule for side effects (C99 §6.5p2) is
+about objects, not names: `*p = i++` is fine when `p` points elsewhere and
+undefined when it points to `i`. This part makes the machine decide that on
+the objects its accesses actually reach, runs every case that is defined,
+stops every case that is undefined with what went wrong, and stops too
+where C leaves the order open and the order would decide the result. It
+adds a lesson on walking a string with a pointer, and clears the small
+things earlier reviews left. The work is on `agent/machine-subset-2`.
+
+### Method
+
+- **The corpus.** Seventeen programs join the 32 of Part 13 in
+  [`corpus/`](corpus/): five that walk arrays and strings with `*p++`
+  (`w…`), four with an assignment or increment as an operand (`a…`), three
+  with pointer differences and orders (`d…`), three whose accesses C leaves
+  undefined (`u…`) and two whose result depends on an order C leaves open
+  (`o…`). The corpus test now expects each `u…` program to stop as undefined
+  and each `o…` program to stop for its order.
+  [`corpus/results-part14-before.txt`](corpus/results-part14-before.txt) and
+  [`corpus/results-part14-after.txt`](corpus/results-part14-after.txt) are
+  the engine's results on `main` and on this branch.
+- **The probes.** The 156 probe programs of the two reviews of Part 13, and
+  95 of my own (60 for the new constructs, 35 that try to slip an aliasing
+  clash past the check: two pointers to one object, a pointer to a variable
+  the expression also updates by name, `**pp` reaching `p`, a call writing
+  what a sibling operand reads, a sequence point inside one operand and not
+  the other). Each was stepped to its end by a throwaway engine test that
+  checks every step's "what comes next" against the step that followed, and
+  every program the engine runs was compiled with GCC 14 (`gcc -B …/gcc14…
+  -std=c99`) and run.
+- **The notes.** The same throwaway test dumped every step of every lesson
+  (title, lead, explanation, why it matters, citations, what comes next,
+  whether a sequence point follows) on `main` and on the branch.
+- **The builds.** The before build is the deployed site,
+  <https://bcc.benbwall.com/>, which is `main` at `4bebb980f` (Part 13
+  merged). The after build is this branch, built with `web/build.sh`
+  without `--release`: the dev profile at `opt-level=s`, as in Parts 7 to
+  13.
+- **The browser.** Playwright drove Chromium with reduced motion, one
+  browser at a time, at 1440x900, 1366x768, 1024x768 and 390x844 in both
+  themes, on both builds. Each program was loaded through the page's own
+  Open .c and run with Run edited code, then stepped to its scene, recording
+  the note, Figure 2's outline for screen readers, the contrast of the
+  note's title, lead and fault text against their backgrounds, sideways
+  scroll and console errors. The new lesson was also opened from Table 1 and
+  shown in the compiler pipeline and WebAssembly views.
+- **The lesson walk.** Part 9's walk, every note of every machine lesson,
+  on both builds at 1440x900 light and 390x844 dark.
+
+The screenshots are in [`screenshots/part14/`](screenshots/part14/), named
+`<scene>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours.
+
+### The corpus, before and after
+
+| Construct | Program | Before: where the engine refused it | After |
+| --- | --- | --- | --- |
+| `*p++` | [`w01_strlen.c`](corpus/w01_strlen.c) | 4:13: "this machine does not track which objects *, [], -> and calls reach" | runs (93 steps), returns 0 and prints `5` |
+| `*p++` | [`w02_strcpy.c`](corpus/w02_strcpy.c) | 7:18: expected `)` | runs (98 steps), returns 0 and prints `copy 5` |
+| `*p++` | [`w03_sum_postfix.c`](corpus/w03_sum_postfix.c) | 5:21: unsupported operand types (`p < v + 3`) | runs (77 steps), returns 15 |
+| `*p++` | [`w04_store_and_move.c`](corpus/w04_store_and_move.c) | 4:5: "unparenthesized *p++ … is outside this subset" | runs (40 steps), returns 123 |
+| `*p++` | [`w05_reverse_in_place.c`](corpus/w05_reverse_in_place.c) | 5:19: unsupported operand types (`lo < hi`) | runs (116 steps), returns 4321 |
+| Assignment as operand | [`a01_chained.c`](corpus/a01_chained.c) | 4:11: expected `;` | runs (14 steps), returns 14 |
+| Assignment as operand | [`a02_postfix_value.c`](corpus/a02_postfix_value.c) | 4:10: expected `;` | runs (21 steps), returns 56 |
+| Assignment as operand | [`a03_assign_in_condition.c`](corpus/a03_assign_in_condition.c) | 5:25: expected `]` (`text[position++]`) | runs (114 steps), returns 3 and prints `abc` |
+| Assignment as operand | [`a04_if_assign.c`](corpus/a04_if_assign.c) | 4:12: expected `)` | runs (19 steps), returns 4 |
+| Pointer difference | [`d01_difference.c`](corpus/d01_difference.c) | 5:23: unsupported operand types | runs (48 steps), returns 32 |
+| Pointer order | [`d02_order_loop.c`](corpus/d02_order_loop.c) | 5:26: unsupported operand types | runs (101 steps), returns 62 |
+| Both | [`d03_count_and_reverse.c`](corpus/d03_count_and_reverse.c) | 7:33: unsupported operand types | runs (129 steps), returns 0 and prints `4` and `dcba` |
+| Undefined | [`u01_alias_increment.c`](corpus/u01_alias_increment.c) | 4:11: expected `;` | stops at step 16: unsequenced accesses to `i` |
+| Undefined | [`u02_alias_subscript.c`](corpus/u02_alias_subscript.c) | 4:15: expected `]` | stops at step 16: unsequenced accesses to `i` |
+| Undefined | [`u03_difference_of_objects.c`](corpus/u03_difference_of_objects.c) | 6:17: unsupported operand types | stops at step 24: subtracting unrelated pointers |
+| Open order | [`o01_printf_arguments.c`](corpus/o01_printf_arguments.c) | 3:25: "expected a subset expression" | stops at step 15: two calls to `next()` |
+| Open order | [`o02_global_and_call.c`](corpus/o02_global_and_call.c) | **ran (17 steps) and returned 1; GCC 14 returns 2** | stops at step 15: `bump()` and `g` |
+
+On `main` sixteen of the seventeen were refused before their first step,
+and the seventeenth ran to an answer GCC does not give: `g + bump()`, with
+`bump` incrementing `g`, returned 1, from reading `g` first, where the code
+GCC makes reads `g` after the call and returns 2. On the branch the twelve defined programs
+run to GCC's output and exit status, the three undefined ones stop where
+the behavior becomes undefined, and the two whose result an open order
+decides stop there. The 32 programs of Part 13 give the same results, step
+for step.
+
+### What changed
+
+#### 1. The machine checks C's sequencing rule on the objects it reaches
+
+C99 §6.5p2 lets an expression store into an object at most once between
+two sequence points, and read it then only to compute the value stored.
+Which object `*p`, `a[i]` or `s->m` reaches is known only as the program
+runs, so a check over names, like Part 13's, could only refuse them. The
+new [`sequencing.rs`](../../src/abstract_machine/sequencing.rs) logs each
+read and store of a full expression with the expression-tree node that made
+it, and decides from the tree alone whether a sequence point separates two
+of them: the first operand of `&&`, `||` and `?:` and the left operand of a
+comma operator are complete before the rest of their operator; a call's
+arguments are complete before its body runs, and its body before its value
+is used; an operator's operands are evaluated before it computes its value,
+but a store nested in an operand is a side effect, which C completes only by
+the next sequence point; every other pair of operands is unsequenced. The
+machine stops at the first access that meets an earlier one to the same
+object with nothing between them, one of the two a store:
+
+- `*p = i++` with `p == &i`: "`*p = i++` stores into `i`, and `i++` stores
+  into it too, with no sequence point between the two";
+- `return a[i++];` with `a == &i`: "`a[i++]` reads `i`, and `i++` stores
+  into it too";
+- `(*p)++ + (*q)++` with `p == q`, `*pp = p++` with `pp == &p`, `a[i] =
+  a[j]++` with `i == j`, and the old exchange trick `*a ^= *b ^= *a ^= *b`.
+
+Each stop is titled "Undefined behavior: unsequenced accesses" and cites
+§6.5p2. The same programs with the pointers aimed elsewhere run to GCC's
+result. Where a variable is named twice with nothing between, as in `i =
+i++`, `a[i] = i++` or `x += x++`, the check over names still refuses the
+program before its first step; it now lets a sequence point inside the
+right operand order an update before the store, so `i = (i++, i + 10)` and
+`x = id(x++)` run (12 and 2, as GCC gives).
+
+One case C99's wording does not settle stops as a limit of the model, not
+as undefined behavior: a store that reads what it stores into to find where
+to store, as `a[a[0]] = 1` does when `a[0]` is 0.
+
+[`unsequenced-1366-dark`](screenshots/part14/unsequenced-1366-dark-after.png)
+([before](screenshots/part14/unsequenced-1366-dark-before.png);
+[`unsequenced-390-dark`](screenshots/part14/unsequenced-390-dark-after.png)).
+
+#### 2. `*s++`, `a[i++]` and `*p++ = x` run
+
+With the check on objects, an update no longer needs to stand alone. `while
+(*s++)`, `while (v[i++] < 1)`, `*p++ = 1;`, `total += *p++` and the
+two-pointer reversal `*lo++ = *hi; *hi-- = t;` all run. The update's step
+says what it yields and when its store completes, as in a condition before,
+and now says how the clash is ruled out: "Which object a `*`, `[]`, `->` or
+call reaches is known only as the program runs, so this machine compares
+every access in the condition that no sequence point separates from this
+update with the object it actually reaches". The `*` that follows it says
+that `*to++` is `*(to++)`: "`to++` yields a pointer to word[0], the value
+`to` held before its update: `++` binds tighter than `*`, so `*to++` is
+`*(to++)`, and the `*` uses what `to++` yields", citing §6.5.2.4p2 beside
+§6.5.3.2p4. `*p++;` as a statement runs too, where Part 13 refused it.
+[`walk-1440-light`](screenshots/part14/walk-1440-light-after.png)
+([before](screenshots/part14/walk-1440-light-before.png);
+[`walk-390-dark`](screenshots/part14/walk-390-dark-after.png)).
+
+#### 3. Assignments as operands
+
+`=` and the compound assignments are now operators of the expression
+grammar, grouping from the right below `?:`, so `x = y = 0`, `a = b++`,
+`int y = x += 1;`, `f(x = 3)`, `return g = v;`, `while ((c = next()) != 0)`
+and `if ((n = half(9)) > 0)` run. As a whole statement an assignment is the
+same store as before, so no lesson's steps change; nested in another
+expression its store leaves the value stored for the expression around it,
+and its step says so: "The assignment stores 4 into `n`, replacing ?. As an
+operand, `(n = half(9))` yields that value, 4, to the condition", then in
+the explanation that an assignment is no lvalue, that its store completes
+by the next sequence point (the end of the condition, of the full
+expression, of `&&`'s first operand, or the point just before a call), and
+how a clash is ruled out, citing §6.5.16p3. An update or assignment in an
+initializer list is refused, since C99 leaves the order of their side
+effects unspecified (§6.7.8p23).
+[`copy-1366-light`](screenshots/part14/copy-1366-light-after.png)
+([before](screenshots/part14/copy-1366-light-before.png); [Figure
+2](screenshots/part14/copy-schematic-1366-light-after.png)).
+
+#### 4. An order C leaves open stops the run
+
+A call's body runs before or after the other operands as a whole (C99
+§6.5p3, §6.5.2.2p10). When the call and another unsequenced operand use the
+same object and one of them changes it, each order gives another result,
+and compilers differ: GCC 14 prints `2 1` for `printf("%d %d\n", next(),
+next())` and returns 2 for `g + bump()` where `bump` increments `g`, where
+`main`'s machine, evaluating left to right, gave 1. Every call now records
+what its body read and stored outside itself, library calls a write to
+standard output and reads of the strings they take; when a sibling operand,
+or another call, conflicts with it, the machine stops: "Stopped: the result
+depends on an open order", with "the call `bump()` stores into `g`, and
+another operand, `g`, reads it; C99 leaves unspecified which of the two is
+evaluated first, and the result depends on it, so compilers may differ:
+this machine stops rather than choose an order for you", and an explanation
+that suggests storing the call's result in a variable first. Calls that only
+read, calls on different objects, and a call whose value an assignment
+stores (`g = bump()`) run.
+[`order-390-light`](screenshots/part14/order-390-light-after.png)
+([before](screenshots/part14/order-390-light-before.png)).
+
+#### 5. Pointer subtraction and ordering
+
+`p - q` of two pointers into one array counts the elements between them, a
+`ptrdiff_t` (`long` on x86-64): "Pointer difference: q - p = 3", with "`q -
+p` counts the elements from the right pointer's place to the left's in `v`:
+4 - 1 = 3, a ptrdiff_t", citing §6.5.6p9, and a note of its own about
+counting elements, not bytes. `p < q`, `<=`, `>` and `>=` compare pointers
+into one array by subscript, one past the end counting as the length, and
+pointers to members of one structure by declaration (§6.5.8p5). Pointers to
+different types are a constraint violation (§6.5.6p3, §6.5.8p2); pointers
+into different arrays, different objects, or a null pointer stop as
+undefined: "Undefined behavior: subtracting unrelated pointers" or
+"ordering unrelated pointers".
+[`difference-1024-dark`](screenshots/part14/difference-1024-dark-after.png)
+([before](screenshots/part14/difference-1024-dark-before.png)).
+
+#### 6. A lesson: "Walking a string with a pointer"
+
+The new lesson follows "Pointers and arrays" in Table 1's part on memory.
+It copies `"walk"` into a char array with the loop every C text shows,
+
+```c
+while ((*to++ = *from++) != '\0')
+    ;
+```
+
+where `*to++` follows the old value of `to` while `to` moves on, and the
+assignment hands the char it stored to the comparison, so the copied null
+character ends the loop. `length` then walks the copy with `while (*s)
+s++;` and returns `s - start`, a `ptrdiff_t` that the return converts to
+int. It is the first lesson in which an update and an assignment are
+operands, and the first with a pointer difference: 150 steps, ending
+`walk has 4 chars`, as GCC prints. Its comments stand on lines of their own
+and take at most 36 columns. Its LLVM IR comes from
+`web/pipeline/generate.sh` with a dev-profile bcc and its module from
+`web/wasm/generate.sh` with wasi-sdk 34; both tools reproduced every
+unchanged lesson byte for byte.
+[`lesson-strings-1366-dark`](screenshots/part14/lesson-strings-1366-dark-after.png)
+(its [pointer
+difference](screenshots/part14/lesson-strings-difference-390-dark-after.png),
+in the [compiler pipeline](screenshots/part14/lesson-strings-compiler-1366-dark-after.png)
+and the [WebAssembly view](screenshots/part14/lesson-strings-wasm-1366-dark-after.png)).
+
+#### 7. Small things from earlier reviews
+
+- **Limits of this model** (§3 of "How it works") now lists subtracting and
+  ordering pointers and assignments, compound assignments, `++` and `--`
+  anywhere in an expression except an initializer list, and a new paragraph
+  says what the machine does with C's sequencing rules: it checks every read
+  and store against the object it reaches, stops where two of them clash as
+  undefined behavior, refuses before the first step where a variable named
+  twice clashes, and stops on a store that reads where it stores. The
+  paragraph on evaluation order says that the machine stops where the order
+  would decide the result. The limits test runs a program for each claim and
+  stops or refuses each counterexample.
+  [`limits-1440-light`](screenshots/part14/limits-1440-light-after.png)
+  ([before](screenshots/part14/limits-1440-light-before.png)).
+- **The Annex C gloss** lists every formatted input/output function of
+  7.19.6 and 7.24.2 for the sequence point after each conversion
+  specifier, and the sequence points just before and after each call qsort
+  or bsearch makes to its comparison function and between that call and
+  any movement of the objects passed to it (7.20.5).
+- **Long trailing comments.** The constants, floating point, preprocessor,
+  pointers, promotion and unsigned lessons put each trailing comment on the
+  line above the code it describes, at most 36 columns wide, so none wraps
+  into a second row without its `//`. Every lesson's notes are unchanged;
+  the preprocessor lesson's refusal, a line splice, moves from line 8 to
+  line 11. The six lessons' IR line tables and modules were regenerated; the
+  IR itself is unchanged.
+  [`comments-1366-light`](screenshots/part14/comments-1366-light-after.png)
+  ([before](screenshots/part14/comments-1366-light-before.png)).
+- **Escape** now hides a landing word's definition that a tap on its text
+  kept open, wherever the focus is.
+- **The return's lead** said "its parameters and automatic locals cease to
+  exist" for four or more objects even when they were all parameters; it
+  now names the kind it ended.
+- **Shadowed names** no longer repeat: a return that ends a parameter `x`
+  and a block's `x` says "the two objects named `x` cease to exist".
+
+### Checks
+
+- **Correctness against GCC 14.** Of the 251 probe programs (the reviews'
+  156 and my 95), the 154 the engine runs to the end give GCC 14's output
+  and exit status, every one. Of the rest, 20 of mine stop as undefined
+  behavior, each a true clash on one object (`*p = i++` with `p == &i`,
+  `(*p = 1) + x` with `p == &x`, two pointers to one `x` both
+  incremented, `**pp = (*p)++`, `a[i] = a[j]++` with `i == j`, an ordering
+  of pointers into two arrays, …); nine stop because an open order would
+  decide the result, each of which GCC 14 resolves differently from a
+  left-to-right reading or could; two stop on a store that reads where it
+  stores; and the source check refuses nine, all undefined (`i = i++`, `a[i]
+  = i++`, `x += x++`, `i = ++i + 1`, `p = p++ + 1`, `x = (x = 1) + 1`,
+  `printf("%d %d\n", x, x++)`, `a[i++] = i * 10`) or a constraint violation
+  (subtracting an `int *` and a `char *`). Against `main`, the reviews'
+  probes changed outcome only where this part means them to: 18 that were
+  refused now run to GCC's result (10), stop as undefined (5) or stop for
+  an open order (3); 2 are still refused, now because they name a variable
+  twice (`a[i] = i++`, `i += i++`) rather than for their syntax; and 4 that
+  `main` ran left to right now stop for their order: `g + f1()` and `x +
+  set(&x)`, which gave 1 where GCC gives 2 and 8, and `f1() + f2()`
+  writing one global and `printf("a") + printf("b")`, where GCC happened to
+  agree.
+- **Descriptions.** Every step of every probe, corpus program and lesson
+  named, in its "what comes next", the step that followed it; the engine
+  tests check this for every program they run.
+- **The notes.** The engine's dump of every lesson is byte for byte the
+  same on `main` and on the branch, apart from the new lesson and the
+  preprocessor lesson's refusal, whose position moves with its comments.
+  The browser walk at 1440x900 light and 390x844 dark compares the
+  title, lead, value flow, "why it matters" note and next step of each of
+  the fourteen machine lessons' 1,406 notes: none changed, at either size;
+  the new lesson walks 150 notes. No sideways scroll and no page error in
+  either walk, on either build.
+- **The scenes.** At the four sizes in both themes, every scene reached its
+  step on the after build, where the before build refused the program
+  before its first step, except `o02`, which ran to its left-to-right
+  answer. No sideways scroll, no console error or warning. Figure 2 wires a
+  nested `=` like any operator, its value flowing to `!=`, and its outline
+  for screen readers reads "=: 99".
+- **Contrast:** the new stops' titles and leads use the existing note
+  colours (15.82:1 light, 13.34:1 dark); their callouts measure 11.52:1 in
+  the light theme and 13.34:1 in the dark one.
+- **Keyboard, screen readers and motion.** The change adds no control: the
+  new lesson is a card like the others, a button that Enter opens. Escape
+  now hides a landing word's definition kept open by a tap on its text
+  (checked at 390x844 with touch: shown, kept, hidden on Escape; on the
+  before build it stayed). The new note text is plain text in the existing
+  live region, and every run used reduced motion.
+- **Tests:** as `pages.yml` runs them, the engine's tests (137: 5 new,
+  and 8 updated for what now runs, among them the corpus test and the
+  limits test) and its clippy pass, as do the site's tests (164, one
+  updated, and the prerender's 2), the WebAssembly stepper's (79) and the
+  site's four clippy runs; the worker run prints the engine's existing
+  unfulfilled lint expectation in `src/abstract_machine/parser.rs`, as
+  before. `rustfmt +nightly --check` passes for every engine file; in the
+  site's files every changed line is formatted (the files themselves are
+  not, on `main` either). `git diff --check` is clean.
+
+### Left for later
+
+- **Function pointers** stay outside the subset. Beside the declarator
+  grammar (`int (*f)(int, int)`, `int (*ops[2])(int, int)`) and calls
+  through a pointer, they need a value that designates a function in the
+  wire format the page reads, and a way for the tape and the cells to draw
+  a pointer whose target is code rather than an object; that is a change to
+  the page's drawing as much as to the engine, and it did not fit this part.
+- **Constant expressions in static initializers** (`static int mask = 1 <<
+  3;`) still take only a constant: the machine would need to evaluate them
+  before `main`, with C's rules for constant expressions (§6.6), and narrate
+  that evaluation in the static object's single step.
+- **An initializer list's expressions** may not update objects, and a list
+  element that reads an element initialized earlier in the same list (`int
+  a[2] = {1, a[0]};`) reads what the machine's order stored, where C leaves
+  the order of initialization and evaluation unspecified (§6.7.8p23,
+  footnote 133). Calls in a list are checked against one another for an open
+  order.
+- **A store that reads where it stores** (`a[a[0]] = 1` when `a[0]` is 0)
+  stops as a limit of the model. C11 orders the operands' value computations
+  before the store and so defines it; C99's wording ("the prior value shall
+  be read only to determine the value to be stored") does not settle it.
+- **A loop's empty body**, `while (...) ;`, still shows its implicit block
+  being entered and left on each pass, as every substatement's block is.
+- **The lessons' opening comments** still take a line of up to 75 columns,
+  which wraps into a second row in the listing; only trailing comments were
+  moved.
+
+### Review, round 1
+
+The review of the branch at `5970b2dc9` found three blockers, two of them
+false statements about C and one a hole in the sequencing check, and six
+small things. Its 161 probe programs (in its scratch directory, with every
+step of each dumped) are the base for the checks below, with 292 more of
+my own: 270 that put each of the ten compound assignment operators against
+an update of its left operand hidden behind a comma, `&&`, `||`, `?:`, a
+call's argument, a nested assignment or a pointer alias, with the defined
+neighbours of each, and 22 for the member stores of the third blocker.
+Every program the engine runs was compiled with GCC 14 (`-std=c99 -Wall
+-Wsequence-point`) and run; GCC's `-Wsequence-point` and Clang 23's
+`-Wunsequenced` were read as hints only.
+
+#### 1. A compound assignment ran undefined programs
+
+`x += (x++, 5)` ran and returned 7, as did `x += (x++ && 1)`, `x -= x++ ?
+1 : 2`, `x += id(x++)` and, through a pointer, `*p += (x++, 5)` with `p ==
+&x`. C99 §6.5.16.2p3 (p. 93, PDF p. 105) makes `E1 op= E2` the same as
+`E1 = E1 op (E2)` except that the lvalue `E1` is evaluated once, so the
+compound assignment's read of `E1` is an operand of `op`, and §6.5p3
+leaves the order of `op`'s operands unspecified: the read may come before
+`E2` starts, with the `x++` and no sequence point between them, which
+§6.5p2 makes undefined. The comma inside `E2` orders only `E2`'s own
+parts. The machine took the read as part of the operator, after `E2`, so
+the sequence point seemed to order the update before it; its own step
+said `x += (x++, 5)` means `x = x + ((x++, 5))`, which it refused.
+
+**Fixed, in both checks.** The check over names refuses a compound
+assignment whose right operand updates the variable on its left by name,
+behind a sequence point or not: "this += reads `x` and its right operand
+updates `x`: `E1 += E2` means `E1 = E1 + (E2)` with E1 evaluated once
+(§6.5.16.2p3), and C99 leaves the order of +'s operands unspecified
+(§6.5p3), so the read may come before that update with no sequence point
+between them, which C99 makes undefined (§6.5p2)". The run-time check
+treats a store inside a compound assignment's right operand as
+unsequenced with the compound assignment's own access, whatever sequence
+points lie between, so `*p += (x++, 5)` with `p == &x` stops at the
+compound assignment as "Undefined behavior: unsequenced accesses". What
+stays defined still runs: a sequence point inside the left operand
+(`*(x++, &x) += 1`, 14 in the probe), an update of another object
+(`x += (y++, 2)`, `*p += id(y++)`), a read of the left operand's object
+on the right (`x *= (x, 3)`, `x += id(x)`), and a call that touches the
+object only in its body (`g += bump()`, 11 as GCC, Clang and tcc give;
+see "Left for later"). `++` and `--` are unaffected: their operand is the
+object itself.
+
+Of my 270 compound probes, the 80 that update the variable by name are
+refused (70 of them ran before), the 100 that reach it through a pointer,
+subscript or member stop as undefined (all 100 ran before), and the 90
+defined ones run to GCC's output and exit status. GCC warns on all 80 by
+name and on 30 of the 100 by alias; it warns on none of the 90.
+
+#### 2. The open-order stop said the order changes the result
+
+The stop for a call and another operand that share an object said "the
+two orders give different results here", its diagnostic "the result
+depends on it", and the limits text "the order decides the result". For
+`inc() + inc()` both orders give 3, and `printf("a") + printf("a")` prints
+`aa` either way. C99 leaves the order unspecified (§6.5p3; §6.5.2.2p10,
+p. 72, PDF p. 84), and the machine cannot cheaply tell whether the two
+orders agree, so stopping stays the teaching choice; the claim was what
+was wrong.
+
+**Fixed.** The title is "Stopped: the result can depend on an open order";
+the lead says "A compiler may run the call before or after the other
+operand, and the result can depend on which runs first, so the machine
+stops rather than pick one"; the diagnostic says "the result can depend on
+it, so compilers may differ"; and the limits text says "the order can
+decide the result, so the engine stops wherever that could happen rather
+than choose". The stop still calls the order unspecified, not undefined.
+
+#### 3. A defined member store was called undefined
+
+`s.a = (s = t, 5)` was refused before its first step: "this expression
+updates `s` and also reads or updates it with no sequence point between
+the two; C99 makes that undefined". The machine runs the same shape with
+plain variables, `i = (i = 3, i + 10)`, and with a member on both sides.
+
+What C99 says: §6.5p2 lets an object be modified at most once between two
+sequence points. `s = t` modifies `s`, and so `s.a`, before the comma's
+sequence point; the outer assignment modifies `s.a` after it, since its
+store (§6.5.16p3, p. 91, PDF p. 103) cannot come before the value it
+stores, which exists only once the comma has completed. The left operand
+`s.a` designates a member of `s` without reading it (§6.5.2.3p3, p. 73,
+PDF p. 85). That is the reading the machine already takes for `i = (i++,
+i + 10)`, and C11 states it outright: the store "is sequenced after the
+value computations of the left and right operands" (C11 §6.5.16p3, p.
+101, PDF p. 119). So the member form is defined exactly when the scalar
+form is.
+
+**Fixed.** The check over names treats an assignment to `s.m`, `s.in.m`
+and so on as it treats one to `s`: an update of `s` that the right operand
+completes at a sequence point of its own comes before the store, while
+one with no sequence point between is still refused, as is the same
+update under a compound assignment (`s.a += (s = t, 5)`, by item 1) or
+beside a read (`s.a = (s = t, 5) + s.a`). `s.a = (s = t, 5)` now runs to
+GCC's 54, and so do five refused variants (a nested member, a call's
+argument, `&&`, `?:`, and a read of `s.a` after the comma); `ps->a = (s =
+t, 5)` and `s.in.a = (s.in = t.in, 6)` ran already. GCC 14 prints "may be
+undefined" for these struct forms but not for the scalar ones; Clang 23
+warns on neither.
+
+#### 4. Smaller things
+
+- **`(s = t).a`** was refused as if it stored into an assignment's value.
+  It reads a member of a non-lvalue structure, which C allows
+  (§6.5.2.3p3). The refusal now says what is missing: "a member of an
+  assignment's value, as in (s = t).a, is outside this subset; assign
+  first, then read the member of the structure assigned to", and the
+  limits text excepts it from "anywhere in an expression".
+- **An initializer list's open order** named `g` in `int a[2] = {inc(),
+  g};` "another operand" and cited §6.5p3. It now says "another
+  initializer", and the stop cites §6.7.8p23 (p. 128, PDF p. 140): "The
+  order in which any side effects occur among the initialization list
+  expressions is unspecified".
+- **Output before the stop.** The open-order stop is found once both
+  calls have run, so `printf("a") + printf("a")` shows `a` first. Its
+  explanation now says so: "It finds the clash only once both have run,
+  so what the first of them did, such as printing, has already happened
+  here."
+- **The new lesson's comments** read "*p++ reads a char and moves p on"
+  (the side effect of `p++` may come before the read, so "then" was
+  wrong) and "Copy, including the '\0'". Line numbers are unchanged; the
+  lesson's module was rebuilt with wasi-sdk 34, which first reproduced
+  every committed module byte for byte, and only `strings.wasm` changed.
+- **A block without braces** was narrated as "a { … } compound statement".
+  A loop body, an if branch or a for statement is a block whether or not
+  braces are written (§6.8.4p3, p. 133, PDF p. 145; §6.8.5p5, p. 135, PDF
+  p. 147), and the step now says so: "Execution enters a block with no
+  braces: a loop body is a block of its own, a new scope", citing the
+  paragraph. A for statement's objects begin their lifetime "as the for
+  statement begins" rather than "at this brace".
+- **A quote over several lines** kept its line break and indentation, as
+  in step 148 of the new lesson. Quoted code now reads as one line, as
+  "what comes next" already did.
+
+#### What changed in the results
+
+- **The review's 161 probes:** 126 are byte for byte the same. Ten change
+  outcome as item 1 means: `p4/f06` and `p5/g01`, `g03` to `g06` and `g10`
+  are refused, and `p5/g02`, `g07` and `g08` stop as undefined. Two run
+  that were refused (item 3): `p4/f04` and `p2/d10`, both 54 as GCC
+  gives. Three refusals of `(s = t).a` change wording (`p2/u09b`,
+  `u09d`, `p4/f08`). The 13 open-order stops change wording (item 2;
+  `x47` now names an initializer and cites §6.7.8p23). Seven change only
+  in the narration of item 4 (braceless blocks and one-line quotes).
+- **The corpus:** every program has the same outcome and step count.
+  [`corpus/results-part14-after.txt`](corpus/results-part14-after.txt)
+  changes only in the wording of `o01` and `o02`; eight programs' steps
+  change only in the narration of item 4 (braceless blocks, and in `p04` a
+  for statement's lifetime sentence).
+- **The lessons:** every lesson has the same steps, values and outcome.
+  Eight lessons' notes change, and only these: the new lesson's eight
+  braceless blocks and its `printf` quote; the `printf` quote spread over
+  lines in the bits and logic lessons; and a for statement's lifetime
+  sentence in the constants, floating point, objects, overflow and
+  unsigned lessons.
+- **"What comes next"** named the step that followed in every step of
+  every probe, corpus program and lesson.
+
+#### Checks
+
+- **Engine tests:** 140 pass (three new: compound reads against the right
+  operand, member stores after a sequenced update, and the small fixes;
+  the open-order test now checks the reworded stop, `inc() + inc()` and
+  the initializer list), and the engine's clippy passes, as `pages.yml`
+  runs them.
+- **Site:** as `pages.yml` runs them, the site's tests (164, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs pass; the worker run prints the engine's existing
+  unfulfilled lint expectation in `src/abstract_machine/parser.rs`, as
+  before. CI builds the site; I did not build it locally.
+- **Formatting:** `rustfmt +nightly --check` passes for every engine file,
+  and `git diff --check` is clean.
+- **Browser:** not rerun. The page code is unchanged apart from two
+  sentences of the limits text; the new wording reaches the page through
+  the engine's notes, which the dumps above cover.
+
+#### Left for later
+
+- **A compound assignment and a call** that changes its left operand, as
+  in `g += bump()`, runs, reading `g` after the call as GCC and Clang do.
+  Only C99 leaves this open: the read of `g` is an operand of `+`
+  (§6.5.16.2p3), whose order with the call §6.5p3 leaves unspecified, so
+  the read may come before the call too. C11 settles it: §6.5.16.2p3 makes
+  the compound assignment "a single evaluation" with respect to the call,
+  and its store follows `E2`'s value, call included (§6.5.16p3), so the
+  read follows the call as well and the result is fixed. The machine does
+  not stop there as it does for `g + bump()`. (Round 2 makes it stop.)
+- **A member of a call's or an assignment's value**, `f().a` or `(s =
+  t).a`, is still outside the subset.
+
+### Review, round 2
+
+The re-check of the branch at `da6231a0c` found the three blockers of round
+1 fixed, and two new ones, both about what the machine says rather than
+what it computes, and one small thing. Its 99 new probe programs (sets
+`q1` to `q7`, with GCC 14's and Clang 23's output beside them) and the 17
+lessons were dumped again before and after the fixes below, together with
+round 1's 453 probes, its 49 corpus programs and its 17 lessons: 635 runs
+in all.
+
+#### 1. A compound assignment's refusal called defined programs undefined
+
+Round 1's refusal of a compound assignment whose right operand updates its
+left operand's variable ended "the read may come before that update with
+no sequence point between them, which C99 makes undefined (§6.5p2)". In
+`x += (0 && x++)`, and in `x += (c ? 1 : x++)` with `c` 1, the update is
+never evaluated, so nothing breaks §6.5p2 and the programs are defined;
+GCC gives 1 and 2. The refusal of `=` already said C99 makes such a clash
+undefined "whenever both are evaluated", and round 1's rewording lost
+that.
+
+**Fixed.** The refusal stays, as a limit of the model, but now says
+"C99 makes that undefined whenever the update is evaluated (§6.5p2)".
+
+#### 2. The limits text said the engine stops where it ran
+
+Round 1's limits text says that when a call and another operand use the
+same object and one of them changes it, "the order can decide the result,
+so the engine stops wherever that could happen rather than choose". But
+`g += bump()`, where `bump` multiplies `g` by 10 and returns 5, ran to 15
+and did not stop. In C99 the compound assignment's read of `g` is an
+operand of `+` (§6.5.16.2p3), and §6.5p3 leaves its order with the call
+open, so the read may come before the call, giving 6, or after it, giving
+15. C11 settles it at 15 (see round 1's "Left for later", corrected
+above).
+
+**Fixed in the engine.** The run-time rule that a store in `E2` is
+unsequenced with the compound assignment's read of `E1` now covers a
+store a call in `E2` makes in its body. Such a run stops at the existing
+open-order stop, whose diagnostic now names the compound assignment's
+read: "the call `bump()` stores into `g`, and `g += bump()` reads it as
+the left operand of its `+` (§6.5.16.2p3); C99 leaves unspecified which
+of the two is evaluated first, and the result can depend on it". The
+limits text names `g += f()` beside `g + f()`. A call that only reads the
+object (`g += get()`), or stores into another one, still runs.
+
+#### 3. Small thing
+
+"What comes next" before leaving a block that ends no lifetimes cited
+§6.8.2p2, the compound statement's paragraph, even for a block without
+braces. It now cites the paragraph the step that entered the block cites:
+§6.8.5p5 for a for statement or a loop body, §6.8.4p3 for an if branch.
+
+#### What changed in the results
+
+- **All 635 runs:** 507 are byte for byte the same.
+- **The refusal's wording (item 1):** 108 refusals change only in that
+  sentence: 17 in `q1`, the 2 defined programs of `q3`, and 89 of round
+  1's probes. No run still says "which C99 makes undefined".
+- **The open-order stop (item 2):** 20 programs that ran now stop there,
+  and every earlier step of each is unchanged. They are `q4`'s `g +=
+  bump()`, `*p += bump()`, `g -= setg(5)`, `gs.a += bumps()`, `x +=
+  wr(&x)`, `g += (bump(), 1)`, `g += id(bump())` and `g *= bump()`;
+  round 1's `c19` and `g09`; and its ten `d_*_callbody` probes, one per
+  compound operator. `q4`'s `g = g + bump()` and `g += bump() + g`
+  stopped before and still do, and `g += readg()`, whose call only reads `g`,
+  still runs.
+- **"What comes next" (item 3):** the dumps record its text, which is
+  unchanged, but not its citation. A separate pass over all 635 runs
+  found 143 "leave the block" lines. The 75 at a closing brace still cite
+  §6.8.2p2. The 68 without braces each cite the paragraph their entry
+  step cites: §6.8.5p5 for 67 of them, §6.8.4p3 for one.
+- **Values, outcomes and step counts:** the same everywhere else,
+  lessons and corpus included.
+
+#### Checks
+
+- **Engine tests:** 140 pass, and the engine's clippy passes, as
+  `pages.yml` runs them. The compound-assignment test now checks the
+  refusal's caveat on both defined programs, the open-order stop for `g
+  += bump()` and `*p += (bump(), 1)`, and that `g += get()` and a call
+  that stores into another object still run; the review-fixes test checks
+  the citations of "what comes next" before leaving a loop body and an if
+  branch without braces.
+- **Site:** as `pages.yml` runs them, the site's tests (164, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs pass; the worker run prints the engine's existing
+  unfulfilled lint expectation in `src/abstract_machine/parser.rs`, as
+  before. CI builds the site; I did not build it locally.
+- **Formatting:** `cargo +nightly fmt --check` passes, and `git diff
+  --check` is clean.
+- **C11:** the reading in round 1's corrected "Left for later" was checked
+  against N1570 §6.5.16.2p3 (pp. 103-104; PDF pp. 121-122), §6.5.16p3
+  (p. 101; PDF p. 119) and §6.5.2.2p10 (p. 82; PDF p. 100).
+- **Browser:** not rerun. The page code is unchanged apart from the
+  example in one sentence of the limits text; the new wording reaches the
+  page through the engine's diagnostics and notes, which the dumps above
+  cover.

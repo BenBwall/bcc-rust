@@ -1468,7 +1468,7 @@ mod tests {
             .find(|function| function.name == "main")
             .unwrap();
         let source = main.source.unwrap();
-        assert_eq!((source.start, source.end), (16, 28));
+        assert_eq!((source.start, source.end), (19, 31));
         let lines: Vec<u32> = wasm
             .positions
             .iter()
