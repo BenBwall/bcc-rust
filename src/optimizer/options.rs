@@ -14,26 +14,30 @@ use thiserror::Error;
 pub(crate) struct OptimizerOptions<'a> {
     /// The passes to run once each, in order, instead of the default
     /// pipeline (from `--passes=fold,dce,simplify-cfg`).
-    pub(crate) passes:          Option<PassList>,
+    pub(crate) passes:           Option<PassList>,
     /// Run the IR verifier on every function after every pass that changed
     /// it, and before the first pass. A failure is a compiler bug and
     /// panics with the errors and the function's text.
-    pub(crate) verify_each:     bool,
+    pub(crate) verify_each:      bool,
     /// Where to print each function after every pass
     /// (`--print-after-all`). It is a `RefCell` so that the options stay
     /// shared while the optimizer writes.
-    pub(crate) print_after_all: Option<&'a RefCell<dyn fmt::Write + 'a>>,
+    pub(crate) print_after_all:  Option<&'a RefCell<dyn fmt::Write + 'a>>,
     /// Where to print the per-pass report when the run ends
     /// (`--time-passes`).
-    pub(crate) time_passes:     Option<&'a RefCell<dyn fmt::Write + 'a>>,
+    pub(crate) time_passes:      Option<&'a RefCell<dyn fmt::Write + 'a>>,
     /// The number of rewrites to apply before stopping, in pipeline order
     /// (`--opt-bisect-limit`). With `Some(n)`, the first `n` rewrites happen
     /// and every later one is skipped, so a miscompile can be bisected on `n`.
-    pub(crate) bisect_limit:    Option<u64>,
+    pub(crate) bisect_limit:     Option<u64>,
+    /// Drop the `assume` instructions first, for a back end that does not
+    /// read them (any but LLVM's), so that whatever only their conditions
+    /// needed goes with them.
+    pub(crate) drop_assumptions: bool,
     /// A pass injected after each real pass, to test that verification
     /// catches a broken one.
     #[cfg(test)]
-    pub(super) injected:        Option<fn(&mut super::draft::Draft<'_, '_>) -> bool>,
+    pub(super) injected:         Option<fn(&mut super::draft::Draft<'_, '_>) -> bool>,
 }
 
 #[cfg(debug_assertions)]
@@ -45,6 +49,7 @@ impl Default for OptimizerOptions<'_> {
             print_after_all:       None,
             time_passes:           None,
             bisect_limit:          None,
+            drop_assumptions:      false,
             #[cfg(test)]
             injected:              None,
         }

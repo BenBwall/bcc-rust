@@ -498,6 +498,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
+                self.cl_assignment(e, left, right);
                 self.convert(
                     right.expression,
                     self.types.non_atomic(left.ty).unqualified(),
@@ -962,6 +963,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if compound.is_some() {
             let ty = self.types.non_atomic(left.ty).unqualified();
+            self.check_compound_conversion_as_cl(e, left.expression, right.expression, info.ty);
             self.convert(e, ty, ConversionKind::Assignment);
             let mut result = Self::expression_result(e, ty);
             result.operation_type = Some(info.ty);
@@ -1270,6 +1272,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                     !converts
                 });
+                if self.unused.cl {
+                    let spelled = self.cl_parameter_spelling(function.expression, index, parameter);
+                    self.check_conversion_as_cl(
+                        parameter,
+                        spelled,
+                        info,
+                        super::super::cl_warnings::ClConversion::Function,
+                        argument.source_vectors,
+                    );
+                }
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
                 // A visible old-style definition supplies parameter types

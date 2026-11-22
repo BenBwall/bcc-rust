@@ -893,6 +893,11 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 ty: Type::I32,
                 arg: self.value()?,
             },
+            | Opcode::Assume => InstData::Unary {
+                opcode,
+                ty: Type::I1,
+                arg: self.value()?,
+            },
             | Opcode::AdjustTrampoline => InstData::Unary {
                 opcode,
                 ty: Type::Ptr,

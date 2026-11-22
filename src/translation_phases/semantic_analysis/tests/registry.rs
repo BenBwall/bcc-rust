@@ -43,7 +43,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 915);
+    assert_eq!(ids.len(), 916);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
@@ -550,4 +550,29 @@ fn m6_x86_signatures_project_identically_on_every_target() {
             },
         );
     }
+}
+
+/// Clang's purity table (`builtins/clang_purity.rs`) lists every spelling
+/// whose call can reach it exactly once: each registered spelling, each
+/// descriptor's ordinary library name and each builtin bcc knows but
+/// refuses. A builtin the generator overlooked would count as a side effect
+/// in `__assume` where Clang counts only its operands.
+#[test]
+fn every_builtin_spelling_has_clangs_purity_listed() {
+    let mut listed = std::collections::BTreeSet::new();
+    for spelling in crate::builtins::test_clang_listed_spellings() {
+        assert!(listed.insert(spelling), "listed twice: {spelling}");
+    }
+    let mut known = std::collections::BTreeSet::new();
+    for descriptor in crate::builtins::test_descriptors() {
+        _ = known.insert(descriptor.spelling);
+        known.extend(descriptor.library);
+    }
+    known.extend(crate::builtins::test_unimplemented.iter().copied());
+    let missing: Vec<_> = known.difference(&listed).collect();
+    let stale: Vec<_> = listed.difference(&known).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "run scripts/generate_clang_builtin_purity.py; missing {missing:?}, stale {stale:?}"
+    );
 }

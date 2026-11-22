@@ -50,6 +50,40 @@ fn hints_turn_a_two_address_add_into_one_instruction() {
     assert!(add.contains("addl\t%edx, %ecx"), "{add}");
 }
 
+/// An assumption is the optimizer's alone: the native back end emits
+/// nothing for it, nor for what only its condition needs, so the code is
+/// the code without it. MSVC extension: Microsoft Learn, "__assume".
+#[test]
+fn assumptions_emit_no_code() {
+    let with = assembly(
+        "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = icmp.i32 sgt v0, v1
+    v3 = zext.i8 v2
+    v4 = iconst.i8 0
+    v5 = icmp.i8 ne v3, v4
+    assume.i1 v5
+    v6 = iadd.i32 v0, v0
+    return v6
+}
+",
+        Target::LinuxGnu,
+    );
+    let without = assembly(
+        "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iadd.i32 v0, v0
+    return v1
+}
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(function_text(&with, "f"), function_text(&without, "f"));
+}
+
 #[test]
 fn constants_become_immediates_and_compares_fuse_into_branches() {
     let text = assembly(

@@ -418,19 +418,18 @@ impl Cli {
             let Ok(code) = code.parse() else {
                 continue;
             };
-            let Some(default) = ClWarnings::default_level(code) else {
+            if ClWarnings::default_level(code).is_none() {
                 continue;
-            };
-            let state = match value {
-                | "d" => ClWarningState::Disabled,
-                | "e" => ClWarningState::Error,
-                | "o" => ClWarningState::Once(default),
+            }
+            warnings = match value {
+                | "d" => warnings.with_state(code, ClWarningState::Disabled),
+                | "e" => warnings.with_state(code, ClWarningState::Error),
+                | "o" => warnings.with_default(code, true),
                 | level => match level.parse() {
-                    | Ok(level @ 1..=4) => ClWarningState::Level(level),
+                    | Ok(level @ 1..=4) => warnings.with_state(code, ClWarningState::Level(level)),
                     | _ => continue,
                 },
             };
-            warnings = warnings.with_state(code, state);
         }
         warnings
     }
@@ -1113,9 +1112,14 @@ impl FloatingPointGroup {
         // GCC's `-ffast-math` also turns `-fsignaling-nans` off and makes
         // excess precision fast (`set_fast_math_flags`), unless a later
         // `-fno-fast-math` cancels it; Clang ignores both options.
+        // Clang's `-fno-fast-math` also restores the target's default
+        // `errno` from the math functions, whatever option chose it before
+        // (`RenderFloatingPointOptions`); only Clang's targets differ.
         let configuration = match (self, relaxed) {
             | (Self::Fast, true) => configuration.with_fast_math_side_effects(),
-            | (Self::Fast, false) => configuration.with_fast_math_cancelled(),
+            | (Self::Fast, false) => configuration
+                .with_fast_math_cancelled()
+                .with_default_math_errno_restored(),
             | _ => configuration,
         };
         let configuration = match self {

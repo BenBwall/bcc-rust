@@ -931,6 +931,7 @@ pub(crate) enum BuiltinId {
     CpuSupports = 912,
     CpuIs = 913,
     X86Xgetbv = 914,
+    MsAssume = 915,
 }
 
 impl BuiltinId {
@@ -1074,12 +1075,13 @@ impl BuiltinId {
             | Self::X86Mfence => &scalar::BUILTINS[134],
             | Self::MsVaStart => &scalar::BUILTINS[135],
             | Self::Debugbreak => &scalar::BUILTINS[136],
-            | Self::Annotation => &scalar::BUILTINS[137],
-            | Self::VaArgPack => &scalar::BUILTINS[138],
-            | Self::VaArgPackLen => &scalar::BUILTINS[139],
-            | Self::Finite => &scalar::BUILTINS[140],
-            | Self::Finitef => &scalar::BUILTINS[141],
-            | Self::Finitel => &scalar::BUILTINS[142],
+            | Self::MsAssume => &scalar::BUILTINS[137],
+            | Self::Annotation => &scalar::BUILTINS[138],
+            | Self::VaArgPack => &scalar::BUILTINS[139],
+            | Self::VaArgPackLen => &scalar::BUILTINS[140],
+            | Self::Finite => &scalar::BUILTINS[141],
+            | Self::Finitef => &scalar::BUILTINS[142],
+            | Self::Finitel => &scalar::BUILTINS[143],
             | Self::LibraryAbort => &library::BUILTINS[0],
             | Self::LibraryAbs => &library::BUILTINS[1],
             | Self::LibraryAlignedAlloc => &library::BUILTINS[2],
@@ -1870,6 +1872,7 @@ pub(crate) fn descriptors() -> impl Iterator<Item = &'static BuiltinDescriptor> 
 
 const NAMES: &[(&str, BuiltinId)] = &[
     ("__annotation", BuiltinId::Annotation),
+    ("__assume", BuiltinId::MsAssume),
     ("__atomic_add_fetch", BuiltinId::AtomicGnuAddFetch),
     (
         "__atomic_always_lock_free",

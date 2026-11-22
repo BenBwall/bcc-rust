@@ -146,7 +146,9 @@ pub(crate) use report::OptimizationReport;
 use crate::{
     ir::{
         FuncId,
+        InstData,
         Module,
+        Opcode,
         Profile,
         verify_function,
     },
@@ -268,7 +270,7 @@ fn optimize_function(
     let mut draft = Draft::lift(&body, scratch);
     let mut state = Materialized {
         installed: false,
-        stale:     false,
+        stale:     options.drop_assumptions && drop_assumptions(&mut draft),
     };
     let (passes, rounds) = match &options.passes {
         | Some(list) => (list.as_slice(), 1),
@@ -297,6 +299,32 @@ fn optimize_function(
             module.function_mut(func).body = Some(body);
         }
     }
+}
+
+/// Removes the draft's `assume` instructions, which only LLVM's back end
+/// reads; dead-code elimination then removes what computed their
+/// conditions. Returns whether there was one.
+/// MSVC extension: Microsoft Learn, "__assume".
+fn drop_assumptions(draft: &mut Draft<'_, '_>) -> bool {
+    let mut assumptions = ArenaVec::new_in(draft.scratch);
+    for block in draft.alive_blocks() {
+        assumptions.extend(draft.block(block).insts.iter().copied().filter(|&inst| {
+            matches!(
+                *draft.inst(inst),
+                InstData::Unary {
+                    opcode: Opcode::Assume,
+                    ..
+                }
+            )
+        }));
+    }
+    for &inst in &assumptions {
+        draft.remove_inst(inst);
+    }
+    if !assumptions.is_empty() {
+        draft.sweep();
+    }
+    !assumptions.is_empty()
 }
 
 /// Runs one pass on the draft, then verifies or prints the function if asked.

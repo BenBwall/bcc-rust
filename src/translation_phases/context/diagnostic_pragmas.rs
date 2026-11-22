@@ -491,25 +491,27 @@ impl<'tu> Context<'tu> {
         specifier: WarningSpecifier,
         line: (u32, u32),
     ) {
-        let Some((code, default)) = u16::try_from(number)
+        let Some(code) = u16::try_from(number)
             .ok()
-            .and_then(|code| Some((code, ClWarnings::default_level(code)?)))
+            .filter(|&code| ClWarnings::default_level(code).is_some())
         else {
             return;
         };
-        let setting = match specifier {
-            | WarningSpecifier::Disable => ClWarningState::Disabled,
-            | WarningSpecifier::Error => ClWarningState::Error,
-            | WarningSpecifier::Default => ClWarningState::Level(default),
-            | WarningSpecifier::Once => ClWarningState::Once(default),
-            | WarningSpecifier::Level(level) => ClWarningState::Level(level),
+        let mut state = self.current_pragma_state();
+        let before = state.configuration.cl_warnings();
+        let (warnings, error) = match specifier {
+            | WarningSpecifier::Disable =>
+                (before.with_state(code, ClWarningState::Disabled), false),
+            | WarningSpecifier::Error => (before.with_state(code, ClWarningState::Error), true),
+            | WarningSpecifier::Default => (before.with_default(code, false), false),
+            | WarningSpecifier::Once => (before.with_default(code, true), false),
+            | WarningSpecifier::Level(level) =>
+                (before.with_state(code, ClWarningState::Level(level)), false),
             | WarningSpecifier::Suppress => {
                 self.pragma_warning_suppress(code, line);
                 return;
             },
         };
-        let mut state = self.current_pragma_state();
-        let warnings = state.configuration.cl_warnings().with_state(code, setting);
         state.configuration = state.configuration.with_cl_pragma(warnings, Some(code));
         // An error the pragma made is `cl`'s `error CNNNN`, not a warning
         // `/WX` makes an error after C2220.
@@ -519,7 +521,7 @@ impl<'tu> Context<'tu> {
             .flat_map(|warning| warning.groups)
         {
             let mask = crate::configuration::GroupMask::of(group);
-            state.mapped = if setting == ClWarningState::Error {
+            state.mapped = if error {
                 state.mapped.union(mask)
             } else {
                 state.mapped.difference(mask)

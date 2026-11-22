@@ -1,6 +1,7 @@
-/* The MSVC identity keeps Clang's earlier model of constant conversions: a
-   hexadecimal literal warns as a decimal one does, and nothing is reported
-   in code that does not run or in an operand a selection drops. */
+/* The MSVC identity reports cl's C4305 for a constant its conversion
+   truncates, in place of Clang's constant conversions: none for a value
+   that fits the target's width unsigned, whether written in hexadecimal or
+   pasted, and one in code that does not run. */
 #define CAT(a, b) a##b
 char hexadecimal = 0xdf;
 char pasted_decimal = CAT(2, 00);
@@ -8,10 +9,9 @@ char braced[2] = {223, 0};
 void f(char *p) {
   *p = 0xdf;
   *p = 223;
+  *p = 300;
   if (0)
-    *p = 223;
-  (void)_Generic(0, int: 0, default: (char){223});
-  (void)__builtin_choose_expr(1, 0, *p = 223);
+    *p = 300;
   return;
-  *p = 200;
+  *p = 400;
 }

@@ -710,6 +710,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::VaStart =>
                         self.intrinsic("llvm.va_start", &[arg], &[api.ty(Type::Ptr)]),
                     | Opcode::VaEnd => self.intrinsic("llvm.va_end", &[arg], &[api.ty(Type::Ptr)]),
+                    | Opcode::Assume => self.intrinsic("llvm.assume", &[arg], &[]),
                     // The IR rounds an integer or a wide float to `bf16` once,
                     // as libgcc's `__floattibf` and `__truncdfbf2` do. LLVM
                     // rounds an integer conversion to `float` first, and

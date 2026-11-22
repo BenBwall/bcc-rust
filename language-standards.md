@@ -247,7 +247,8 @@ LLVM build where GCC already folds (GCC folds `isnan` to 0 under
 `-ffinite-math-only -O0`, Clang and bcc only from `-O1`). The MSVC and TCC
 identities accept the options with no macro; TCC's personality ignores
 them as TCC does, and the MSVC personality still accepts `/fp:fast` with
-IEC 60559 semantics, which it permits. Because GCC 7 and later
+IEC 60559 semantics, which it permits (clang-cl's gives up the math
+functions' `errno`, as Clang's `-ffast-math` does). Because GCC 7 and later
 name the TS 18661-3 types as keywords, glibc's headers then stop declaring
 them, so this identity turns on `-ffloatn-types` unless `-fno-floatn-types`
 is given; with that, it defines `_Float32`, `_Float64`, `_Float32x`,
@@ -1385,7 +1386,7 @@ attribute catalog exactly as bundled Clang does for the selected target
 refuses or only accepts, and 0 for other names and vendors; see
 [the attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14).
 `__has_builtin` returns 1 for `__builtin_va_arg`, x86 `__rdtsc` (and
-Microsoft's `__debugbreak` with Microsoft extensions),
+Microsoft's `__debugbreak` and `__assume` with Microsoft extensions),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -2800,6 +2801,25 @@ was run):
   `__debugbreak` is the Microsoft breakpoint with Microsoft extensions
   (`llvm.debugtrap`, `int3`); the interpreter ends the program as an
   undebugged breakpoint does.
+  `__assume(e)` is Microsoft's promise that `e` holds, with Microsoft
+  extensions (`void (bool)`, as in Clang): `__assume(0)` marks the point
+  unreachable, for the return-flow warnings and in the IR, and another
+  operand becomes an `assume` instruction, `llvm.assume` for LLVM's back
+  end, which the optimizer drops first for the other back ends, and the
+  native back end skips with what only its condition needs. An operand with
+  side effects is never evaluated, as in `cl` and Clang; the Clang
+  identities warn of it (`-Wassume`), `cl` does not. The Clang identities
+  count side effects as Clang's `Expr::HasSideEffects` does: a call of a
+  function declared `const` or `pure`, or of a builtin Clang's tables mark
+  so (`src/builtins/clang_purity.rs`, a math function's only under
+  `-fno-math-errno`, `-ffast-math` or clang-cl's `/fp:fast`, but `fma`'s
+  also where the C library never sets `errno` from it: glibc, MinGW-w64's
+  and the UCRT), has only its operands', `_Generic` and
+  `__builtin_choose_expr` only their selected operand's, `sizeof` and
+  `__builtin_offsetof` none, and `va_arg` one; such an operand is evaluated
+  for `llvm.assume`, as Clang does, unless it runs an `asm` statement or a
+  variable length array's size. `__assume(&x)` draws Clang's
+  `-Wpointer-bool-conversion`.
   `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
   Microsoft's debug-information annotation with Microsoft extensions: its
   arguments must be wide string literals and it does not execute (bcc emits

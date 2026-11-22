@@ -546,7 +546,7 @@ impl Codegen<'_, '_, '_, '_, '_> {
                 });
                 return;
             },
-            | Opcode::VaEnd => return,
+            | Opcode::VaEnd | Opcode::Assume => return,
             | Opcode::StackRestore => {
                 self.push(arg);
                 self.emit(Instr::GlobalSet(0));

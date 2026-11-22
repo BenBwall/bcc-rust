@@ -81,13 +81,17 @@ use crate::{
 };
 
 /// Options that clang-cl ignores with a warning when given bare, as for an
-/// unknown `/` option: Clang options it takes only after `/clang:`, and GCC's
-/// `-fstrict-volatile-bitfields`, which bcc reads but Clang does not know.
-const CLANG_ONLY_OPTIONS: [&str; 6] = [
+/// unknown `/` option: Clang options it takes only after `/clang:` (the
+/// `char` signedness, and `-f[no-]fast-math`, so `/fp:fast -fno-fast-math`
+/// keeps `/fp:fast`), and GCC's `-fstrict-volatile-bitfields`, which bcc
+/// reads but Clang does not know.
+const CLANG_ONLY_OPTIONS: [&str; 8] = [
     "-fsigned-char",
     "-fno-signed-char",
     "-funsigned-char",
     "-fno-unsigned-char",
+    "-ffast-math",
+    "-fno-fast-math",
     "-fstrict-volatile-bitfields",
     "-fno-strict-volatile-bitfields",
 ];
@@ -918,6 +922,9 @@ struct State {
     diagnostics:             &'static str,
     /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
     warning_level:           u8,
+    /// The last level option was `/Wall`, which also shows the warnings
+    /// that are off by default.
+    all_warnings:            bool,
     /// Where in [`State::bcc`] the options of the last level stand, and how
     /// many there are.
     warning_level_options:   (usize, usize),
@@ -967,6 +974,7 @@ impl Default for State {
             standard_given:          false,
             diagnostics:             "msvc-caret",
             warning_level:           1,
+            all_warnings:            false,
             warning_level_options:   (0, 0),
             warnings_error:          false,
             warning_settings:        Vec::new(),
@@ -1089,15 +1097,18 @@ impl State {
             | "W4" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
             // clang-cl's `/Wall` is `-Weverything`; `cl`'s is its level 4
             // and more.
-            | "Wall" => self.set_warning_level(
-                invocation,
-                4,
-                if invocation.personality.is_clang_cl() {
-                    &["-Weverything"]
-                } else {
-                    &["-Wall", "-Wextra"]
-                },
-            ),
+            | "Wall" => {
+                self.set_warning_level(
+                    invocation,
+                    4,
+                    if invocation.personality.is_clang_cl() {
+                        &["-Weverything"]
+                    } else {
+                        &["-Wall", "-Wextra"]
+                    },
+                );
+                self.all_warnings = true;
+            },
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());
@@ -1139,6 +1150,22 @@ impl State {
             // An unsigned plain `char`, which also defines `_CHAR_UNSIGNED`.
             | "J" => self.bcc.push("-funsigned-char".into()),
             | "Zs" => self.syntax_only = true,
+            // clang-cl's `/fp:fast` is Clang's `-ffast-math`, which gives up
+            // the math functions' `errno` among the rest, and `/fp:precise`
+            // is `-ffp-model=precise`, which restores Clang's default
+            // semantics, the target's `errno` among them, as the Clang
+            // personality reads it (Clang's `CLCompatOptions.td` and
+            // `RenderFloatingPointOptions`). bcc keeps the rest of IEC 60559
+            // semantics, and `cl` keeps `errno` under both.
+            | "fp:fast" | "fp:precise" if invocation.personality == Personality::ClangCl =>
+                self.bcc.push(
+                    if option == "fp:fast" {
+                        "-fno-math-errno"
+                    } else {
+                        "-fno-fast-math"
+                    }
+                    .into(),
+                ),
             | "diagnostics:classic" => self.diagnostics = "msvc-classic",
             | "diagnostics:column" => self.diagnostics = "msvc",
             | "diagnostics:caret" => self.diagnostics = "msvc-caret",
@@ -1680,6 +1707,7 @@ impl State {
             drop(self.bcc.drain(at..at + count));
         }
         self.warning_level = level;
+        self.all_warnings = false;
         self.warning_level_options = (self.bcc.len(), options.len());
         self.bcc.extend(options.iter().map(OsString::from));
     }
@@ -1725,6 +1753,13 @@ impl State {
                 if !self.warnings_error && matches!(warning.code, 4047 | 4090 | 4113 | 4133) {
                     options.push(format!("-Wno-error={group}").into());
                 }
+            }
+        }
+        // `/Wall` shows the warnings that are off by default at their own
+        // level, unless a setting, which comes later, says otherwise.
+        if self.all_warnings {
+            for warning in CL_CODED_WARNINGS.iter().filter(|warning| warning.off) {
+                options.push(format!("--cl-warning={}:{}", warning.code, warning.level).into());
             }
         }
         options

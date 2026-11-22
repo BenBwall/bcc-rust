@@ -404,6 +404,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             } else {
                 self.check_returned_address(e, result);
+                if self.unused.cl {
+                    let spelled = self.cl_result_spelling(result);
+                    self.check_conversion_as_cl(
+                        result,
+                        spelled,
+                        info,
+                        super::cl_warnings::ClConversion::Return,
+                        source,
+                    );
+                }
                 self.convert(e, result.unqualified(), ConversionKind::Assignment);
             }
         }

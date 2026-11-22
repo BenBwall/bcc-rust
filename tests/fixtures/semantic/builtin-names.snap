@@ -1,4 +1,5 @@
 __annotation has=0001 implicit int(unprototyped) [ImplicitFunctionDeclaration] +0
+__assume has=0001 implicit int(unprototyped) [ImplicitFunctionDeclaration] +0
 __atomic_M6_unknown has=0000 implicit int(unprototyped) [ImplicitFunctionDeclaration] +0
 __atomic_add_fetch has=1111 intrinsic int(unprototyped) [InvalidArgumentCount] +0
 __atomic_always_lock_free has=1111 intrinsic int(unprototyped) [InvalidArgumentCount] +0

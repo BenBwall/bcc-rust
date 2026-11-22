@@ -107,6 +107,19 @@ use crate::{
 /// unoptimized build.
 const DEPTH: u32 = 64;
 
+/// Which compiler's rules `Analyzer::side_effects` follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EffectRules {
+    /// Every call and statement expression has side effects.
+    Syntactic,
+    /// The folding queries': a call of a function declared `const` or
+    /// `pure` has its operands' alone, and a statement expression its
+    /// contents', any `asm` or SEH statement included.
+    Folding,
+    /// Clang's `Expr::HasSideEffects` (`Analyzer::clang_has_side_effects`).
+    Clang { evaluation: bool },
+}
+
 /// The constant evaluator and the emitted `llvm.is.constant` need different
 /// answers for a discarded comma. GNU extension: `__builtin_constant_p`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1813,17 +1826,96 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         &self,
         expression: &'tu Expression<'tu>,
     ) -> bool {
-        self.side_effects(expression, false)
+        self.side_effects(expression, EffectRules::Syntactic)
+    }
+
+    /// Clang's `Expr::HasSideEffects` itself, which its `__assume` and
+    /// `__builtin_assume` ask: as [`Self::has_side_effects`], except that
+    /// a call has none of its own when Clang declares the function it names
+    /// `const` or `pure` ([`Self::clang_pure_callee`]); `_Generic` and
+    /// `__builtin_choose_expr` have only their selected operand's; a
+    /// statement expression has its statements' expressions' and its
+    /// declarations' initializers'; `va_arg`, `va_start`, `va_end` and
+    /// `va_copy` have one; and `sizeof`, `_Alignof`, `__builtin_offsetof`,
+    /// `__builtin_types_compatible_p` and `_Countof` have none, whatever
+    /// their operands. With `evaluation`, what evaluating the expression
+    /// would run counts too, which Clang's predicate passes over: an `asm`
+    /// statement, and the size of a variable length array type that
+    /// `sizeof` or `_Alignof` names.
+    /// GNU extension: GCC manual, "Statement Exprs"; Clang's `Expr.cpp`.
+    pub(in crate::translation_phases::semantic_analysis) fn clang_has_side_effects(
+        &self,
+        expression: &'tu Expression<'tu>,
+        evaluation: bool,
+    ) -> bool {
+        self.side_effects(expression, EffectRules::Clang { evaluation })
     }
 
     fn query_has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
         if self.effects_pure(expression, super::super::EffectContext::Value) {
             return false;
         }
-        self.side_effects(expression, true)
+        self.side_effects(expression, EffectRules::Folding)
     }
 
-    fn side_effects(&self, expression: &'tu Expression<'tu>, inspect_statements: bool) -> bool {
+    /// Whether Clang declares the function the callee `callee` names
+    /// `const` or `pure`, through parentheses, `*` and `&`
+    /// (`Expr::getReferencedDeclOfCallee`): one declared so, or a builtin
+    /// Clang's tables mark ([`crate::builtins::clang_purity`]), a math
+    /// function's only under `-fno-math-errno`, or `fma` where the C library
+    /// never sets `errno` from it, which Clang takes a GNU environment's
+    /// and Microsoft's C runtime to be (`Sema::AddKnownFunctionAttributes`).
+    /// A call through a pointer object names no function.
+    fn clang_pure_callee(&self, mut callee: &'tu Expression<'tu>) -> bool {
+        use crate::builtins::ClangPurity;
+        while let ExpressionType::Parenthesized { expression: inner }
+        | ExpressionType::Unary {
+            operator: UnaryOperator::Indirection | UnaryOperator::AddressOf,
+            operand_expression: inner,
+        } = callee.kind
+        {
+            callee = inner;
+        }
+        let ExpressionType::Identifier(_) = callee.kind else {
+            return false;
+        };
+        let Some(binding) = self.expression_info(callee).binding else {
+            return false;
+        };
+        if self
+            .functions
+            .emission
+            .pure_functions
+            .contains_key(&binding)
+        {
+            return true;
+        }
+        let data = self.bindings[binding];
+        let spelling = self.context.string_cache.at(data.name.name);
+        if data.kind != BindingKind::Function
+            || !(data.origin.is_intrinsic()
+                || (data.linkage == Linkage::External && self.library_builtin_name(spelling)))
+        {
+            return false;
+        }
+        match crate::builtins::clang_purity(spelling) {
+            | Some(ClangPurity::Const | ClangPurity::Pure) => true,
+            | Some(ClangPurity::ConstWithoutErrno) => {
+                let configuration = self.context.configuration;
+                configuration
+                    .relaxes_floating_point(crate::configuration::RelaxedFloatingPoint::NoMathErrno)
+                    || (matches!(
+                        spelling.strip_prefix("__builtin_").unwrap_or(spelling),
+                        "fma" | "fmaf" | "fmal"
+                    ) && configuration.target().gnu_or_microsoft_c_runtime())
+            },
+            | None => false,
+        }
+    }
+
+    fn side_effects(&self, expression: &'tu Expression<'tu>, rules: EffectRules) -> bool {
+        let folding = rules == EffectRules::Folding;
+        let clang = matches!(rules, EffectRules::Clang { .. });
         let mut work = ArenaVec::new_in(self.scratch);
         // Each expression, with whether its value is read if it is an
         // lvalue.
@@ -1831,13 +1923,47 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         while let Some((expression, read)) = work.pop() {
             let effect = match expression.kind {
                 | ExpressionType::Call { .. }
-                    if inspect_statements
+                    if folding
                         && self.effects_pure(expression, super::super::EffectContext::Value) =>
                     false,
                 | ExpressionType::Call {
                     function_expression,
                     arguments,
-                } if inspect_statements => {
+                } if clang => {
+                    if !self.clang_pure_callee(function_expression) {
+                        return true;
+                    }
+                    work.push((function_expression, true));
+                    work.extend(arguments.iter().map(|&argument| (argument, true)));
+                    false
+                },
+                | ExpressionType::Builtin(syntax) if clang => match syntax.keyword {
+                    | KeywordTokenType::BuiltinVaArg
+                    | KeywordTokenType::BuiltinVaStart
+                    | KeywordTokenType::BuiltinVaEnd
+                    | KeywordTokenType::BuiltinVaCopy => true,
+                    | KeywordTokenType::BuiltinOffsetof
+                    | KeywordTokenType::BuiltinTypesCompatible => false,
+                    | _ => {
+                        match self.expression_info(expression).selected_expression {
+                            | Some(selected) => work.push((selected, read)),
+                            | None => super::labels::expression_children(
+                                self.scratch,
+                                expression,
+                                |child| work.push((child, true)),
+                            ),
+                        }
+                        false
+                    },
+                },
+                | ExpressionType::Countof(_) if clang => false,
+                | ExpressionType::SizeofType(_) | ExpressionType::AlignofType(_)
+                    if rules == (EffectRules::Clang { evaluation: false }) =>
+                    false,
+                | ExpressionType::Call {
+                    function_expression,
+                    arguments,
+                } if folding => {
                     let pure = self
                         .expression_info(function_expression)
                         .binding
@@ -1850,7 +1976,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     false
                 },
                 | ExpressionType::Generic(_) | ExpressionType::Builtin(_)
-                    if inspect_statements
+                    if rules != EffectRules::Syntactic
                         && self
                             .expression_info(expression)
                             .selected_expression
@@ -1864,14 +1990,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     ));
                     false
                 },
-                | ExpressionType::StatementExpression(block) if inspect_statements => {
+                | ExpressionType::StatementExpression(block) if rules != EffectRules::Syntactic => {
                     let mut statements = ArenaVec::new_in(self.scratch);
                     statements.push(block);
                     while let Some(statement) = statements.pop() {
-                        if matches!(
-                            statement.kind,
-                            StatementType::Asm(_) | StatementType::MsAsm(_) | StatementType::Seh(_)
-                        ) {
+                        let effects = match statement.kind {
+                            | StatementType::Asm(_) | StatementType::MsAsm(_) =>
+                                rules != (EffectRules::Clang { evaluation: false }),
+                            | StatementType::Seh(_) => folding,
+                            | _ => false,
+                        };
+                        if effects {
                             return true;
                         }
                         super::labels::statement_children(

@@ -856,6 +856,10 @@ impl Verifier<'_, '_, '_, '_> {
                     checker.require(ty == Type::I32, ty);
                     checker.operand(0, arg, Type::Ptr);
                 },
+                | Opcode::Assume => {
+                    checker.require(ty == Type::I1, ty);
+                    checker.operand(0, arg, Type::I1);
+                },
                 | _ if opcode.is_conversion() => {
                     if let Some(from) = checker.value_type(arg)
                         && !conversion_is_legal(opcode, from, ty)

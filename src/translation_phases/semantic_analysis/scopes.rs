@@ -68,6 +68,9 @@ impl Analyzer<'_, '_, '_> {
 
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
     pub(super) fn leave(&mut self) {
+        if self.unused.cl && self.scopes[self.scope].kind == ScopeKind::Function {
+            self.report_cl_initializers();
+        }
         if self.unused.tracking {
             self.report_unused_in_scope();
         }

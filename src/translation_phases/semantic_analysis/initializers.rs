@@ -214,7 +214,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ty,
             initializer,
             Writes::ROOT,
-            Site::root(initializer.source_vectors),
+            self.cl_root_site(initializer.source_vectors),
         ));
         while let Some(task) = work.pop() {
             #[cfg(test)]
@@ -750,8 +750,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Plans what the expression `info`, already converted, stores in the
-    /// subobject `target` at `site`, and checks a static object's value;
-    /// `root` when the expression is the object's own initializer.
+    /// subobject `target` at `site`, and checks a static object's value and
+    /// the conversion `cl` warns of; `root` when the expression is the
+    /// object's own initializer.
     /// C99: §6.7.8p4, p. 125; PDF p. 137; §6.7.8p13, p. 126; PDF p. 138.
     fn plan_expression_value(
         &mut self,
@@ -762,6 +763,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         static_storage: bool,
         root: bool,
     ) {
+        self.cl_initializer(target, info, site.cl_target, static_storage);
         let e = info.expression;
         let destination = site.destination(target);
         let bit_field = site.bits.is_some();
@@ -2463,6 +2465,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
             return;
         }
+        let outer_target = self.cl_initialized.replace(index);
         let (ty, flexible) = self.check_initializer(
             binding.ty,
             initializer,
@@ -2470,6 +2473,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             binding.duration.is_static_or_thread(),
             Some(binding.name.source_vectors),
         );
+        self.cl_initialized = outer_target;
         self.bindings[index].ty = ty;
         if let Some(flexible) = flexible {
             _ = self.flexible_arrays.insert(index, flexible);

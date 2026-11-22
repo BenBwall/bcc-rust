@@ -58,7 +58,32 @@ deep in another innermost block, and no C4532 for a `goto` from a `__try`
 block inside the `__finally` block;
 `sema-cl-pragma-suppress-push-msvc` pins a `suppress`
 whose next line is a `push` lasting until that `push`'s `pop`. Both match `cl`
-19.44 (`/W4 /diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
+19.44 (`/W4 /diagnostics:column`) byte for byte.
+`cl`'s conversion and constant-condition warnings (2026-11-22):
+`sema-cl-conversions-msvc` pins C4244 at its three levels (an integer made a
+narrower type when its value is wider, a floating value made an integer or
+a narrower floating type, an `int` made `float`), C4305 for constants that
+do not fit, and C4245 for a negative one made unsigned, in each context
+(`initializing`, `=`, `+=`, `function`, `return`), with types named as
+written (`Byte`, `const int`, `U32`), none for values `cl` measures as
+narrow enough (`ch + 1`, `i % 10`, `u >> 16`, `u & 0xff`) or for `|=`, and
+an automatic object's initializers after the function's other warnings.
+`sema-cl-constant-condition-msvc` pins C4127 and its exemptions: a literal
+0 or 1 under parentheses, unary operators, a cast to its own type, a macro or
+the operand a constant `?:` selects; none for an address.
+`sema-cl-narrowing-wall-msvc` pins `/Wall`'s C4242 (`--cl-warning=4242:4`)
+in place of C4244 for an uncomputed or 64-bit value, also where a pragma
+disables C4244. `sema-cl-folded-conditional-msvc` pins a `?:` whose
+condition `cl` folds (an integer, null pointer or floating constant, not a
+comma): C4244 measured and reported at the selected operand in each
+context, C4100 for a parameter named only in the other or behind `0 &&`,
+but not under `sizeof`, the parameters last first, and C4127 at the
+selected operand. `sema-cl-signed-constants-msvc` pins how wide C4244 takes
+a constant: a 64-bit unsigned one of 2^63 or more read as negative (`~0ull`
+is -1, so `flag ? ~0ull : 0` narrows silently), a negative one as its two's
+complement (-32768 fits a `short`, -32769 does not), and a remainder by a
+negative constant as its magnitude and a sign. The five match `cl` 19.44
+(`/W4` or `/Wall`, `/diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto
 forms, `'__leave' statement not in __try block`, and `-Wjump-seh-finally` for
@@ -1001,7 +1026,7 @@ pinned by the `.args` sidecars.
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
-| `ValueWarning` | [GCC](sema-value-warnings-gcc.c), [Clang](sema-value-warnings-clang.c), [Clang int to float](sema-int-float-clang.c), through GNU `?:` and `__extension__` ([Clang](sema-int-float-gnu-clang.c)); constant conversions in code that does not run, in the operands `_Generic` and `__builtin_choose_expr` do not select (in file-scope and static initializers too), in conditional operands and from 128-bit values: [GCC](sema-constant-conversion-gcc.c), [Clang](sema-constant-conversion-clang.c); Clang's silence for a same-width conversion of a hexadecimal, octal or binary literal (pasted ones too) or of a character's element in its own braces, and its report of a same-width one in code that does not run but not in an unselected operand: [Clang](sema-constant-conversion-literals-clang.c), unchanged under the MSVC identity ([MSVC](sema-constant-conversion-literals-msvc.c)); Clang's silence where a system macro wrote the conversion's context, through commas, revisited lists and pasted tokens: [Clang](sema-constant-conversion-system-macro-clang.c) |
+| `ValueWarning` | [GCC](sema-value-warnings-gcc.c), [Clang](sema-value-warnings-clang.c), [Clang int to float](sema-int-float-clang.c), through GNU `?:` and `__extension__` ([Clang](sema-int-float-gnu-clang.c)); constant conversions in code that does not run, in the operands `_Generic` and `__builtin_choose_expr` do not select (in file-scope and static initializers too), in conditional operands and from 128-bit values: [GCC](sema-constant-conversion-gcc.c), [Clang](sema-constant-conversion-clang.c); Clang's silence for a same-width conversion of a hexadecimal, octal or binary literal (pasted ones too) or of a character's element in its own braces, and its report of a same-width one in code that does not run but not in an unselected operand: [Clang](sema-constant-conversion-literals-clang.c), which the MSVC identity replaces with `cl`'s C4305, matching `cl` 19.44 (`/W2 /diagnostics:column`), whose column for a literal pasted by `##` is the macro's name ([MSVC](sema-constant-conversion-literals-msvc.c)); Clang's silence where a system macro wrote the conversion's context, through commas, revisited lists and pasted tokens: [Clang](sema-constant-conversion-system-macro-clang.c) |
 | `TypeLimits` | [GCC](sema-type-limits-gcc.c), [Clang](sema-type-limits-clang.c) |
 | `ShadowOrBody` | Shadowing: [GCC](sema-shadow-gcc.c), [Clang](sema-shadow-clang.c); by declaration kind: [GCC](sema-shadow-kinds-gcc.c), [Clang](sema-shadow-kinds-clang.c); of a system header's declarations: [GCC](sema-shadow-system-gcc.c), [Clang](sema-shadow-system-clang.c); empty bodies: [GCC](sema-empty-body-gcc.c), [Clang](sema-empty-body-clang.c); multiline headers and empty macros: [Clang](sema-empty-body-lines-clang.c) |
 | `Parentheses` | [GCC](sema-parentheses-gcc.c), [Clang](sema-parentheses-clang.c) |

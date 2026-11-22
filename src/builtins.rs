@@ -14,8 +14,10 @@
 //! handlers check these contracts and retain instances; lowering owns
 //! executable implementations. `external.rs` is the external-symbol contract:
 //! the library functions that return twice or restore an environment, which
-//! every phase reads from there instead of matching spellings itself. No
-//! syntax, semantic type IDs or IR types belong here.
+//! every phase reads from there instead of matching spellings itself.
+//! `clang_purity.rs`, generated from Clang's builtin tables, lists the
+//! builtins Clang declares `const` or `pure`. No syntax, semantic type IDs
+//! or IR types belong here.
 //!
 //! C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84 (call contracts);
 //! §7.1.4, pp. 166-167; PDF pp. 178-179 (library equivalence).
@@ -28,6 +30,7 @@ mod contract;
 mod atomic;
 mod bits;
 mod checked;
+mod clang_purity;
 mod external;
 mod index;
 mod library;
@@ -37,6 +40,12 @@ mod type_generic;
 mod vector;
 mod x86;
 
+#[cfg(test)]
+pub(crate) use clang_purity::listed_spellings as test_clang_listed_spellings;
+pub(crate) use clang_purity::{
+    ClangPurity,
+    clang_purity,
+};
 pub(crate) use contract::*;
 pub(crate) use external::{
     ExternalContract,
@@ -55,6 +64,8 @@ pub(crate) use library::{
     ordinary,
 };
 pub(crate) use math::computes_without_errno;
+#[cfg(test)]
+pub(crate) use scalar::UNIMPLEMENTED as test_unimplemented;
 pub(crate) use scalar::unimplemented;
 #[cfg(test)]
 pub(crate) use x86::MERGED as test_merged_x86;

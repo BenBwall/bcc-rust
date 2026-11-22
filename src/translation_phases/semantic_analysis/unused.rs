@@ -113,6 +113,10 @@ struct Usage {
     /// A local object declared with an initializer, which `cl` counts as no
     /// reference.
     initialized: bool,
+    /// A reference `cl` counts, and one it does not: a reference in an
+    /// operand that it removes by folding a condition, outside `sizeof`.
+    cl_counted:  bool,
+    cl_removed:  bool,
 }
 
 /// How a discarded assignment writes the identifier expression it names.
@@ -223,6 +227,9 @@ pub(super) struct UnusedState<'s> {
     /// blocks left so far: each block's own before those of the blocks it
     /// holds, in the order the blocks begin.
     cl_pending: ArenaVec<'s, (usize, Identifier)>,
+    /// How many operands being analyzed `cl` removes, by folding the
+    /// condition that decides them ([`Analyzer::cl_skipped_operand`]).
+    cl_skipped: u32,
 }
 
 /// Where a function's state begins in what [`UnusedState`] keeps for GCC.
@@ -340,6 +347,7 @@ impl<'s> UnusedState<'s> {
             tcc_deferred: ArenaVec::new_in(scratch),
             function_symbols: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             cl_pending: ArenaVec::new_in(scratch),
+            cl_skipped: 0,
         }
     }
 
@@ -501,12 +509,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let current = self.functions.current.and_then(|function| function.binding);
         let own_body =
             current.is_some_and(|function| self.bindings[function].name.name == data.name.name);
+        let removed = self.unused.cl_skipped != 0 && !self.unevaluated_operand();
         let usage = if data.linkage == Linkage::Internal {
             self.unused.file_scope.entry(data.name.name).or_default()
         } else {
             self.unused.variable(binding)
         };
         usage.referenced = true;
+        usage.cl_counted |= !removed;
+        usage.cl_removed |= removed;
         usage.read |= !written_gcc;
         usage.outside |= !own_body;
         if !written_clang {
@@ -913,8 +924,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// `cl`'s report of a function's unreferenced parameters and local
     /// variables, which waits for the end of the function, and stops after
-    /// the unit's first error: its parameters
-    /// and outermost block's variables, then each inner block's, in the
+    /// the unit's first error: its parameters, last listed first, and
+    /// outermost block's variables, then each inner block's, in the
     /// order the blocks begin. `cl` orders the names of one block by its
     /// symbol table, which bcc does not model; bcc keeps their order.
     /// Microsoft Learn: "Compiler Warning (level 4) C4100", "Compiler
@@ -984,6 +995,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 name.source_vectors = listed.source_vectors;
             }
         }
+        // `cl` reports the parameters first, from the last the declarator
+        // lists to the first, and the variables after them.
+        let mut keyed = ArenaVec::new_in(self.scratch);
+        for (index, &(binding, name)) in own.iter().enumerate() {
+            let key = if self.bindings[binding].kind == BindingKind::Parameter {
+                let listed = identifiers
+                    .and_then(|list| list.iter().position(|listed| listed.name == name.name))
+                    .unwrap_or(index);
+                (false, usize::MAX - listed)
+            } else {
+                (true, index)
+            };
+            keyed.push((key, (binding, name)));
+        }
+        keyed.sort_unstable_by_key(|&(key, _)| key);
+        own.clear();
+        own.extend(keyed.iter().map(|&(_, entry)| entry));
         self.with_report_order(order, |analyzer| {
             for &(binding, name) in own.iter().chain(&pending) {
                 analyzer.report_unused_as_cl(binding, name);
@@ -1010,7 +1038,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn report_unused_as_cl(&mut self, binding: usize, name: Identifier) {
         let data = self.bindings[binding];
         let usage = *self.unused.variable(binding);
-        if usage.referenced
+        if (usage.referenced && (usage.cl_counted || !usage.cl_removed))
             || usage.exempt
             || data.linkage != Linkage::None
             || data.duration != super::Duration::Automatic
@@ -1028,6 +1056,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => UnusedRule::ClVariable,
         };
         self.unused_rule(rule, name.source_vectors, Some(name.name));
+    }
+
+    /// Starts (`begin`) or ends an operand of `?:`, `&&` or `||` that is
+    /// taken when `condition` has the truth value `live`. `cl` removes the
+    /// operand when it folds the condition to the other value, outside
+    /// `sizeof`, and counts no reference in it: `1 ? a : b` leaves `b`
+    /// unreferenced, while a `sizeof` in the removed operand still counts.
+    /// Measured against `cl` 19.44 (C4100, C4101, C4189).
+    /// C99: §6.5.13p4, p. 89; PDF p. 101; §6.5.14p4, p. 89; PDF p. 101;
+    /// §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn cl_skipped_operand(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        live: bool,
+        begin: bool,
+    ) {
+        if self.unused.cl
+            && !self.unevaluated_operand()
+            && self.cl_truth(condition) == super::cl_warnings::ClTruth::Constant(!live)
+        {
+            if begin {
+                self.unused.cl_skipped += 1;
+            } else {
+                self.unused.cl_skipped -= 1;
+            }
+        }
     }
 
     /// Records that the local object `binding` is declared with an

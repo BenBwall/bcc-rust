@@ -1416,6 +1416,8 @@ impl SemanticErrorKind {
             | Self::ClDivideByZero => "the divisor is zero",
             | Self::ClError(_) => "here",
             | Self::ClReturnFlow { .. } => "control reaches the end of the function",
+            | Self::ValueWarning(crate::configuration::DiagnosticGroup::Assume) =>
+                "this operand is never evaluated",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
@@ -1666,9 +1668,17 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
+                    | crate::configuration::DiagnosticGroup::Assume
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::SignCompareEquality
+                    | crate::configuration::DiagnosticGroup::ClConstantCondition
+                    | crate::configuration::DiagnosticGroup::ClFloatingConversion
+                    | crate::configuration::DiagnosticGroup::ClWideConversion
+                    | crate::configuration::DiagnosticGroup::ClIntConversion
+                    | crate::configuration::DiagnosticGroup::ClTruncation
+                    | crate::configuration::DiagnosticGroup::ClNarrowingConversion
+                    | crate::configuration::DiagnosticGroup::ClSignedConversion
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
@@ -2170,6 +2180,11 @@ impl SemanticErrorKind {
                 "constant rounded by conversion to a floating type",
                 "C99 §6.3.1.4p2: an integer the floating type cannot represent exactly becomes \
                  a nearby value it can",
+            ),
+            | Self::ValueWarning(crate::configuration::DiagnosticGroup::Assume) => (
+                "assumption ignored",
+                "MSVC extension: Microsoft Learn, \"__assume\": an assumption is never \
+                 evaluated, so one with side effects promises nothing",
             ),
             | Self::ValueWarning(_) => (
                 "constant changed by conversion",
@@ -3262,6 +3277,13 @@ impl SemanticErrorKind {
             | Self::Parentheses(G::Parentheses) => 4706,
             | Self::ExceptionalConstant(G::ShiftCountOverflow | G::ShiftCountNegative, _) => 4293,
             | Self::JumpOutOfFinally => 4532,
+            | Self::ValueWarning(G::ClConstantCondition) => 4127,
+            | Self::ValueWarning(
+                G::ClFloatingConversion | G::ClWideConversion | G::ClIntConversion,
+            ) => 4244,
+            | Self::ValueWarning(G::ClTruncation) => 4305,
+            | Self::ValueWarning(G::ClNarrowingConversion) => 4242,
+            | Self::ValueWarning(G::ClSignedConversion) => 4245,
             | Self::ImplicitFunctionDeclaration | Self::ImplicitLibraryFunction(_) => 4013,
             | Self::VoidReturnMismatch => 4098,
             | Self::ReturnMismatch => 4033,
@@ -3479,7 +3501,10 @@ impl SemanticError {
     /// "Compiler Warning (level 4) C4189", "Compiler Warning (level 3)
     /// C4018", "Compiler Warning (level 4) C4389", "Compiler Warning (level
     /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Warning
-    /// (level 1) C4532", "Compiler Error C2124".
+    /// (level 1) C4532", "Compiler Error C2124", "Compiler Warning (level 4)
+    /// C4127", "Compiler Warning (level 2) C4244", "Compiler Warning (levels
+    /// 3 and 4) C4244", "Compiler Warning (level 4, off) C4242", "Compiler
+    /// Warning (level 4) C4245", "Compiler Warning (level 1) C4305".
     fn msvc_message<'d>(
         &self,
         context: &Context<'_>,
@@ -3539,6 +3564,18 @@ impl SemanticError {
             | SemanticErrorKind::SignCompare => ("C4018", arena.alloc_str(name)),
             | SemanticErrorKind::SignCompareEquality => ("C4389", arena.alloc_str(name)),
             | SemanticErrorKind::Parentheses(G::Parentheses) => ("C4706", arena.alloc_str(name)),
+            // Worded by `Analyzer::check_conversion_as_cl` and
+            // `Analyzer::check_constant_condition_as_cl`.
+            | SemanticErrorKind::ValueWarning(G::ClConstantCondition) =>
+                ("C4127", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(
+                G::ClFloatingConversion | G::ClWideConversion | G::ClIntConversion,
+            ) => ("C4244", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClTruncation) => ("C4305", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClNarrowingConversion) =>
+                ("C4242", arena.alloc_str(name)),
+            | SemanticErrorKind::ValueWarning(G::ClSignedConversion) =>
+                ("C4245", arena.alloc_str(name)),
             | SemanticErrorKind::UndeclaredIdentifier
             | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",

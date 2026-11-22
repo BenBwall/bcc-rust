@@ -241,6 +241,8 @@ impl Machine<'_, '_, '_> {
                         self.va_end(value)?;
                         return Ok(None);
                     },
+                    // A promise for the optimizer, which nothing checks.
+                    | Opcode::Assume => return Ok(None),
                     | Opcode::VaArg => self.va_arg(ty, value)?,
                     | Opcode::Inttoptr => match value {
                         | RuntimeValue::Int(bits) =>

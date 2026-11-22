@@ -86,6 +86,19 @@ impl Analyzer<'_, '_, '_> {
         available.then(|| self.descriptor_type(descriptor))
     }
 
+    /// Whether a function declaration of the ordinary name `spelling` can
+    /// declare a library builtin, as an implicit declaration of it would
+    /// ([`Self::implicit_library_type`]).
+    pub(in crate::translation_phases::semantic_analysis) fn library_builtin_name(
+        &self,
+        spelling: &str,
+    ) -> bool {
+        self.library_name(spelling)
+            && (!crate::builtins::extension_name(spelling)
+                || self.context.configuration.gnu_extensions())
+            && crate::builtins::ordinary(spelling).is_some()
+    }
+
     /// Whether the ordinary name `spelling` of a library function is
     /// a builtin: freestanding ordinary names retain C89 implicit int, and
     /// `-fno-builtin` and `-fno-builtin-NAME` make the name an ordinary

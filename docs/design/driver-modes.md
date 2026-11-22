@@ -953,7 +953,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stdout (to stderr under `/E`, `/EP` and `/P`), the path absolute (see "Preprocessed text" for where `cl` keeps it relative) |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
-| `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
+| `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect (clang-cl's `/fp:` options set the math functions' `errno`, see "clang-cl") |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
@@ -1042,9 +1042,14 @@ words, and drop bcc's notes:
 | warning C4098 | `'g': 'void' function returning a value` | 1 | `return-mismatch` |
 | warning C4100 | `'p': unreferenced parameter` | 4 | `unused-parameter` |
 | warning C4101 | `'a': unreferenced local variable` | 3 | `unused-variable` |
+| warning C4127 | `conditional expression is constant` | 4 | bcc's own, unnamed |
 | warning C4133 | `'=': incompatible types - from 'float *' to 'int *'` | 1 | `incompatible-pointer-types` |
 | warning C4189 | `'b': local variable is initialized but not referenced` | 4 | `unused-but-set-variable` |
+| warning C4242 | `'=': conversion from 'int' to 'char', possible loss of data`, off unless `/Wall` or a setting names it | 4 | bcc's own, unnamed |
+| warning C4244 | `'initializing': conversion from 'double' to 'int', possible loss of data` | 2, 3 or 4 | bcc's own, unnamed |
+| warning C4245 | `'=': conversion from 'int' to 'unsigned int', signed/unsigned mismatch` | 4 | bcc's own, unnamed |
 | warning C4293 | `'<<': shift count negative or too big, undefined behavior` | 1 | `shift-count-overflow`, `shift-count-negative` |
+| warning C4305 | `'initializing': truncation from 'double' to 'float'` | 2 | bcc's own, unnamed |
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
 | warning C4389 | `'==': signed/unsigned mismatch`, of an equality comparison | 4 | bcc's own, unnamed: only its number reaches it |
@@ -1072,10 +1077,14 @@ leaves a `__finally` block draws C4532, a `return` nothing. C4100, C4101
 and C4189 name a parameter, or a variable with automatic storage, that
 nothing refers to (an assignment refers to it; C4189's initializer does not),
 under the settings at its declaration; `cl` reports them at the end of the
-function, the parameters and the outermost block's variables first and then
-each inner block's in the order the blocks begin, and none once the unit has
-had an error (a warning `/WX` promotes aside), and so does bcc; for an
-old-style definition C4100 is at the parameter's name in the identifier list.
+function, the parameters (the last one listed first) and the outermost
+block's variables first and then each inner block's in the order the blocks
+begin, and none once the unit has had an error (a warning `/WX` promotes
+aside), and so does bcc; for an old-style definition C4100 is at the
+parameter's name in the identifier list. A reference in an operand that `cl`
+folds away does not count (`b` in `1 ? a : b`, `0 && b` and `1 || b`, by the
+constant conditions described for C4244 below), but one under `sizeof` does,
+where `cl` folds nothing.
 C4715 and C4716 are `cl`'s code generator's: a path reaches the closing brace
 or a `return` without a value, and the function has a `return` with a value,
 reached or not (C4715: `if (0) return 1;` is one), or has none (C4716), `main`
@@ -1092,6 +1101,83 @@ alone (`C:\src\a.c(5) : warning C4715: ...`), with `error C2220` before each
 under `/WX`, and so they do in bcc; no group of bcc's controls them, only
 their numbers. C2124, like `cl`'s, is reported only while the unit has had
 no error, and C1075 is a fatal error, after which nothing more is reported.
+
+C4244, C4305 and C4245 are a conversion as if by assignment (`initializing`,
+`=`, `function` for a prototyped call's argument, `return`, or the
+compound operator, `+=`). C4244 is a floating value made an integer (level
+2), a value made a narrower floating type (level 3, or 4 from `long double`
+to `double`, which `cl` reports though both are 64 bits), an integer made
+`float` from a 32-bit type or any floating type from a 64-bit one (level 2;
+not `!x`), and an integer made a narrower integer type when its value is
+wider than the type (level 4 from `int` and `unsigned int`, level 3 from
+the others). `cl` measures how wide the value is rather than its type:
+an object, a call or a bit-field (whatever its width) is as wide as its
+type, a constant as its magnitude, `&` and `%` the narrower of their
+operands (a constant divisor counting one less), `>>` by a constant that
+many bits less, `<<`, unary operators and the operand of a cast, which
+keeps no more than its type, as wide as before, a comparison 1 bit, and
+`+`, `-`, `*`, `/`, `|`, `^` and `?:` the wider operand, so `ch = ch + 1`,
+`ch = i & 0xff` and `ch = i >> 24` draw nothing. A `?:` whose condition is a
+constant `cl` folds to the operand it selects, which alone it measures and
+reports at (`ch = sizeof(long) == 8 ? ll : sc` draws nothing): an integer
+constant, `0 && x`, an integer made a pointer (a null pointer is false) or a
+floating constant (`-0.0` is false), but not an address, a string literal or
+anything with a comma operator. Such a fold that leaves a constant converts
+it as one. A compound assignment
+converts the result of the operation (`'int' to 'char'` for `char += short`)
+and narrows only for `+=`, `-=`, `*=` and `/=` of a wider right operand;
+`_Bool` is a byte there, and an integer made floating draws nothing. A
+constant draws C4305 instead when its new type does not hold it (an
+integer that fits neither the signed nor the unsigned type of that width,
+a floating constant made `float` inexactly, but not to an infinity or
+zero; `cl` reads a 64-bit unsigned constant as signed, so
+`0xFFFFFFFFFFFFFFFFull` is -1 and fits), or C4245 when it is negative and
+made unsigned; a floating constant made an integer is C4244, and one made
+`_Bool` only when it is 1 and not a `?:`. No
+enumeration, on either side, and no value made `_Bool` draws one. `cl`
+names both types as written, typedef names and qualifiers included
+(`'volatile Byte'`, `'U32'`, and `'const u64'` for the member of a `const`
+object), and an operation by an operand that already has its type
+(`'U32'` for `u32 + 1`, `'int'` for `ush + 1`); bcc's types keep no typedef
+names, so each binding and member records how its declaration wrote its
+type, and a conversion whose types bcc cannot name so draws nothing. `cl`
+checks conversions only where the warning level is 2 or more, whatever
+`/w1`, `/we` or a pragma says of the warnings, reports them at the value
+(the operator that computes it, `?` for a conditional expression it does
+not fold, or where it begins; a floating value in parentheses at the first
+of them), and an automatic
+object's initializer conversions at the end of its function, before
+C4100 and the others it reports there. C4244's level depends on the
+conversion, so `/wd`, `/we`, `/w1`-`/w4` and the pragmas set all three, and
+`default` restores each. Under `/Wall`, which shows the warnings that are
+off by default, C4242 replaces C4244 for the narrowing of a 64-bit value
+and of one `cl` has not computed (an object, a member, a call, a cast to
+its own type, or such an operand that a constant `?:` of its type selects),
+apart from C4244's settings. C4127 is an `if`, `while`,
+`do` or `for` condition that `cl` folds to a constant (arithmetic, a null
+pointer or another integer made a pointer, a string literal, or `0 && x`,
+but not an object's or a function's address, nor anything with a comma
+operator left after folding) unless it is an integer literal of 0 or 1
+under parentheses, unary operators, a cast to its own type or the operand a
+constant `?:` selects, as in `while (1)` and `do ... while (0)`; it is
+reported at the folded operator, or where the value begins under its
+parentheses and casts and in the operand a constant `?:` selects.
+
+What `cl` writes of these that bcc does not: C4267 for a `size_t` value
+(`size_t` and the arithmetic it takes part in, as `sizeof(x) + i`), which
+`cl` reports apart from C4244 and bcc leaves out; C4244 when an operation's
+operands have one type spelled two ways (`u + u32`, where `cl` keeps the left
+spelling for 32-bit operands and the right one for 64-bit ones), or reads an
+unsigned bit-field narrower than `int`, which `cl` keeps unsigned where C
+promotes it; C4305 of an unsuffixed decimal constant above `INT_MAX`, which
+`cl` types `unsigned long` as C90 did, and of a constant whose arithmetic
+overflows (`cl`'s C4307 with its value); a compound assignment of an
+integer constant; and a conversion whose type comes from a declaration bcc
+cannot read for its spelling (a GNU or standard attribute in its
+specifiers, `typeof`, a call through a typedef name's function type that
+is shadowed). Because the identity defines `__x86_64__`, a program that
+tests it, as zlib's `crc32.c` does, compiles code `cl` skips, and draws its
+warnings.
 
 The operation that leads C4047 and C4133 is `initializing`, `=`,
 `function` (an argument) or `return`, as in `cl`. A type `cl` spells its
@@ -1160,7 +1246,10 @@ C2703", "Compiler Error C2705", "Compiler Warning (level 3) C4018", "Compiler Wa
 (level 3) C4101", "Compiler Warning (level 4) C4189", "Compiler Warning
 (level 1) C4293", "Compiler Warning (level 4) C4389", "Compiler Warning
 (level 4) C4706", "Compiler Warning (level 1) C4532", "Compiler Warning
-(level 1) C4715", "Compiler Warning (level 1) C4716".)
+(level 1) C4715", "Compiler Warning (level 1) C4716", "Compiler Warning
+(level 4) C4127", "Compiler Warning (level 4, off) C4242", "Compiler Warning
+(level 2) C4244", "Compiler Warning (levels 3 and 4) C4244", "Compiler
+Warning (level 4) C4245", "Compiler Warning (level 1) C4305", "__assume".)
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
@@ -1346,7 +1435,13 @@ clang-cl`, about a `cl` option clang-cl knows and bcc does not, and about
 the bare Clang options clang-cl ignores. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
-bare `-fsigned-char` or `-funsigned-char` with the same warning. The
+bare `-fsigned-char`, `-funsigned-char`, `-ffast-math` or `-fno-fast-math`
+with the same warning, so `/fp:fast -fno-fast-math` keeps `/fp:fast` and
+`/fp:fast /clang:-fno-fast-math` does not. Its
+`/fp:fast` gives up the math functions' `errno`, as clang-cl's
+`-ffast-math` does, so a call of `sqrt` has no side effect for `-Wassume`,
+and `/fp:precise` restores the target's default, as `-ffp-model=precise`
+does; bcc takes none of the rest of `-ffast-math`, nor its macros. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names. As Clang's driver does, it refuses a
 command line without inputs (`clang-cl: error: no input files`, status 1),

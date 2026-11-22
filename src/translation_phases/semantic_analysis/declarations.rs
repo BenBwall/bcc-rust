@@ -811,6 +811,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::Automatic,
                 None,
             );
+            self.record_written_binding(&spec, Some(declarator));
             self.retain_written_parameter(self.bindings.len() - 1, original, written_functions);
             self.record_vm(self.bindings.len() - 1);
             // K&R parameters take their storage from the declaration list.
@@ -1123,6 +1124,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
             .flatten();
         self.bind(name, ty, kind, linkage, duration, None);
+        self.record_written_binding(&spec, Some(declarator));
         if kind == BindingKind::Function {
             let index = self.bindings.len() - 1;
             self.record_parameter_sites(index, declarator);

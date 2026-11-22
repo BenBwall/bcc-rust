@@ -42,8 +42,9 @@ pub(crate) enum InstData {
         args:   [Value; 2],
     },
     /// Bit counts/swaps, `fneg`, `freeze`, conversions (type = result type),
-    /// `va_arg`, and
-    /// `va_start` and `va_end` (type `ptr`, no result).
+    /// `va_arg`,
+    /// `va_start` and `va_end` (type `ptr`, no result), and `assume` (type
+    /// `i1`, no result).
     Unary {
         opcode: Opcode,
         ty:     Type,
@@ -442,6 +443,11 @@ named! {
         VaArgAggregate = "va_arg_aggregate",
         VaCopy = "va_copy",
         VaEnd = "va_end",
+        /// `assume cond` (type `i1`, no result): `cond` holds here, a
+        /// promise the optimizer may use and code never checks (Microsoft's
+        /// `__assume`, LLVM's `llvm.assume`); a false one is undefined
+        /// behaviour. MSVC extension: Microsoft Learn, "__assume".
+        Assume = "assume",
         Jump = "jump",
         Brif = "brif",
         Switch = "switch",

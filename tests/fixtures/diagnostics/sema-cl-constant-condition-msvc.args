@@ -1,0 +1,1 @@
+--compiler-identity=msvc --diagnostic-format=msvc --target=x86_64-pc-windows-msvc --cl-warning-level=4

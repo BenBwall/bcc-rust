@@ -1315,6 +1315,9 @@ diagnostic_groups! {
     /// Clang: a floating literal whose implicit conversion to an integer
     /// type is out of range or changes its value; `-Wconversion` holds it.
     LiteralConversion => Some("literal-conversion"), Warning, false;
+    /// Clang: an assumption (`__builtin_assume`, Microsoft `__assume`)
+    /// whose operand has side effects, which Clang ignores.
+    Assume => Some("assume"), ClangWarning, false;
     /// Clang's `-Wconversion`, which reports nothing itself: under Clang's
     /// rules the parent of the conversion groups bcc models
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
@@ -1328,6 +1331,28 @@ diagnostic_groups! {
     /// [`Self::SignCompare`] reports. Only the `cl` identity reports it, and
     /// only its numbered settings reach it, so no option or pragma names it.
     SignCompareEquality => None, Ignored, false;
+    /// bcc's: `cl`'s C4127, an `if`, `while`, `do` or `for` condition that
+    /// is a constant other than a literal 0 or 1, at level 4. Like the
+    /// groups of C4244 and C4305 below, only the `cl` identity reports it,
+    /// and only its numbered settings reach it.
+    ClConstantCondition => None, Ignored, false;
+    /// bcc's: `cl`'s C4244 at level 2, a conversion between a floating and
+    /// an integer type.
+    ClFloatingConversion => None, Ignored, false;
+    /// bcc's: `cl`'s C4244 at level 3, a narrowing conversion from a type
+    /// other than `int`, or from `double` to `float`.
+    ClWideConversion => None, Ignored, false;
+    /// bcc's: `cl`'s C4244 at level 4, a narrowing conversion from `int` or
+    /// `unsigned int`, or from `long double` to `double`.
+    ClIntConversion => None, Ignored, false;
+    /// bcc's: `cl`'s C4305, a constant its conversion truncates, at level 2.
+    ClTruncation => None, Ignored, false;
+    /// bcc's: `cl`'s C4242, which is off by default, at level 4: the
+    /// narrowings C4244 reports otherwise of a value `cl` has not computed
+    /// at `int`, and of a 64-bit one.
+    ClNarrowingConversion => None, Ignored, false;
+    /// bcc's: `cl`'s C4245, a negative constant made unsigned, at level 4.
+    ClSignedConversion => None, Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
     /// GCC's words for a function returning its own automatic object's

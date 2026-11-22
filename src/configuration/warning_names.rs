@@ -40,6 +40,9 @@ pub(crate) struct ClCodedWarning {
     /// The groups are off by default in bcc, so a level that shows the
     /// warning names them too.
     pub(crate) enable: bool,
+    /// `cl` does not show the warning unless an option or a pragma names
+    /// it or `/Wall` is given.
+    pub(crate) off:    bool,
 }
 
 const fn coded(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
@@ -48,6 +51,7 @@ const fn coded(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
         level,
         groups,
         enable: false,
+        off: false,
     }
 }
 
@@ -57,6 +61,18 @@ const fn enabled(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
         level,
         groups,
         enable: true,
+        off: false,
+    }
+}
+
+/// A warning `cl` does not show by default.
+const fn off(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
+    ClCodedWarning {
+        code,
+        level,
+        groups,
+        enable: true,
+        off: true,
     }
 }
 
@@ -70,7 +86,7 @@ const fn enabled(code: u16, level: u8, groups: &'static [G]) -> ClCodedWarning {
 /// Learn: "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd,
 /// /we, /wo, /Wv, /WX (Warning level)" and each warning's page, as for C4090,
 /// C4113 and C4532.
-pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 19] = [
+pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 26] = [
     coded(4013, 3, &[G::ImplicitFunctionDeclaration]),
     // One group holds both, so `/wd` and `/we` of either set both.
     coded(4033, 1, &[G::ReturnMismatch]),
@@ -92,6 +108,18 @@ pub(crate) const CL_CODED_WARNINGS: [ClCodedWarning; 19] = [
     enabled(4706, 4, &[G::Parentheses]),
     enabled(4293, 1, &[G::ShiftCountOverflow, G::ShiftCountNegative]),
     enabled(4532, 1, &[G::JumpSehFinally]),
+    enabled(4127, 4, &[G::ClConstantCondition]),
+    // C4244's level depends on the conversion, so it has an entry for
+    // each, lowest first; `/wd`, `/we`, `/wL` and the pragmas set them all,
+    // and `default` gives each its own level.
+    enabled(4244, 2, &[G::ClFloatingConversion]),
+    enabled(4244, 3, &[G::ClWideConversion]),
+    enabled(4244, 4, &[G::ClIntConversion]),
+    enabled(4305, 2, &[G::ClTruncation]),
+    enabled(4245, 4, &[G::ClSignedConversion]),
+    // Off by default: what `cl` reports in place of some of C4244's
+    // narrowings when it is shown.
+    off(4242, 4, &[G::ClNarrowingConversion]),
     // The code generator's, about the end of a function, which its own
     // states govern (`ClWarnings::shown`) rather than a group.
     coded(4715, 1, &[]),
@@ -163,8 +191,13 @@ impl ClWarnings {
         let mut warnings = Self(1);
         let mut index = 0;
         while index < CL_CODED_WARNINGS.len() {
-            warnings =
-                warnings.with_index(index, ClWarningState::Level(CL_CODED_WARNINGS[index].level));
+            let warning = CL_CODED_WARNINGS[index];
+            let state = if warning.off {
+                ClWarningState::Disabled
+            } else {
+                ClWarningState::Level(warning.level)
+            };
+            warnings = warnings.with_index(index, state);
             index += 1;
         }
         warnings
@@ -180,7 +213,8 @@ impl ClWarnings {
         ClWarningState::from_bits((self.0 >> (Self::BITS * (index + 1)) & Self::MASK) as u8)
     }
 
-    const fn level(self) -> u8 {
+    /// The warning level, from 0 to 4.
+    pub(crate) const fn level(self) -> u8 {
         (self.0 & Self::MASK) as u8
     }
 
@@ -190,18 +224,37 @@ impl ClWarnings {
         Self(self.0 & !Self::MASK | level as u128)
     }
 
-    /// `state` for `code`, whose level, if it has one, runs from 1 to 4.
+    /// `state` for each entry of `code`, whose level, if it has one, runs
+    /// from 1 to 4.
     pub(crate) fn with_state(self, code: u16, state: ClWarningState) -> Self {
-        match CL_CODED_WARNINGS
-            .iter()
-            .position(|warning| warning.code == code)
-        {
-            | Some(index) => self.with_index(index, state),
-            | None => self,
+        let mut warnings = self;
+        for (index, warning) in CL_CODED_WARNINGS.iter().enumerate() {
+            if warning.code == code {
+                warnings = warnings.with_index(index, state);
+            }
         }
+        warnings
     }
 
-    /// `code`'s own level, which `default` restores.
+    /// Each entry of `code` shown from its own level again (`default`), or
+    /// only the first time (`once`, `/wo`).
+    pub(crate) fn with_default(self, code: u16, once: bool) -> Self {
+        let mut warnings = self;
+        for (index, warning) in CL_CODED_WARNINGS.iter().enumerate() {
+            if warning.code == code {
+                let state = if once {
+                    ClWarningState::Once(warning.level)
+                } else {
+                    ClWarningState::Level(warning.level)
+                };
+                warnings = warnings.with_index(index, state);
+            }
+        }
+        warnings
+    }
+
+    /// `code`'s own level, the lowest of its entries', which `default`
+    /// restores.
     pub(crate) fn default_level(code: u16) -> Option<u8> {
         CL_CODED_WARNINGS
             .iter()
