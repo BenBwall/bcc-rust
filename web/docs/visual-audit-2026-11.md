@@ -4662,3 +4662,193 @@ new counterexample.
   before calling, which the machine shows only where the pointer is kept or
   passed on, so a learner sees the conversion only in programs with
   pointers to functions.
+
+### Review, round 1
+
+The review of the branch at `e7dcc2267` found four blockers: CI's site
+build failed on a stack overflow, two explanations said false things about
+C, and valid null pointer constants were refused as constraint violations.
+It also listed six small things (N-a to N-f). Its 132 probe programs, in
+its scratch directory with every step of each dumped, are the base for the
+checks below, with the implementer's 386 (24 constant expressions, 52
+pointers to functions, 5 for N1, 247 regression programs and the 58 of the
+corpus), the 17 lessons, and 17 new ones of my own for the forms of `*`, the
+null pointer constants and the new refusals. My dump harness reproduces the
+review's 149 dumps of the head byte for byte. Every program the engine runs
+was compiled with GCC 14 (`-std=c99 -pedantic -O0`) and run.
+
+#### 1. The site build overflowed its stack
+
+The engine test `limits_stop_source_compilation_execution_memory_and_recursion`
+parses `((…(1)…))` until the parser's nesting limit of 64 stops it. Each
+level of parentheses repeats the frames of `expression`, `expression_inner`
+and `prefix`, and in a debug build each frame holds every temporary of its
+function: on `main` that was 30 KB a level (21.8 KB of it `prefix`), and the
+function-pointer branches pushed the whole test past the 2 MiB a test
+thread gets. Measured by setting `RUST_MIN_STACK` for that one test on the
+same debug test binary, `main` fails at 1850 KiB and passes at 1900 KiB,
+and the reviewed head failed at 2000 KiB and passed at 2048 KiB.
+
+**Fixed.** `prefix` now only dispatches: the unary operators, a
+parenthesized expression, the primary expressions and the postfix operators
+are helpers kept out of line (`#[inline(never)]`), and so is typing a
+binary operator, which `expression_inner` did inline. A level now takes 7.3
+KB (`prefix` 1.1 KB, `expression_inner` 2.7 KB, `expression` 0.7 KB and the
+parenthesized expression's helper 2.9 KB). The test fails at 450 KiB and
+passes at 500 KiB, 76% under the default. The test's depth and
+the stack size are unchanged. The refactor alone changed none of the 552
+dumps.
+
+#### 2. The step for `*` before a function quoted C that is not C
+
+The step was written by stripping one `*` from the source: for `**sq` it
+said "`*sq` holds a pointer to the function sq … That is why `(**sq)(…)`
+and `*sq(…)` call the same function", but `*sq(…)` applies `*` to what
+`sq` returns, a constraint violation (§6.5.3.2p2). `*&sq` gave `&sq(…)`,
+the address of a value (§6.5.3.2p1), and `*sq` said a function "holds" a
+pointer, though a function is no object.
+
+**Fixed, from the expression's structure.** The compiler records how the
+operand of `*` gives its pointer (a function's name, `*` of a function
+designator, an object, or any other expression) and whether it is a
+postfix expression, which a call's parentheses can follow as written
+(§6.5.2p1). The step quotes `*` and its operand as written, and
+parenthesizes the operand for the call when it needs it:
+
+- `*sq`: "`sq` designates the function sq, and like any function designator
+  it converts to a pointer to that function. … `(*sq)(…)` and `sq(…)` call
+  the same function."
+- `**sq`: "`*sq` designates the function sq too, and converts to a pointer
+  to it. … `(**sq)(…)` and `(*sq)(…)` call the same function", and `***sq`
+  likewise one level up.
+- `*&sq`: "`&sq` yields a pointer to the function sq. … `(*&sq)(…)` and
+  `(&sq)(…)`".
+- `*fp`: "`fp` holds a pointer to the function sq. … `(*fp)(…)` and
+  `fp(…)`"; `**fp` as `**sq`.
+- `*(int (*)(int))sq` and `*(c ? sq : sq)` keep their operand's parentheses:
+  `((int (*)(int))sq)(…)` and `(c ? sq : sq)(…)`.
+
+Each ends "However many * a program writes, each only shows the reader
+that a pointer is being followed", citing §6.5.3.2p4 and §6.3.2.1p4. The
+same facts give the call through a pointer its lead ("`f` holds a pointer
+to square", "`(sq)` designates sq and converts to a pointer to it", "`(*&fp)`
+yields a pointer to sq") and "what comes next", which decided "designates"
+by looking for a `*` in the text: `(f)` now designates its function, and
+`(*pp)`, an object that holds the pointer, points to it. `&*sq` and `*&fp`
+run as before.
+
+No other narration builds code by editing source text: the rest quote whole
+expressions or operands as written, and a call's tree label adds `()` only
+after a postfix expression.
+
+#### 3. Null pointer constants other than a literal 0 were refused
+
+C99 §6.3.2.3p3 makes any integer constant expression with the value 0, or
+such an expression cast to `void *`, a null pointer constant. The checks
+took only a literal `0`, so `int (*p)(int) = (1 - 1);`, `p = (1 - 1)` and
+`p != (1 - 1)` were refused as constraint violations whose message said
+they broke the rule; `int *q; q != (1 - 1)` was refused as unsupported.
+
+**Fixed, wherever a literal 0 was accepted:** an initializer, an
+assignment, `==` and `!=`, `?:`, a call's argument and a static initializer,
+for pointers to objects as to functions. An integer constant expression
+(§6.6p6) is checked by its form: integer and character constants and
+`sizeof` joined by operators, with a floating constant only as a cast's
+operand, so `(int)0.5` is one and `(int)(0.5 + 0.1)` is not, as GCC
+agrees. `(void *)0` is a cast of its own, the only pointer to void in the
+subset, with a step titled "Cast to void *: a null pointer", whose lead says
+"`(void *)0` converts the null pointer constant 0 to void *, which gives a
+null pointer: it points to no object and no function". Any other `(void
+*)` cast is refused as outside the subset, as is arithmetic on `(void *)0`.
+Comparisons name the constant as written: "`(1 - 1)` is an integer constant
+expression with the value 0, so here it is a null pointer constant", and
+"the right is the null pointer constant `(1 - 1)`, which converts to a null
+pointer". A literal `0` keeps its old sentences, so no lesson changes. Two
+null pointers, which the review's `(void *)0` probes now reach, "compare
+equal exactly when both are null pointers, or both point to the same
+place", citing §6.5.9p6.
+
+#### 4. "A pointer to a function is never null"
+
+The comparison with a null pointer said "A pointer to a function is never
+null" in the step that compared one, `b`, with `a`.
+
+**Fixed.** It now says "A pointer that points to a function never compares
+equal to a null pointer, so comparing a pointer with null tells whether
+there is a function to call through it" (§6.3.2.3p3). A condition says "a
+pointer that points to a function is not null, so it counts as true".
+
+#### 5. Smaller things
+
+- **N-a.** The null-call stop now cites §4p2, the clause Part 15 added and
+  never used, and its message says why: "the call `p(…)` goes through a
+  null pointer, which points to no function (C99 §6.3.2.3p3). A call's
+  first expression denotes the function it calls (§6.5.2.2p3), and C
+  defines no call of anything else, so this one is undefined by the
+  omission of any definition (§4p2)".
+- **N-b.** `*` of a null pointer to a function stops under a title of its
+  own, "Undefined behavior: * of a null pointer to a function", led by "A
+  null pointer points to no function, so there is no function designator
+  for `*` to yield", in place of the null object dereference's.
+- **N-d.** The refusals of operators on a pointer to a function cite each
+  operator's own paragraph: `+` §6.5.6p2, `-` §6.5.6p3, the orderings
+  §6.5.8p2, and the shifts, bitwise and multiplicative operators theirs.
+- **N-e.** A declaration of `void (*v)(void)` is refused for its void
+  ("other types (void, _Bool, ...) are outside this subset") rather than as
+  an unexpected expression; `fp == (void *)0` runs (item 3). The rest of
+  N-e are explicit refusals and stay.
+- **N-c and N-f** are left (see below).
+
+#### What changed in the results
+
+- **The lessons:** all 17 dumps are byte for byte the same, as are the
+  247 regression programs, the 24 constant-expression probes and N1's 5.
+- **The review's 132 probes:** 75 are the same. Five that were refused run
+  to GCC's exit status: `p1/b28` (`p == (void *)0`, 0), `p3/d10` (`0L`,
+  `(1 - 1)` and `0x0`, 10), `p4/e01` (an object pointer against `(1 - 1)`,
+  1), `p4/e02` and `p4/e07` (1 each). Fourteen refusals or stops change
+  only their message (items 2 and 5: `p1/b10`, `b11`, `b14`, `b29`, `b30`,
+  `b39`, `b40`, `p2/c22`, `c24`, `c25`, `c27`, `p3/d07`, `p4/e06`, `e09`).
+  The other 38 change only in the narration of items 2 to 4.
+- **The implementer's pointer-to-function probes:** 22 of 52 are the same;
+  seven refusals and stops change their message, and 23 change only in the
+  narration. **The corpus:** every program has the same outcome and step
+  count; `u04`'s stop changes its message, which
+  [`corpus/results-part15-after.txt`](corpus/results-part15-after.txt)
+  records, and the seven pointer-to-function programs change only in the
+  narration.
+- **My 17 probes:** the six that use a null pointer constant other than `0`
+  (`(1 - 1)`, `'\0'`, `0L`, `(void *)0`, `(2 * 0)` in a static table,
+  `(int)0.5`) run to GCC's exit status; `(void *)1`, an int from `(void
+  *)0`, `(void *)0 + 1` and `(int)(0.5 + 0.1)` are refused, where GCC
+  rejects or warns on each.
+- Every program of the probe sets above that the engine runs and GCC 14
+  compiled, 158 in all, gives GCC's exit status.
+
+#### Checks
+
+- **Stack:** 450 KiB fails and 500 KiB passes for the limit test, against
+  1850 and 1900 KiB on `main`.
+- **Engine tests:** 149 pass, three new: the forms of `*`, the null
+  pointer constants, and null pointers to functions told apart from
+  pointers to functions. Two change for the new wording (`f` holds its
+  pointer; `*` of a null pointer to a function has its own cause). The
+  engine's clippy passes, as `pages.yml` runs them.
+- **Site:** as `pages.yml` runs them, the site's tests (167, and the
+  prerender's 2), the WebAssembly stepper's (79) and the site's four
+  clippy runs pass. CI builds the site; I did not build it locally.
+- **Formatting:** `rustfmt +nightly --check` passes for every changed Rust
+  file, and `git diff --check` is clean.
+- **Browser:** not rerun. The page code changes only in a comment; the new
+  wording reaches the page through the engine's notes, which the dumps
+  cover.
+
+#### Left for later
+
+- **N-c, two spellings of one pointer:** the tape, cells and Table 1 write
+  `→twice()`, Figure 2's wires and the expression panel `&twice`. Choosing
+  one, or adding a legend line, is a design change to the page that needs
+  its own browser walk.
+- **N-f, the listing's label wraps a short definition** at 1024 and 1440
+  pixels. It stays readable and nothing scrolls sideways; moving the label
+  out of the line is a layout change for the same walk.
