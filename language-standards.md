@@ -1199,8 +1199,9 @@ before the parser sees the resulting tokens.
   handlers, bodies, filters and delimiters produce recovered syntax and preserve
   following input. Semantic analysis analyzes each block in a control region
   that a `goto`, `case` label or computed goto may leave but not enter (Clang's
-  error and notes, or `cl`'s C2705; `cl` lets a jump from a `__try`
-  statement's own `__except` or `__finally` block back into its guarded block),
+  error and notes, or `cl`'s C2705; `cl` rejects a jump only to a label
+  deeper in SEH blocks, a handler one level inside its `__try` block, or to
+  one as deep in another innermost block),
   rejects a `__leave` outside every `__try` block (C2703 under `cl`), and warns
   of a `goto`, `break`, `continue` or `return` that leaves a `__finally` block
   (`-Wjump-seh-finally`; `cl`'s C4532 for all but `return`, and for a `goto`

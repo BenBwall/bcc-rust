@@ -985,9 +985,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     break;
                 }
-                if let [Some(block)] =
-                    self.control
-                        .entered_seh_blocks::<1>(jump.point.region, target, false)
+                if let [Some(block)] = self
+                    .control
+                    .entered_seh_blocks::<1>(jump.point.region, target)
                 {
                     self.report_indirect_seh_jump(jump.source, target_source, block, false);
                     break;

@@ -1063,7 +1063,10 @@ below the width of the promoted left operand (`cl` also warns of one under
 `sizeof` and in an arm of `?:` that a constant condition skips, and bcc does
 not). Names that only `__try`, `__except` or `__finally` use count as used,
 and the warnings reach what those blocks hold. A `goto` or `case` label may
-not enter one of those blocks (C2705, naming the innermost), `__leave`
+not enter one of those blocks (C2705, naming the innermost): `cl` counts how
+deep each point is in them, a handler one level inside its `__try` block, and
+rejects a jump only to a deeper label or to one as deep in another innermost
+block, so a jump to a shallower label is accepted wherever it lands. `__leave`
 belongs in a `__try` block (C2703), and a `goto`, `break` or `continue` that
 leaves a `__finally` block draws C4532, a `return` nothing. C4100, C4101
 and C4189 name a parameter, or a variable with automatic storage, that

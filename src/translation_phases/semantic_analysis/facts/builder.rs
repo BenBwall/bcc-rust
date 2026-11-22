@@ -357,21 +357,15 @@ impl<'tu, 's> Builder<'tu, 's> {
     /// The `__try`, `__except` and `__finally` blocks a jump from `from` to
     /// `to` enters, innermost first, as Clang's `JumpScopeChecker` notes
     /// them; at most `N`. A jump may leave such a block but not enter it.
-    /// With `cl_scopes`, a `__try` block also holds its own `__except` and
-    /// `__finally` blocks, as `cl` scopes them: a jump from either back into
-    /// the guarded block enters nothing. Microsoft Learn: "Compiler Error
-    /// C2705".
     pub(in crate::translation_phases::semantic_analysis) fn entered_seh_blocks<const N: usize>(
         &self,
         from: RegionId,
         to: RegionId,
-        cl_scopes: bool,
     ) -> [Option<RegionId>; N] {
         let mut entered = [None; N];
         let mut block = self.regions[to.0].nearest_seh;
         for slot in &mut entered {
-            let Some(region) =
-                block.filter(|&region| !self.seh_block_holds(region, from, cl_scopes))
+            let Some(region) = block.filter(|&region| !ancestor(&self.regions, region, from))
             else {
                 break;
             };
@@ -383,32 +377,40 @@ impl<'tu, 's> Builder<'tu, 's> {
         entered
     }
 
-    /// Whether the SEH block `region` holds `from`, so that a jump from
-    /// there into the block enters nothing: as its ancestor, or, with
-    /// `cl_scopes` and `region` a guarded block, as the ancestor of its
-    /// statement's `__except` or `__finally` block.
-    fn seh_block_holds(&self, region: RegionId, from: RegionId, cl_scopes: bool) -> bool {
-        ancestor(&self.regions, region, from)
-            || (cl_scopes
-                && self
-                    .seh_handler(region)
-                    .is_some_and(|handler| ancestor(&self.regions, handler, from)))
+    /// The SEH block `cl` says a jump from `from` to `to` enters, which is
+    /// the label's innermost one: if the label is deeper in SEH blocks than
+    /// the jump, or as deep but in another innermost block. A jump to a
+    /// shallower label enters nothing, whichever blocks hold it. Microsoft
+    /// Learn: "Compiler Error C2705"; the rule is fitted to `cl` 19.44.
+    pub(in crate::translation_phases::semantic_analysis) fn cl_entered_seh_block(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> Option<RegionId> {
+        let innermost = self.regions[to.0].nearest_seh?;
+        let (depth, label_depth) = (self.cl_seh_depth(from), self.cl_seh_depth(to));
+        (label_depth > depth
+            || (label_depth == depth && self.regions[from.0].nearest_seh != Some(innermost)))
+        .then_some(innermost)
     }
 
-    /// The `__except` or `__finally` block of the `__try` statement whose
-    /// guarded block is `region`. The handler's region opens as the guarded
-    /// block's closes, so it comes right after that block's subtree.
-    fn seh_handler(&self, region: RegionId) -> Option<RegionId> {
-        let block = self.regions[region.0];
-        if block.kind != RegionKind::Seh(SehBlock::Try) {
-            return None;
+    /// How deep `region` is in SEH blocks as `cl` counts them, with a
+    /// `__try` statement's `__except` or `__finally` block one level inside
+    /// its `__try` block.
+    fn cl_seh_depth(&self, region: RegionId) -> usize {
+        let mut depth = 0;
+        let mut block = self.regions[region.0].nearest_seh;
+        while let Some(region) = block {
+            depth += if self.regions[region.0].kind == RegionKind::Seh(SehBlock::Try) {
+                1
+            } else {
+                2
+            };
+            block = self.regions[region.0]
+                .parent
+                .and_then(|parent| self.regions[parent.0].nearest_seh);
         }
-        let handler = self.regions.get(block.subtree_end)?;
-        (matches!(
-            handler.kind,
-            RegionKind::Seh(SehBlock::Except | SehBlock::Finally)
-        ) && handler.parent == block.parent)
-            .then_some(RegionId(block.subtree_end))
+        depth
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn finalize(

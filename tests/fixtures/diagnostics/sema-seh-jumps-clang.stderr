@@ -55,13 +55,19 @@ sema-seh-jumps-clang.c:135:13: error: cannot jump from this goto statement to it
 sema-seh-jumps-clang.c:130:5: note: jump bypasses initialization of __try block
   130 |     __try {
       |     ^
-sema-seh-jumps-clang.c:142:5: error: cannot jump from this indirect goto statement to one of its possible targets
-  142 |     goto *targets[p];
+sema-seh-jumps-clang.c:145:13: error: cannot jump from this goto statement to its label
+  145 |             goto in;
+      |             ^
+sema-seh-jumps-clang.c:147:5: note: jump bypasses initialization of __try block
+  147 |     __try {
       |     ^
-sema-seh-jumps-clang.c:144:5: note: possible target of indirect goto statement
-  144 |     target:
+sema-seh-jumps-clang.c:157:5: error: cannot jump from this indirect goto statement to one of its possible targets
+  157 |     goto *targets[p];
       |     ^
-sema-seh-jumps-clang.c:143:5: note: jump bypasses initialization of __try block
-  143 |     __try {
+sema-seh-jumps-clang.c:159:5: note: possible target of indirect goto statement
+  159 |     target:
       |     ^
-4 warnings and 9 errors generated.
+sema-seh-jumps-clang.c:158:5: note: jump bypasses initialization of __try block
+  158 |     __try {
+      |     ^
+4 warnings and 10 errors generated.

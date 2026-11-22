@@ -137,6 +137,21 @@ int retry(int p) {
     return 0;
 }
 
+int sibling(int p) {
+    __try {
+        work(1);
+    } __except (1) {
+        if (p)
+            goto in;
+    }
+    __try {
+    in:
+        work(2);
+    } __except (1) {
+    }
+    return 0;
+}
+
 int computed(int p) {
     static void *targets[] = {&&target, &&end};
     goto *targets[p];

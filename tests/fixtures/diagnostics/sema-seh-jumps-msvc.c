@@ -169,3 +169,53 @@ int retry_finally(int p) {
     }
     return 0;
 }
+
+// cl counts how deep each point is in SEH blocks, a handler one level inside
+// its __try block, and rejects a jump only to a deeper label, or to one as
+// deep in another innermost block: a jump to a shallower label is accepted
+// wherever it lands.
+int depths(int p) {
+    __try {
+        work(1);
+    } __except (1) {
+        if (p == 1)
+            goto sibling;
+        if (p == 2)
+            goto cousin;
+        if (p == 3)
+            goto peer;
+    }
+    __try {
+    sibling:
+        work(2);
+        __try {
+            if (p == 4)
+                goto earlier;
+            if (p == 5)
+                goto handler;
+        } __finally {
+            if (p == 6)
+                goto handler;
+        }
+    } __except (1) {
+    handler:
+        work(3);
+    }
+    __try {
+    earlier:
+        work(4);
+        __try {
+        cousin:
+            work(5);
+        } __except (1) {
+        }
+    } __finally {
+    }
+    __try {
+    peer:
+        work(6);
+    } __finally {
+    }
+    return 0;
+}
+

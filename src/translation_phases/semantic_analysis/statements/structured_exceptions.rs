@@ -311,10 +311,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// at the jump in Clang's words, with a note at each block it enters,
     /// innermost first; or at the label as `cl`'s C2705, which names the
     /// innermost block and calls a case label `'null'`, once per label.
-    /// `cl` counts a `__try` statement's `__except` and `__finally` blocks
-    /// as inside its `__try` block, so that a jump from either back into the
-    /// guarded block enters nothing ([`Self::goto_leaves_finally`] may still
-    /// warn of it).
+    /// `cl` compares how deep the jump and the label are in SEH blocks
+    /// (`cl_entered_seh_block`), so a jump to a shallower label enters
+    /// nothing ([`Self::goto_leaves_finally`] may still warn of it).
     /// Microsoft Learn: "Compiler Error C2705". Clang: `JumpScopeChecker`.
     pub(in crate::translation_phases::semantic_analysis) fn check_seh_entry(
         &mut self,
@@ -323,11 +322,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entry: SehEntry,
         cl_reported: bool,
     ) -> bool {
-        let cl_scopes = self.context.configuration.compiler_identity()
-            == crate::configuration::CompilerIdentity::Msvc;
-        let entered = self
-            .control
-            .entered_seh_blocks::<3>(from.region, to.region, cl_scopes);
+        let entered = if self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Msvc
+        {
+            [
+                self.control.cl_entered_seh_block(from.region, to.region),
+                None,
+                None,
+            ]
+        } else {
+            self.control.entered_seh_blocks::<3>(from.region, to.region)
+        };
         let Some(innermost) = entered[0] else {
             return false;
         };
