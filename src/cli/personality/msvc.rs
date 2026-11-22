@@ -460,13 +460,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if !clang_cl {
         common.extend(state.coded_warning_options());
         common.push(format!("--cl-warning-level={}", state.warning_level).into());
-        // `/Wall` shows the warnings that are off by default at their own
-        // level, unless a setting says otherwise.
-        if state.all_warnings {
-            for warning in CL_CODED_WARNINGS.iter().filter(|warning| warning.off) {
-                common.push(format!("--cl-warning={}:{}", warning.code, warning.level).into());
-            }
-        }
         for &(code, setting) in &state.warning_settings {
             let value = match setting {
                 | WarningSetting::Disabled => "d".to_owned(),
@@ -1740,6 +1733,13 @@ impl State {
                 if !self.warnings_error && matches!(warning.code, 4047 | 4090 | 4113 | 4133) {
                     options.push(format!("-Wno-error={group}").into());
                 }
+            }
+        }
+        // `/Wall` shows the warnings that are off by default at their own
+        // level, unless a setting, which comes later, says otherwise.
+        if self.all_warnings {
+            for warning in CL_CODED_WARNINGS.iter().filter(|warning| warning.off) {
+                options.push(format!("--cl-warning={}:{}", warning.code, warning.level).into());
             }
         }
         options

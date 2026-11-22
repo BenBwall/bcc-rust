@@ -124,7 +124,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right_expression,
             } => {
                 let divisor = self.expression_info(right_expression);
-                let right = match divisor.integer.filter(|value| divisor.ice && value.wide.is_none())
+                let right = match divisor
+                    .integer
+                    .filter(|value| divisor.ice && value.wide.is_none())
                 {
                     | Some(value) => magnitude_bits(value.value.unsigned_abs().saturating_sub(1)),
                     | None => self.cl_natural_bits(right_expression)?,
@@ -145,7 +147,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let left = self.cl_natural_bits(left_expression)?;
                 let count = self.expression_info(right_expression);
                 Some(
-                    match count.integer.filter(|value| count.ice && value.wide.is_none()) {
+                    match count
+                        .integer
+                        .filter(|value| count.ice && value.wide.is_none())
+                    {
                         | Some(value) => left.saturating_sub(u32::try_from(value.value).ok()?),
                         | None => left,
                     },
@@ -197,5 +202,5 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
 /// The bits a magnitude needs, without a sign: 8 for 255, 9 for 256.
 fn magnitude_bits(magnitude: u128) -> u32 {
-    u128::BITS - magnitude.leading_zeros()
+    magnitude.bit_width()
 }

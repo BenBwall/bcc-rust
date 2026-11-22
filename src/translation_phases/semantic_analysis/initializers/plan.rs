@@ -13,12 +13,12 @@
 use super::super::{
     Analyzer,
     BitRange,
-    cl_warnings::ClTarget,
     InitOperation,
     InitValue,
     InitValueId,
     InitializerPlan,
     Subobject,
+    cl_warnings::ClTarget,
     types::{
         TagKind,
         TypeId,
@@ -478,6 +478,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             context: SourceVectors::default(),
             cl_target: self.cl_subobject(container, at.cl_target, index),
         })
+    }
+
+    /// The site of an initializer's whole object, which names the binding
+    /// being initialized, if one is, as `cl`'s target.
+    pub(super) fn cl_root_site(&self, source: SourceVectors) -> Site<'s> {
+        Site {
+            cl_target: self
+                .cl_initialized
+                .map_or(ClTarget::Unknown, |binding| ClTarget::Binding(binding, 0)),
+            ..Site::root(source)
+        }
     }
 
     /// The target of subobject `index` of `container`, whose own is

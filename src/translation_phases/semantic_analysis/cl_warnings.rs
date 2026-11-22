@@ -43,20 +43,22 @@ use super::{
 };
 use crate::{
     configuration::DiagnosticGroup as G,
-    util::bump::ArenaVec,
     diagnostics::format_in,
     translation_phases::{
         SourceVectors,
-        parsing::declaration_syntax::TypeQualifiers,
-        parsing::syntax::{
-            BinaryOperator as B,
-            Constant,
-            Expression,
-            ExpressionSlot,
-            ExpressionType as E,
-            UnaryOperator as U,
+        parsing::{
+            declaration_syntax::TypeQualifiers,
+            syntax::{
+                BinaryOperator as B,
+                Constant,
+                Expression,
+                ExpressionSlot,
+                ExpressionType as E,
+                UnaryOperator as U,
+            },
         },
     },
+    util::bump::ArenaVec,
 };
 
 /// How a value reaches the type it is converted to, which `cl` names
@@ -101,7 +103,11 @@ enum Arithmetic {
     Bool,
     /// An integer type of this width; `int` and `unsigned int` are `wide`
     /// as `int` is, the narrowing from which is level 4.
-    Integer { bits: u8, signed: bool, int: bool },
+    Integer {
+        bits:   u8,
+        signed: bool,
+        int:    bool,
+    },
     /// `float`, `double` and `long double` by rank: `cl` warns from
     /// `long double` to `double` though both are 64 bits.
     Floating(u8),
@@ -112,20 +118,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// as if by assignment, which `spelled_target` names, reported at
     /// `site`:
     ///
-    /// - a floating value made an integer is C4244 at level 2, and a
-    ///   floating constant too, `_Bool` included, where a value is not;
-    /// - a value made a narrower floating type is C4244 at level 3, or at
-    ///   level 4 from `long double` to `double`; a constant, C4305 when the
-    ///   type does not hold it exactly;
-    /// - an integer made a floating type is C4244 at level 2 from a 32-bit
-    ///   type to `float` and from a 64-bit type; a constant, C4305 when the
-    ///   type does not hold it exactly;
+    /// - a floating value made an integer is C4244 at level 2, and a floating
+    ///   constant too, `_Bool` included, where a value is not;
+    /// - a value made a narrower floating type is C4244 at level 3, or at level
+    ///   4 from `long double` to `double`; a constant, C4305 when the type does
+    ///   not hold it exactly;
+    /// - an integer made a floating type is C4244 at level 2 from a 32-bit type
+    ///   to `float` and from a 64-bit type; a constant, C4305 when the type
+    ///   does not hold it exactly;
     /// - an integer made a narrower integer type is C4244 when the value is
-    ///   wider than the type (`natural.rs`), at level 4 from `int` or
-    ///   `unsigned int` and level 3 from the others; a constant, C4305 when
-    ///   it fits neither the signed nor the unsigned type of the target's
-    ///   width (`cl`'s C4245 for a negative one made unsigned is not
-    ///   reported).
+    ///   wider than the type (`natural.rs`), at level 4 from `int` or `unsigned
+    ///   int` and level 3 from the others; a constant, C4305 when it fits
+    ///   neither the signed nor the unsigned type of the target's width (`cl`'s
+    ///   C4245 for a negative one made unsigned is not reported).
     ///
     /// Neither applies to an enumeration on either side, nor to a value
     /// made `_Bool`. `cl` names a type as written (`written.rs`), and an
@@ -143,6 +148,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// [`Self::check_conversion_as_cl`] of the simple assignment `e` of
+    /// `right` to `left`, under the `cl` identity.
+    pub(super) fn cl_assignment(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+    ) {
+        if self.unused.cl {
+            let spelled = self.cl_lvalue_spelling(left.expression);
+            let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+            self.check_conversion_as_cl(left.ty, spelled, right, ClConversion::Assignment, site);
+        }
+    }
+
     /// What [`Self::check_conversion_as_cl`] reports, if anything.
     fn cl_conversion(
         &self,
@@ -155,11 +175,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         else {
             return None;
         };
-        if !self.cl_conversions_checked(site) || self.cl_unknown_constant(source) {
+        if !self.cl_conversions_checked(site) || Self::cl_unknown_constant(source) {
             return None;
         }
         let site = Self::cl_value_site(source.expression);
-        let constant = self.cl_constant(source);
+        let constant = Self::cl_constant(source);
         let (mut group, truncation) = match (from, to) {
             | (Arithmetic::Floating(_), Arithmetic::Bool)
                 if !constant || !self.cl_floating_one(source) =>
@@ -185,7 +205,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     (G::ClTruncation, true)
                 } else if (bits == 64 || (bits == 32 && target_rank == 1))
-                    && !self.cl_truth_value(source.expression)
+                    && !Self::cl_truth_value(source.expression)
                 {
                     (G::ClFloatingConversion, false)
                 } else {
@@ -205,9 +225,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     signed,
                     ..
                 },
-            ) if width < bits => {
+            ) if width < bits =>
                 if constant {
-                    if self.cl_constant_fits(source, u32::from(width), signed) {
+                    if Self::cl_constant_fits(source, u32::from(width), signed) {
                         return None;
                     }
                     (G::ClTruncation, true)
@@ -220,8 +240,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     (G::ClIntConversion, false)
                 } else {
                     (G::ClWideConversion, false)
-                }
-            },
+                },
             | _ => return None,
         };
         if matches!(group, G::ClIntConversion | G::ClWideConversion)
@@ -245,17 +264,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// [`Self::check_conversion_as_cl`] of an initializer's value `source`
-    /// to the subobject `target` names, of type `ty`, at `site`. `cl`
-    /// reports an automatic object's after the warnings of the rest of the
-    /// function, before those it gives at its end; a static one's in place.
-    pub(super) fn cl_initializer_conversion(
+    /// to the subobject `target` names, of type `ty`, under the `cl`
+    /// identity. `cl` reports an automatic object's after the warnings of
+    /// the rest of the function, before those it gives at its end; a static
+    /// one's in place.
+    pub(super) fn cl_initializer(
         &mut self,
         ty: TypeId,
         source: ExpressionInfo<'tu>,
         target: ClTarget,
-        site: SourceVectors,
         static_storage: bool,
     ) {
+        if !self.unused.cl {
+            return;
+        }
+        let site = Self::cl_value_site(source.expression);
         let spelled = self.cl_target_spelling(target, ty);
         let Some(finding) = self.cl_conversion(ty, spelled, source, site) else {
             return;
@@ -287,8 +310,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         });
     }
 
-    /// C4244 and C4305 for the compound assignment of `right` to `left` by
-    /// `operator`, whose operation is in `operation`, at `right`: as for a
+    /// C4244 and C4305 for the compound assignment `e` of `right` to `left`,
+    /// whose operation is in `operation`, at `right`, under the `cl`
+    /// identity: as for a
     /// simple one from the operation's type, which `cl` names, except that
     /// `+=`, `-=`, `*=` and `/=` narrow an integer only when `right` is
     /// wider than `left`, the other operators never, an integer made a
@@ -297,11 +321,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `cl`.
     pub(super) fn check_compound_conversion_as_cl(
         &mut self,
-        operator: B,
+        e: &'tu Expression<'tu>,
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
         operation: TypeId,
     ) {
+        let E::Binary { operator, .. } = e.kind else {
+            return;
+        };
+        if !self.unused.cl {
+            return;
+        }
         let left_info = self.expression_info(left);
         let right_info = self.expression_info(right);
         let operation = self.types.non_atomic(operation).unqualified();
@@ -312,10 +342,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         };
         let site = Self::cl_value_site(right);
-        if !self.cl_conversions_checked(site) || self.cl_unknown_constant(right_info) {
+        if !self.cl_conversions_checked(site) || Self::cl_unknown_constant(right_info) {
             return;
         }
-        let constant = self.cl_constant(right_info);
+        let constant = Self::cl_constant(right_info);
         let (mut group, truncation) = match (from, to) {
             | (Arithmetic::Floating(_), Arithmetic::Bool | Arithmetic::Integer { .. }) =>
                 (G::ClFloatingConversion, false),
@@ -409,7 +439,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether `source` is a constant bcc did not fold, as one whose
     /// arithmetic overflows, of which `cl` reports C4307 and its own value.
-    fn cl_unknown_constant(&self, source: ExpressionInfo<'tu>) -> bool {
+    fn cl_unknown_constant(source: ExpressionInfo<'tu>) -> bool {
         source.constant == super::ConstantClass::Arithmetic
             && source.integer.is_none()
             && source.floating().is_none()
@@ -442,12 +472,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.types
                     .non_atomic(self.expression_info(operand_expression).ty)
                     .unqualified()
-                    == self.types.non_atomic(self.expression_info(e).ty).unqualified()
+                    == self
+                        .types
+                        .non_atomic(self.expression_info(e).ty)
+                        .unqualified()
                     && self.cl_designated(operand_expression),
             | E::Conditional(conditional) => {
                 let condition = self.expression_info(conditional.condition_expression);
                 match condition.integer.filter(|_| condition.ice) {
-                    | Some(value) if value.is_zero() => self.cl_designated(conditional.else_expression),
+                    | Some(value) if value.is_zero() =>
+                        self.cl_designated(conditional.else_expression),
                     | Some(_) => self.cl_designated(conditional.then_expression),
                     | None => false,
                 }
@@ -504,7 +538,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             site,
         } = finding;
         let text = if truncation {
-            format_in!(self.scratch, "'{words}': truncation from '{from}' to '{to}'")
+            format_in!(
+                self.scratch,
+                "'{words}': truncation from '{from}' to '{to}'"
+            )
         } else if group == G::ClSignedConversion {
             format_in!(
                 self.scratch,
@@ -562,7 +599,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether `source` is a constant to `cl`: an integer constant
     /// expression, or a floating one.
-    fn cl_constant(&self, source: ExpressionInfo<'tu>) -> bool {
+    fn cl_constant(source: ExpressionInfo<'tu>) -> bool {
         (source.integer.is_some()
             && (source.ice || source.constant == super::ConstantClass::Arithmetic))
             || (source.constant == super::ConstantClass::Arithmetic
@@ -593,7 +630,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Whether the integer constant `source` fits the signed or the
     /// unsigned type of `width` bits, or is negative and made unsigned,
     /// which `cl` reports as C4245.
-    fn cl_constant_fits(&self, source: ExpressionInfo<'tu>, width: u32, signed: bool) -> bool {
+    fn cl_constant_fits(source: ExpressionInfo<'tu>, width: u32, signed: bool) -> bool {
         let Some(value) = source.integer.filter(|value| value.wide.is_none()) else {
             return true;
         };
@@ -607,7 +644,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether `e` is a truth value `cl` gives its own type: `!`, whose
     /// `int` it does not convert to `float` as another's.
-    fn cl_truth_value(&self, mut e: &'tu Expression<'tu>) -> bool {
+    fn cl_truth_value(mut e: &'tu Expression<'tu>) -> bool {
         while let E::Parenthesized { expression } = e.kind {
             e = expression;
         }
@@ -646,9 +683,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         }
         let mut folded = e;
-        while let E::Parenthesized {
-            expression: inner,
-        }
+        while let E::Parenthesized { expression: inner }
         | E::Cast {
             operand_expression: inner,
             ..
@@ -656,7 +691,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             folded = inner;
         }
-        let site = folded.operator_source_vectors.unwrap_or(folded.source_vectors);
+        let site = folded
+            .operator_source_vectors
+            .unwrap_or(folded.source_vectors);
         let text = self
             .context
             .string_cache
@@ -717,7 +754,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     .types
                     .non_atomic(self.expression_info(operand_expression).ty)
                     .unqualified();
-                let cast = self.types.non_atomic(self.expression_info(e).ty).unqualified();
+                let cast = self
+                    .types
+                    .non_atomic(self.expression_info(e).ty)
+                    .unqualified();
                 if own != cast {
                     return None;
                 }

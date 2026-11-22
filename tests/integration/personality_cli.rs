@@ -8983,13 +8983,13 @@ mod tests {
         directory.write(
             "levels.c",
             "void f(int i, double d)\n{\n    char c;\n    c = i;\n    i = d;\n#pragma \
-             warning(push, 2)\n    i = d;\n#pragma warning(pop)\n#pragma warning(error: \
-             4244)\n    i = d;\n    (void)c;\n}\n",
+             warning(push, 2)\n    i = d;\n#pragma warning(pop)\n#pragma warning(error: 4244)\n    \
+             i = d;\n    (void)c;\n}\n",
         );
         directory.write(
             "order.c",
-            "int g(int);\nvoid f(int i, double d)\n{\n    char a = i;\n    i = d;\n    if \
-             (2) g(i);\n    (void)a;\n}\n",
+            "int g(int);\nvoid f(int i, double d)\n{\n    char a = i;\n    i = d;\n    if (2) \
+             g(i);\n    (void)a;\n}\n",
         );
         let cl = |args: &[&str]| {
             let output = directory.bcc("--msvc-mode", &[&["/nologo", "/c"], args].concat());
@@ -9065,8 +9065,8 @@ mod tests {
         let directory = Directory::new();
         directory.write(
             "assume.c",
-            "int g(int);\nint f(int x)\n{\n    __assume(x > 0);\n    __assume(g(x));\n    \
-             switch (x) {\n    case 1: return 1;\n    default: __assume(0);\n    }\n}\n#if \
+            "int g(int);\nint f(int x)\n{\n    __assume(x > 0);\n    __assume(g(x));\n    switch \
+             (x) {\n    case 1: return 1;\n    default: __assume(0);\n    }\n}\n#if \
              !__has_builtin(__assume)\n#error no __assume\n#endif\n",
         );
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/W4", "assume.c"]);

@@ -68,13 +68,16 @@ enum Base {
     Unknown,
 }
 
+/// A function declarator's parameter declarations, unless it has none.
+type Parameters<'tu> = Option<ArenaList<'tu, ParameterDeclaration<'tu>>>;
+
 /// One derivation a declarator adds to its base type, outermost first.
 #[derive(Clone, Copy)]
 enum Derivation<'tu> {
     Pointer,
     Array,
     /// A function, with its parameter declarations unless it has none.
-    Function(Option<ArenaList<'tu, ParameterDeclaration<'tu>>>),
+    Function(Parameters<'tu>),
 }
 
 /// The subobject an initializer converts its value to, whose written type
@@ -93,7 +96,8 @@ impl ClTarget {
     pub(in crate::translation_phases::semantic_analysis) const fn element(self) -> Self {
         match self {
             | Self::Binding(binding, depth) if depth < u8::MAX => Self::Binding(binding, depth + 1),
-            | Self::Member(tag, name, depth) if depth < u8::MAX => Self::Member(tag, name, depth + 1),
+            | Self::Member(tag, name, depth) if depth < u8::MAX =>
+                Self::Member(tag, name, depth + 1),
             | _ => Self::Unknown,
         }
     }
@@ -184,7 +188,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         &self,
         e: &'tu Expression<'tu>,
     ) -> Option<&'s str> {
-        let ty = self.types.non_atomic(self.expression_info(e).ty).unqualified();
+        let ty = self
+            .types
+            .non_atomic(self.expression_info(e).ty)
+            .unqualified();
         match e.kind {
             | E::Parenthesized { expression } => self.cl_spelling(expression),
             | E::Identifier(_) => {
@@ -217,7 +224,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if (u64::from(u32::MAX >> 1) + 1..=u64::from(u32::MAX))
                     .contains(&value.get().cast_unsigned()) =>
                 None,
-            | E::Constant(_) => self.cl_basic(ty, TypeQualifiers::empty()),
             // An assignment has its left operand's type, and a comma
             // expression its right operand's.
             | E::Binary {
@@ -241,6 +247,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 right_expression,
                 ..
             } => self.cl_spelling(right_expression),
+            | E::Constant(_)
             | E::Binary {
                 operator:
                     B::LessThan
@@ -299,7 +306,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             // `cl` keeps an unsigned bit-field unsigned where C promotes it
             // to `int`, so the operation's type is not bcc's.
             if info.bit_field.is_some_and(|width| width < 32)
-                && self.integer_type(info.ty).is_some_and(|(_, signed)| !signed)
+                && self
+                    .integer_type(info.ty)
+                    .is_some_and(|(_, signed)| !signed)
             {
                 return None;
             }
@@ -392,7 +401,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 base_expression,
                 member,
             } => {
-                let mut ty = self.types.non_atomic(self.expression_info(base_expression).ty);
+                let mut ty = self
+                    .types
+                    .non_atomic(self.expression_info(base_expression).ty);
                 if matches!(e.kind, E::IndirectMember { .. }) {
                     ty = match self.types.nodes[ty.index] {
                         | TypeKind::Pointer(target) | TypeKind::Array(target, _) => target,
@@ -414,8 +425,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     .iter()
                     .all(|derivation| matches!(derivation, Derivation::Array))
                 {
-                    written.qualifiers |= ty.qualifiers
-                        & (TypeQualifiers::CONST | TypeQualifiers::VOLATILE);
+                    written.qualifiers |=
+                        ty.qualifiers & (TypeQualifiers::CONST | TypeQualifiers::VOLATILE);
                 }
                 Some((written, 0))
             },
@@ -428,8 +439,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             // A pointer stepped keeps its type.
             | E::Unary {
-                operator:
-                    U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement,
+                operator: U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement,
                 operand_expression,
             } if self.cl_pointer(operand_expression) => self.written_operand(operand_expression),
             | E::Binary {
@@ -486,15 +496,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `written` calls: the declaration that writes it, through typedef
     /// names, its index among that declaration's derivations, and its
     /// parameter declarations.
-    #[expect(
-        clippy::type_complexity,
-        reason = "The declaration, the position and the parameters go together."
-    )]
     fn called_function(
         &self,
         mut written: Written<'tu>,
         mut depth: usize,
-    ) -> Option<(Written<'tu>, usize, Option<ArenaList<'tu, ParameterDeclaration<'tu>>>)> {
+    ) -> Option<(Written<'tu>, usize, Parameters<'tu>)> {
         loop {
             let mut derivations = ArenaVec::new_in(self.scratch);
             if !Self::derivations(written.declarator, &mut derivations) {
@@ -566,7 +572,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) -> Option<&'s str> {
         loop {
             let mut derivations = ArenaVec::new_in(self.scratch);
-            if !Self::derivations(written.declarator, &mut derivations) || depth < derivations.len() {
+            if !Self::derivations(written.declarator, &mut derivations) || depth < derivations.len()
+            {
                 return None;
             }
             if depth == derivations.len() {
@@ -584,7 +591,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     return None;
                 }
                 let qualifiers = Self::qualifier_words(written.qualifiers)?;
-                Some(crate::diagnostics::format_in!(self.scratch, "{qualifiers}{name}"))
+                Some(crate::diagnostics::format_in!(
+                    self.scratch,
+                    "{qualifiers}{name}"
+                ))
             },
         }
     }
@@ -592,7 +602,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// The derivations `declarator` adds, outermost first, into `out`;
     /// `false` for one this does not read, as one with attributes, which
     /// may change the type.
-    fn derivations(declarator: Option<Declarator<'tu>>, out: &mut ArenaVec<'_, Derivation<'tu>>) -> bool {
+    fn derivations(
+        declarator: Option<Declarator<'tu>>,
+        out: &mut ArenaVec<'_, Derivation<'tu>>,
+    ) -> bool {
         let Some(declarator) = declarator else {
             return true;
         };
@@ -606,7 +619,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         return false;
                     },
                 | DirectDeclarator::Attributes(_) => return false,
-                | DirectDeclarator::KAndRStyleFunction { .. } => out.push(Derivation::Function(None)),
+                | DirectDeclarator::KAndRStyleFunction { .. } =>
+                    out.push(Derivation::Function(None)),
                 | DirectDeclarator::Array { .. } => out.push(Derivation::Array),
                 | DirectDeclarator::Function { parameter_list, .. } =>
                     out.push(Derivation::Function(Some(parameter_list))),
@@ -647,7 +661,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | _ => return None,
         };
         let qualifiers = Self::qualifier_words(qualifiers)?;
-        Some(crate::diagnostics::format_in!(self.scratch, "{qualifiers}{name}"))
+        Some(crate::diagnostics::format_in!(
+            self.scratch,
+            "{qualifiers}{name}"
+        ))
     }
 
     /// The qualifiers `cl` writes before a type's name, each with a space

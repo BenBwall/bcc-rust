@@ -1202,10 +1202,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Clang's `FunctionDecl::isNoReturn` and the CFG's `__builtin_assume` or
-    /// Microsoft `__assume` of a false condition. A call through a function that is `noreturn`
-    /// differs from [`Self::call_does_not_return`] in the builtins whose call
-    /// Clang emits without ending the block, as `__builtin_trap`.
-    /// C11: §6.7.4 paragraph 8, p. 126; PDF p. 144.
+    /// Microsoft `__assume` of a false condition. A call through a function
+    /// that is `noreturn` differs from [`Self::call_does_not_return`] in the
+    /// builtins whose call Clang emits without ending the block, as
+    /// `__builtin_trap`. C11: §6.7.4 paragraph 8, p. 126; PDF p. 144.
     fn cfg_call_does_not_return(
         &mut self,
         flow: &mut Flow<'s>,

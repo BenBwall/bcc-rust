@@ -498,16 +498,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
-                if self.unused.cl {
-                    let spelled = self.cl_lvalue_spelling(left.expression);
-                    self.check_conversion_as_cl(
-                        left.ty,
-                        spelled,
-                        right,
-                        super::super::cl_warnings::ClConversion::Assignment,
-                        e.operator_source_vectors.unwrap_or(e.source_vectors),
-                    );
-                }
+                self.cl_assignment(e, left, right);
                 self.convert(
                     right.expression,
                     self.types.non_atomic(left.ty).unqualified(),
@@ -972,16 +963,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if compound.is_some() {
             let ty = self.types.non_atomic(left.ty).unqualified();
-            if self.unused.cl
-                && let ExpressionType::Binary { operator, .. } = e.kind
-            {
-                self.check_compound_conversion_as_cl(
-                    operator,
-                    left.expression,
-                    right.expression,
-                    info.ty,
-                );
-            }
+            self.check_compound_conversion_as_cl(e, left.expression, right.expression, info.ty);
             self.convert(e, ty, ConversionKind::Assignment);
             let mut result = Self::expression_result(e, ty);
             result.operation_type = Some(info.ty);

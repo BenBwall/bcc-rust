@@ -238,10 +238,10 @@ fn timestamp_and_breakpoint_intrinsics_lower() {
 /// Learn, "__assume".
 #[test]
 fn microsoft_assumptions_lower() {
-    let source = "int calls;\nint count(void) { return ++calls; }\nint f(int x) {\n    \
-                  __assume(x > 0);\n    __assume(count());\n    switch (x & 1) {\n    case \
-                  0: return x / 2;\n    case 1: return x;\n    default: __assume(0);\n    \
-                  }\n}\nint main(void) { return f(4) + f(3) - 5 + calls; }";
+    let source = "int calls;\nint count(void) { return ++calls; }\nint f(int x) {\n    __assume(x \
+                  > 0);\n    __assume(count());\n    switch (x & 1) {\n    case 0: return x / \
+                  2;\n    case 1: return x;\n    default: __assume(0);\n    }\n}\nint main(void) \
+                  { return f(4) + f(3) - 5 + calls; }";
     let configuration = CompilerConfiguration::default()
         .with_target(Target::WindowsMsvc)
         .with_msvc_extensions(true);

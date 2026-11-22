@@ -500,7 +500,8 @@ impl<'tu> Context<'tu> {
         let mut state = self.current_pragma_state();
         let before = state.configuration.cl_warnings();
         let (warnings, error) = match specifier {
-            | WarningSpecifier::Disable => (before.with_state(code, ClWarningState::Disabled), false),
+            | WarningSpecifier::Disable =>
+                (before.with_state(code, ClWarningState::Disabled), false),
             | WarningSpecifier::Error => (before.with_state(code, ClWarningState::Error), true),
             | WarningSpecifier::Default => (before.with_default(code, false), false),
             | WarningSpecifier::Once => (before.with_default(code, true), false),
