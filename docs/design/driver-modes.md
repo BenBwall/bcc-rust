@@ -1435,7 +1435,9 @@ clang-cl`, about a `cl` option clang-cl knows and bcc does not, and about
 the bare Clang options clang-cl ignores. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
-bare `-fsigned-char` or `-funsigned-char` with the same warning. Its
+bare `-fsigned-char`, `-funsigned-char`, `-ffast-math` or `-fno-fast-math`
+with the same warning, so `/fp:fast -fno-fast-math` keeps `/fp:fast` and
+`/fp:fast /clang:-fno-fast-math` does not. Its
 `/fp:fast` gives up the math functions' `errno`, as clang-cl's
 `-ffast-math` does, so a call of `sqrt` has no side effect for `-Wassume`,
 and `/fp:precise` restores the target's default, as `-ffp-model=precise`

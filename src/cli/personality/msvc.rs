@@ -81,13 +81,17 @@ use crate::{
 };
 
 /// Options that clang-cl ignores with a warning when given bare, as for an
-/// unknown `/` option: Clang options it takes only after `/clang:`, and GCC's
-/// `-fstrict-volatile-bitfields`, which bcc reads but Clang does not know.
-const CLANG_ONLY_OPTIONS: [&str; 6] = [
+/// unknown `/` option: Clang options it takes only after `/clang:` (the
+/// `char` signedness, and `-f[no-]fast-math`, so `/fp:fast -fno-fast-math`
+/// keeps `/fp:fast`), and GCC's `-fstrict-volatile-bitfields`, which bcc
+/// reads but Clang does not know.
+const CLANG_ONLY_OPTIONS: [&str; 8] = [
     "-fsigned-char",
     "-fno-signed-char",
     "-funsigned-char",
     "-fno-unsigned-char",
+    "-ffast-math",
+    "-fno-fast-math",
     "-fstrict-volatile-bitfields",
     "-fno-strict-volatile-bitfields",
 ];

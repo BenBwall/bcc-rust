@@ -9088,7 +9088,9 @@ mod tests {
     /// clang-cl's `/fp:fast` gives up the math functions' `errno`, so a call
     /// of `sqrt` has no side effect for `-Wassume`, and `/fp:precise`
     /// restores the target's default, as Clang's `-fno-fast-math` does:
-    /// `errno` on Windows, none on musl, whatever chose it before.
+    /// `errno` on Windows, none on musl, whatever chose it before. clang-cl
+    /// ignores a bare `-f[no-]fast-math` with a warning and takes it after
+    /// `/clang:`, which it reads after every other option.
     #[test]
     fn floating_point_models_decide_math_errno_for_assumptions() {
         let directory = Directory::new();
@@ -9113,12 +9115,29 @@ void f(double d)
             (&["/fp:fast", "/fp:precise"], true),
             (&["/fp:precise", "/fp:fast"], false),
             (&["/fp:fast", "-fmath-errno"], true),
+            (&["/fp:fast", "/clang:-fmath-errno"], true),
             (&["-fno-math-errno", "/fp:precise"], true),
+            (&["/fp:fast", "-fno-fast-math"], false),
+            (&["-ffast-math"], true),
+            (&["/fp:fast", "/clang:-fno-fast-math"], true),
+            (&["/clang:-fno-fast-math", "/fp:fast"], true),
+            (&["/clang:-ffast-math", "-fmath-errno"], false),
         ] {
             assert_eq!(
                 warns("--clang-cl-mode", &[&["/c", "/Zs"], args].concat()),
                 expected,
                 "{args:?}"
+            );
+        }
+        for option in ["-ffast-math", "-fno-fast-math"] {
+            let output = directory.bcc("--clang-cl-mode", &["/c", "/Zs", option, "math.c"]);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains(&format!(
+                    "warning: unknown argument ignored in clang-cl: '{option}'"
+                )),
+                "{}",
+                stderr(&output)
             );
         }
         let musl = [
