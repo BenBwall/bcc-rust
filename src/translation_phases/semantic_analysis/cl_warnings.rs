@@ -50,6 +50,7 @@ use crate::{
             declaration_syntax::TypeQualifiers,
             syntax::{
                 BinaryOperator as B,
+                ConditionalExpression,
                 Constant,
                 Expression,
                 ExpressionSlot,
@@ -96,6 +97,30 @@ pub(super) struct ClFinding<'s> {
     site:       SourceVectors,
 }
 
+/// The operand of a conditional expression `cl` keeps
+/// ([`Analyzer::cl_condition`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ClCondition<'tu> {
+    /// A constant: `cl` folds the expression to the operand it selects.
+    Folded(&'tu Expression<'tu>),
+    /// A condition of [`ClTruth::Unknown`] value: `cl` folds it, to an
+    /// operand bcc cannot tell.
+    Unknown,
+    /// Not a constant to `cl`, which keeps both operands.
+    Runtime,
+}
+
+/// The truth value `cl` folds a condition to ([`Analyzer::cl_truth`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClTruth {
+    Constant(bool),
+    /// A constant whose value bcc did not compute, as one whose arithmetic
+    /// overflows.
+    Unknown,
+    /// Not a constant to `cl`.
+    Runtime,
+}
+
 /// An arithmetic type as `cl`'s conversion warnings sort it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Arithmetic {
@@ -119,7 +144,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `site`:
     ///
     /// - a floating value made an integer is C4244 at level 2, and a floating
-    ///   constant too, `_Bool` included, where a value is not;
+    ///   constant too, `_Bool` included, where a value or a conditional
+    ///   expression is not;
     /// - a value made a narrower floating type is C4244 at level 3, or at level
     ///   4 from `long double` to `double`; a constant, C4305 when the type does
     ///   not hold it exactly;
@@ -175,14 +201,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         else {
             return None;
         };
-        if !self.cl_conversions_checked(site) || Self::cl_unknown_constant(source) {
+        let source = self.cl_folded_constant(source)?;
+        if !self.cl_conversions_checked(site) || self.cl_unknown_constant(source) {
             return None;
         }
-        let site = Self::cl_value_site(source.expression);
-        let constant = Self::cl_constant(source);
+        let site = self.cl_value_site(source.expression);
+        let constant = self.cl_constant(source);
         let (mut group, truncation) = match (from, to) {
+            // Not for a conditional expression, folded or not.
             | (Arithmetic::Floating(_), Arithmetic::Bool)
-                if !constant || !self.cl_floating_one(source) =>
+                if !constant
+                    || !self.cl_floating_one(source)
+                    || matches!(
+                        Self::without_parentheses(source.expression).kind,
+                        E::Conditional(_)
+                    ) =>
                 return None,
             | (Arithmetic::Floating(_), Arithmetic::Bool | Arithmetic::Integer { .. }) =>
                 (G::ClFloatingConversion, false),
@@ -278,7 +311,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !self.unused.cl {
             return;
         }
-        let site = Self::cl_value_site(source.expression);
+        let site = self.cl_value_site(source.expression);
         let spelled = self.cl_target_spelling(target, ty);
         let Some(finding) = self.cl_conversion(ty, spelled, source, site) else {
             return;
@@ -333,7 +366,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         }
         let left_info = self.expression_info(left);
-        let right_info = self.expression_info(right);
+        let Some(right_info) = self.cl_folded_constant(self.expression_info(right)) else {
+            return;
+        };
+        let right = right_info.expression;
         let operation = self.types.non_atomic(operation).unqualified();
         let (Some(to), Some(from)) = (
             self.cl_arithmetic(left_info.ty),
@@ -341,11 +377,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         ) else {
             return;
         };
-        let site = Self::cl_value_site(right);
-        if !self.cl_conversions_checked(site) || Self::cl_unknown_constant(right_info) {
+        let site = self.cl_value_site(right);
+        if !self.cl_conversions_checked(site) || self.cl_unknown_constant(right_info) {
             return;
         }
-        let constant = Self::cl_constant(right_info);
+        let constant = self.cl_constant(right_info);
         let (mut group, truncation) = match (from, to) {
             | (Arithmetic::Floating(_), Arithmetic::Bool | Arithmetic::Integer { .. }) =>
                 (G::ClFloatingConversion, false),
@@ -419,14 +455,29 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Where `cl` reports the conversion of the value `e`: at the operator
-    /// of the expression that computes it, or where it begins.
-    fn cl_value_site(mut e: &'tu Expression<'tu>) -> SourceVectors {
-        while let E::Parenthesized { expression } = e.kind {
-            e = expression;
+    /// of the expression that computes it (the `?` of a conditional
+    /// expression), or where it begins; for a conditional expression it
+    /// folds, where it reports the operand it selects. A floating value in
+    /// parentheses, but not a constant, it reports at the first of them.
+    fn cl_value_site(&self, mut e: &'tu Expression<'tu>) -> SourceVectors {
+        let info = self.expression_info(e);
+        if matches!(e.kind, E::Parenthesized { .. })
+            && matches!(self.cl_arithmetic(info.ty), Some(Arithmetic::Floating(_)))
+            && !self.cl_constant(info)
+        {
+            return e.source_vectors;
         }
-        match e.kind {
-            | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
-            | _ => e.source_vectors,
+        loop {
+            match e.kind {
+                | E::Parenthesized { expression } => e = expression,
+                | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                    | ClCondition::Folded(selected) => e = selected,
+                    | ClCondition::Unknown | ClCondition::Runtime =>
+                        return e.operator_source_vectors.unwrap_or(e.source_vectors),
+                },
+                | E::Binary { .. } => return e.operator_source_vectors.unwrap_or(e.source_vectors),
+                | _ => return e.source_vectors,
+            }
         }
     }
 
@@ -439,8 +490,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether `source` is a constant bcc did not fold, as one whose
     /// arithmetic overflows, of which `cl` reports C4307 and its own value.
-    fn cl_unknown_constant(source: ExpressionInfo<'tu>) -> bool {
-        source.constant == super::ConstantClass::Arithmetic
+    fn cl_unknown_constant(&self, source: ExpressionInfo<'tu>) -> bool {
+        self.cl_comma_free(source.expression)
+            && source.constant == super::ConstantClass::Arithmetic
             && source.integer.is_none()
             && source.floating().is_none()
     }
@@ -448,7 +500,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Whether `e` is a value `cl` has not computed at `int`, which C4242
     /// reports in place of C4244 when it is shown: an object or member
     /// read, a call, a cast to the operand's own type, or the operand a
-    /// constant `?:` selects.
+    /// constant `?:` selects when it has the type of the whole.
     fn cl_designated(&self, e: &'tu Expression<'tu>) -> bool {
         match e.kind {
             | E::Parenthesized { expression } => self.cl_designated(expression),
@@ -477,16 +529,68 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         .non_atomic(self.expression_info(e).ty)
                         .unqualified()
                     && self.cl_designated(operand_expression),
-            | E::Conditional(conditional) => {
-                let condition = self.expression_info(conditional.condition_expression);
-                match condition.integer.filter(|_| condition.ice) {
-                    | Some(value) if value.is_zero() =>
-                        self.cl_designated(conditional.else_expression),
-                    | Some(_) => self.cl_designated(conditional.then_expression),
-                    | None => false,
-                }
+            // The selected operand, unless `cl` converts it to the type of
+            // the whole.
+            | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                | ClCondition::Folded(selected) =>
+                    self.types
+                        .non_atomic(self.expression_info(selected).ty)
+                        .unqualified()
+                        == self
+                            .types
+                            .non_atomic(self.expression_info(e).ty)
+                            .unqualified()
+                        && self.cl_designated(selected),
+                | ClCondition::Unknown | ClCondition::Runtime => false,
             },
             | _ => false,
+        }
+    }
+
+    /// The operand `cl` folds `conditional` to, by its condition's truth
+    /// value ([`Self::cl_truth`]).
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
+    pub(super) fn cl_condition(
+        &self,
+        conditional: &ConditionalExpression<'tu>,
+    ) -> ClCondition<'tu> {
+        match self.cl_truth(conditional.condition_expression) {
+            | ClTruth::Constant(true) => ClCondition::Folded(conditional.then_expression),
+            | ClTruth::Constant(false) => ClCondition::Folded(conditional.else_expression),
+            | ClTruth::Unknown => ClCondition::Unknown,
+            | ClTruth::Runtime => ClCondition::Runtime,
+        }
+    }
+
+    /// The truth value `cl` folds the condition `e` to, which decides the
+    /// operand of `?:` it keeps, and whether it keeps the right operand of
+    /// `&&` and `||`: a constant when `e` is an integer constant, an integer
+    /// made a pointer (a null pointer false), or an arithmetic floating
+    /// constant (`-0.0` false), but not an address or string literal, nor a
+    /// comma expression. Measured against `cl` 19.44.
+    pub(super) fn cl_truth(&self, mut e: &'tu Expression<'tu>) -> ClTruth {
+        while let E::Parenthesized { expression } = e.kind {
+            e = expression;
+        }
+        if matches!(
+            e.kind,
+            E::Binary {
+                operator: B::Comma,
+                ..
+            }
+        ) {
+            return ClTruth::Runtime;
+        }
+        let info = self.expression_info(e);
+        match info.integer {
+            | Some(value) => ClTruth::Constant(!value.is_zero()),
+            | None if info.constant == super::ConstantClass::Arithmetic => match self
+                .floating_value(info)
+            {
+                | Some(value) => ClTruth::Constant(!(value.real.is_zero() && value.imag.is_zero())),
+                | None => ClTruth::Unknown,
+            },
+            | None => ClTruth::Runtime,
         }
     }
 
@@ -598,8 +702,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Whether `source` is a constant to `cl`: an integer constant
-    /// expression, or a floating one.
-    fn cl_constant(source: ExpressionInfo<'tu>) -> bool {
+    /// expression, or a floating one, without a comma operator
+    /// ([`Self::cl_comma_free`]).
+    fn cl_constant(&self, source: ExpressionInfo<'tu>) -> bool {
+        self.cl_comma_free(source.expression) && Self::cl_folded(source)
+    }
+
+    /// [`Self::cl_constant`] but for the comma operator.
+    fn cl_folded(source: ExpressionInfo<'tu>) -> bool {
         (source.integer.is_some()
             && (source.ice || source.constant == super::ConstantClass::Arithmetic))
             || (source.constant == super::ConstantClass::Arithmetic
@@ -629,11 +739,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether the integer constant `source` fits the signed or the
     /// unsigned type of `width` bits, or is negative and made unsigned,
-    /// which `cl` reports as C4245.
+    /// which `cl` reports as C4245. `cl` reads a 64-bit unsigned constant as
+    /// a signed one: `0xFFFFFFFFFFFFFF80ull` is -128, which fits.
     fn cl_constant_fits(source: ExpressionInfo<'tu>, width: u32, signed: bool) -> bool {
         let Some(value) = source.integer.filter(|value| value.wide.is_none()) else {
             return true;
         };
+        if (1_i128 << 63..1_i128 << 64).contains(&value.value) {
+            return value.value - (1_i128 << 64) >= -(1_i128 << (width - 1));
+        }
         let value = value.value;
         if value < 0 {
             !signed || value >= -(1_i128 << (width - 1))
@@ -667,8 +781,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// constant `?:`, all of which `cl` folds to such a literal. A constant
     /// to `cl` is an arithmetic one, a null pointer or another integer made
     /// a pointer, or a string literal, but not an object's or a function's
-    /// address; and `0 && x` is one. Reported at the operator of the folded
-    /// expression, or where it begins, under its parentheses and casts.
+    /// address, nor one with a comma operator; and `0 && x` is one. Reported
+    /// at the operator of the folded expression, or where it begins, under
+    /// its parentheses and casts and in the operand a constant `?:` selects.
     pub(super) fn check_constant_condition_as_cl(&mut self, slot: ExpressionSlot<'tu>) {
         let Some(e) = super::statements::slot_expression(slot) else {
             return;
@@ -683,13 +798,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         }
         let mut folded = e;
-        while let E::Parenthesized { expression: inner }
-        | E::Cast {
-            operand_expression: inner,
-            ..
-        } = folded.kind
-        {
-            folded = inner;
+        loop {
+            folded = match folded.kind {
+                | E::Parenthesized { expression: inner }
+                | E::Cast {
+                    operand_expression: inner,
+                    ..
+                } => inner,
+                | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                    | ClCondition::Folded(selected) => selected,
+                    | ClCondition::Unknown | ClCondition::Runtime => break,
+                },
+                | _ => break,
+            };
         }
         let site = folded
             .operator_source_vectors
@@ -708,18 +829,76 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         );
     }
 
-    /// Whether `cl` folds the condition `e` to a constant.
+    /// Whether no comma operator remains in `e` once `cl` has folded each
+    /// constant `?:` to the operand it selects, outside `sizeof` and
+    /// `_Alignof`: `cl` folds no expression with one, nor one with a `?:`
+    /// whose condition is not a constant, though bcc may.
+    fn cl_comma_free(&self, e: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(e);
+        while let Some(operand) = work.pop() {
+            match operand.kind {
+                | E::Binary {
+                    operator: B::Comma, ..
+                } => return false,
+                | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                    | ClCondition::Folded(selected) =>
+                        work.extend([conditional.condition_expression, selected]),
+                    | ClCondition::Unknown | ClCondition::Runtime => return false,
+                },
+                | E::Parenthesized { expression } => work.push(expression),
+                | E::Unary {
+                    operand_expression, ..
+                }
+                | E::Cast {
+                    operand_expression, ..
+                } => work.push(operand_expression),
+                | E::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => work.extend([left_expression, right_expression]),
+                | _ => {},
+            }
+        }
+        true
+    }
+
+    /// The value `cl` converts for `source`: `source` itself, unless `cl`
+    /// folds it, through constant `?:`s, to a constant where bcc folded
+    /// none, as for a pointer or floating condition. That constant takes its
+    /// place when it has the type of `source`; otherwise `cl` converts it
+    /// first, which bcc does not model, and reports nothing here (`None`).
+    fn cl_folded_constant(&self, source: ExpressionInfo<'tu>) -> Option<ExpressionInfo<'tu>> {
+        let mut e = source.expression;
+        loop {
+            e = match e.kind {
+                | E::Parenthesized { expression } => expression,
+                | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                    | ClCondition::Folded(selected) => selected,
+                    | ClCondition::Unknown | ClCondition::Runtime => break,
+                },
+                | _ => break,
+            };
+        }
+        let selected = self.expression_info(e);
+        if std::ptr::eq(e, source.expression)
+            || !self.cl_constant(selected)
+            || self.cl_constant(source)
+        {
+            return Some(source);
+        }
+        let ty = |info: ExpressionInfo<'tu>| self.types.non_atomic(info.ty).unqualified();
+        (ty(selected) == ty(source)).then_some(selected)
+    }
+
+    /// Whether `cl` folds the condition `e` to a constant, without a comma
+    /// operator ([`Self::cl_comma_free`]).
     fn cl_constant_condition(&self, mut e: &'tu Expression<'tu>) -> bool {
         while let E::Parenthesized { expression } = e.kind {
             e = expression;
         }
-        if matches!(
-            e.kind,
-            E::Binary {
-                operator: B::Comma,
-                ..
-            }
-        ) {
+        if !self.cl_comma_free(e) {
             return false;
         }
         let info = self.expression_info(e);
@@ -763,14 +942,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.cl_literal_value(operand_expression)
             },
-            | E::Conditional(conditional) => {
-                let condition = self.expression_info(conditional.condition_expression);
-                let selected = if condition.integer?.is_zero() {
-                    conditional.else_expression
-                } else {
-                    conditional.then_expression
-                };
-                self.cl_literal_value(selected)
+            | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                | ClCondition::Folded(selected) => self.cl_literal_value(selected),
+                | ClCondition::Unknown | ClCondition::Runtime => None,
             },
             | _ => None,
         }

@@ -73,7 +73,12 @@ an automatic object's initializers after the function's other warnings.
 the operand a constant `?:` selects; none for an address.
 `sema-cl-narrowing-wall-msvc` pins `/Wall`'s C4242 (`--cl-warning=4242:4`)
 in place of C4244 for an uncomputed or 64-bit value, also where a pragma
-disables C4244. The three match `cl` 19.44 (`/W4` or `/Wall`,
+disables C4244. `sema-cl-folded-conditional-msvc` pins a `?:` whose
+condition `cl` folds (an integer, null pointer or floating constant, not a
+comma): C4244 measured and reported at the selected operand in each
+context, C4100 for a parameter named only in the other or behind `0 &&`,
+but not under `sizeof`, the parameters last first, and C4127 at the
+selected operand. The four match `cl` 19.44 (`/W4` or `/Wall`,
 `/diagnostics:column`) byte for byte. `sema-seh-jumps-clang` pins
 Clang's error at each `goto`, last first at the end of its function, with a
 note at each block entered, innermost first, the `case` and computed-goto

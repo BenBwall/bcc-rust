@@ -666,6 +666,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.leave_expression(e);
             },
             | Work::SkippedOperand(condition, live, begin) => {
+                self.cl_skipped_operand(condition, live, begin);
                 let info = self.expression_info(condition);
                 if Self::constant_truth(info) == Some(!live) {
                     if begin {

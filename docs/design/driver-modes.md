@@ -1077,10 +1077,14 @@ leaves a `__finally` block draws C4532, a `return` nothing. C4100, C4101
 and C4189 name a parameter, or a variable with automatic storage, that
 nothing refers to (an assignment refers to it; C4189's initializer does not),
 under the settings at its declaration; `cl` reports them at the end of the
-function, the parameters and the outermost block's variables first and then
-each inner block's in the order the blocks begin, and none once the unit has
-had an error (a warning `/WX` promotes aside), and so does bcc; for an
-old-style definition C4100 is at the parameter's name in the identifier list.
+function, the parameters (the last one listed first) and the outermost
+block's variables first and then each inner block's in the order the blocks
+begin, and none once the unit has had an error (a warning `/WX` promotes
+aside), and so does bcc; for an old-style definition C4100 is at the
+parameter's name in the identifier list. A reference in an operand that `cl`
+folds away does not count (`b` in `1 ? a : b`, `0 && b` and `1 || b`, by the
+constant conditions described for C4244 below), but one under `sizeof` does,
+where `cl` folds nothing.
 C4715 and C4716 are `cl`'s code generator's: a path reaches the closing brace
 or a `return` without a value, and the function has a `return` with a value,
 reached or not (C4715: `if (0) return 1;` is one), or has none (C4716), `main`
@@ -1113,15 +1117,23 @@ operands (a constant divisor counting one less), `>>` by a constant that
 many bits less, `<<`, unary operators and the operand of a cast, which
 keeps no more than its type, as wide as before, a comparison 1 bit, and
 `+`, `-`, `*`, `/`, `|`, `^` and `?:` the wider operand, so `ch = ch + 1`,
-`ch = i & 0xff` and `ch = i >> 24` draw nothing. A compound assignment
+`ch = i & 0xff` and `ch = i >> 24` draw nothing. A `?:` whose condition is a
+constant `cl` folds to the operand it selects, which alone it measures and
+reports at (`ch = sizeof(long) == 8 ? ll : sc` draws nothing): an integer
+constant, `0 && x`, an integer made a pointer (a null pointer is false) or a
+floating constant (`-0.0` is false), but not an address, a string literal or
+anything with a comma operator. Such a fold that leaves a constant converts
+it as one. A compound assignment
 converts the result of the operation (`'int' to 'char'` for `char += short`)
 and narrows only for `+=`, `-=`, `*=` and `/=` of a wider right operand;
 `_Bool` is a byte there, and an integer made floating draws nothing. A
 constant draws C4305 instead when its new type does not hold it (an
 integer that fits neither the signed nor the unsigned type of that width,
 a floating constant made `float` inexactly, but not to an infinity or
-zero), or C4245 when it is negative and made unsigned; a floating constant
-made an integer is C4244, and one made `_Bool` only when it is 1. No
+zero; `cl` reads a 64-bit unsigned constant as signed, so
+`0xFFFFFFFFFFFFFFFFull` is -1 and fits), or C4245 when it is negative and
+made unsigned; a floating constant made an integer is C4244, and one made
+`_Bool` only when it is 1 and not a `?:`. No
 enumeration, on either side, and no value made `_Bool` draws one. `cl`
 names both types as written, typedef names and qualifiers included
 (`'volatile Byte'`, `'U32'`, and `'const u64'` for the member of a `const`
@@ -1131,21 +1143,25 @@ names, so each binding and member records how its declaration wrote its
 type, and a conversion whose types bcc cannot name so draws nothing. `cl`
 checks conversions only where the warning level is 2 or more, whatever
 `/w1`, `/we` or a pragma says of the warnings, reports them at the value
-(the operator that computes it, or where it begins), and an automatic
+(the operator that computes it, `?` for a conditional expression it does
+not fold, or where it begins; a floating value in parentheses at the first
+of them), and an automatic
 object's initializer conversions at the end of its function, before
 C4100 and the others it reports there. C4244's level depends on the
 conversion, so `/wd`, `/we`, `/w1`-`/w4` and the pragmas set all three, and
 `default` restores each. Under `/Wall`, which shows the warnings that are
 off by default, C4242 replaces C4244 for the narrowing of a 64-bit value
 and of one `cl` has not computed (an object, a member, a call, a cast to
-its own type), apart from C4244's settings. C4127 is an `if`, `while`,
+its own type, or such an operand that a constant `?:` of its type selects),
+apart from C4244's settings. C4127 is an `if`, `while`,
 `do` or `for` condition that `cl` folds to a constant (arithmetic, a null
 pointer or another integer made a pointer, a string literal, or `0 && x`,
-but not an object's or a function's address) unless it is an integer
-literal of 0 or 1 under parentheses, unary operators, a cast to its own
-type or the operand a constant `?:` selects, as in `while (1)` and `do
-... while (0)`; it is reported at the folded operator, or where the value
-begins under its parentheses and casts.
+but not an object's or a function's address, nor anything with a comma
+operator left after folding) unless it is an integer literal of 0 or 1
+under parentheses, unary operators, a cast to its own type or the operand a
+constant `?:` selects, as in `while (1)` and `do ... while (0)`; it is
+reported at the folded operator, or where the value begins under its
+parentheses and casts and in the operand a constant `?:` selects.
 
 What `cl` writes of these that bcc does not: C4267 for a `size_t` value
 (`size_t` and the arithmetic it takes part in, as `sizeof(x) + i`), which

@@ -1,10 +1,12 @@
 //! The width `cl` takes an integer operand's value to have, which decides
 //! C4244 rather than the width of its type: `c + 1` of a `char` stays as
 //! wide as a `char`, `i & 0xff` and `i >> 24` of an `int` as wide as a byte,
-//! and a constant as wide as its magnitude. Measured against `cl` 19.44; a
+//! a constant as wide as its magnitude, and a `?:` whose condition is a
+//! constant as wide as the operand it selects. Measured against `cl` 19.44; a
 //! form not measured has no width, and draws no warning.
 //! C99: §6.3.1.1 paragraph 2, p. 42; PDF p. 54 (the promotions that widen
-//! the operands); §6.5.7, p. 84; PDF p. 96; §6.5.10, p. 87; PDF p. 99.
+//! the operands); §6.5.7, p. 84; PDF p. 96; §6.5.10, p. 87; PDF p. 99;
+//! §6.5.15 paragraph 4, p. 90; PDF p. 102.
 
 use crate::translation_phases::{
     parsing::syntax::{
@@ -177,10 +179,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left_expression,
                 ..
             } => self.cl_type_bits(left_expression),
-            | E::Conditional(conditional) => Some(
-                self.cl_natural_bits(conditional.then_expression)?
-                    .max(self.cl_natural_bits(conditional.else_expression)?),
-            ),
+            // `cl` measures only the operand a constant condition selects.
+            | E::Conditional(conditional) => match self.cl_condition(conditional) {
+                | super::ClCondition::Folded(selected) => self.cl_natural_bits(selected),
+                | super::ClCondition::Unknown => None,
+                | super::ClCondition::Runtime => Some(
+                    self.cl_natural_bits(conditional.then_expression)?
+                        .max(self.cl_natural_bits(conditional.else_expression)?),
+                ),
+            },
             | _ => None,
         }
     }

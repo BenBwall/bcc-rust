@@ -1,0 +1,10 @@
+sema-cl-folded-conditional-msvc.c(9,68): warning C4100: 'll': unreferenced parameter
+sema-cl-folded-conditional-msvc.c(9,32): warning C4100: 'wide': unreferenced parameter
+sema-cl-folded-conditional-msvc.c(22,21): warning C4244: '=': conversion from 'unsigned __int64' to 'Byte', possible loss of data
+sema-cl-folded-conditional-msvc.c(23,21): warning C4244: '/=': conversion from 'unsigned __int64' to 'Byte', possible loss of data
+sema-cl-folded-conditional-msvc.c(24,29): warning C4244: 'function': conversion from '__int64' to 'Byte', possible loss of data
+sema-cl-folded-conditional-msvc.c(26,19): warning C4244: 'return': conversion from 'int' to 'Byte', possible loss of data
+sema-cl-folded-conditional-msvc.c(21,18): warning C4244: 'initializing': conversion from '__int64' to 'Byte', possible loss of data
+sema-cl-folded-conditional-msvc.c(29,29): warning C4100: 'b': unreferenced parameter
+sema-cl-folded-conditional-msvc.c(38,15): warning C4127: conditional expression is constant
+sema-cl-folded-conditional-msvc.c(40,22): warning C4127: conditional expression is constant
