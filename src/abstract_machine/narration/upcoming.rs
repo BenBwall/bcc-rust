@@ -26,6 +26,7 @@ use crate::abstract_machine::{
         Op,
         Operand,
         Place,
+        PointerSourceKind,
         Program,
         Upcoming,
         Value,
@@ -209,8 +210,8 @@ impl Machine {
                     EventKind::Cast,
                     format!(
                         "cast {operand} from `{}` to `{}`",
-                        from.spelling(&self.structures),
-                        to.spelling(&self.structures)
+                        from.spelling(&self.structures, &self.signatures),
+                        to.spelling(&self.structures, &self.signatures)
                     ),
                     clauses::CAST,
                 )
@@ -457,6 +458,8 @@ impl Machine {
                 format!("call `{name}`"),
                 clauses::CALL_ARGUMENTS,
             ),
+            | Op::CallPointer { .. } | Op::Function { .. } | Op::FunctionIndirection { .. } =>
+                function_upcoming(&next.op, &operands()),
             | &Op::Library(library, _) => (
                 EventKind::LibraryCall,
                 format!("call `{}`, which writes to standard output", library.name()),
@@ -821,4 +824,59 @@ fn listed<'a>(names: impl Iterator<Item = &'a str>) -> String {
         let _ = write!(text, "`{name}`");
     }
     text
+}
+
+/// What an operation on a pointer to a function will do: convert a
+/// function's name, follow `*fp`, or call through a pointer, whose
+/// operands' spellings are `operands` (the pointer's first).
+fn function_upcoming(op: &Op, operands: &[String]) -> (EventKind, String, Clause) {
+    let pointer = operands
+        .first()
+        .cloned()
+        .unwrap_or_else(|| String::from("the pointer"));
+    match op {
+        | Op::Function {
+            name,
+            address: false,
+        } => (
+            EventKind::FunctionDesignator,
+            format!("convert `{name}` to a pointer to the function"),
+            clauses::FUNCTION_DESIGNATOR,
+        ),
+        | Op::Function { name, .. } => (
+            EventKind::AddressOf,
+            format!("take the address of the function `{name}`"),
+            clauses::ADDRESS_OPERATOR,
+        ),
+        // A function designator converts to the pointer `*` follows;
+        // an object holds it, and any other expression yields it.
+        | Op::FunctionIndirection { form, .. } => (
+            EventKind::Dereference,
+            if designates(form.kind) {
+                format!("follow the pointer {pointer} converts to back to its function")
+            } else {
+                format!("follow {pointer} to the function it points to")
+            },
+            clauses::INDIRECTION,
+        ),
+        | Op::CallPointer { callee, .. } if designates(callee.kind) => (
+            EventKind::Call,
+            format!("call the function {pointer} designates"),
+            clauses::FUNCTION_CALL,
+        ),
+        | _ => (
+            EventKind::Call,
+            format!("call the function {pointer} points to"),
+            clauses::FUNCTION_CALL,
+        ),
+    }
+}
+
+/// Whether an expression of this kind designates a function, rather than
+/// holding or yielding a pointer to it.
+const fn designates(kind: PointerSourceKind) -> bool {
+    matches!(
+        kind,
+        PointerSourceKind::Name | PointerSourceKind::Indirection
+    )
 }

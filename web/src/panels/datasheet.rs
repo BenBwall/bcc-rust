@@ -98,6 +98,12 @@ pub fn Datasheet(
                                         "lifetime over".to_owned()
                                     };
                                     let dangling = object.alive && matches!(object.value, Value::Pointer { ended: true, .. });
+                                    // A pointer to a function says where
+                                    // the listing defines the function.
+                                    let function = match (&object.value, object.alive) {
+                                        | (Value::Function { name, line, .. }, true) => Some(format!("Points to the function {name}, defined on line {line}")),
+                                        | _ => None,
+                                    };
                                     let place = place(object);
                                     let row = view! {
                                         <tr class:is-used=used class:is-ended=!object.alive class:is-undeclared=object.alive && !object.declared>
@@ -110,7 +116,7 @@ pub fn Datasheet(
                                             <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map_or_default(ToString::to_string)}</td>
-                                            <td class="sheet-value" title=dangling.then_some("The object it pointed to has ended, so its value is indeterminate")>{value}</td>
+                                            <td class="sheet-value" class:is-function=function.is_some() title=function.or_else(|| dangling.then(|| "The object it pointed to has ended, so its value is indeterminate".to_owned()))>{value}</td>
                                         </tr>
                                     };
                                     let members = if object.alive { members(object) } else { Vec::new() };

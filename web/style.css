@@ -72,6 +72,9 @@
     --accent-on-ink: #b33a0b;
     --on-accent: #111111;
     --flow-ink: #8db6ff;
+    /* A pointer to a function: it leads to code, not to an object. */
+    --fn-ink: #e7a8ff;
+    --fn-screen: #e7a8ff;
     --danger: #ff7a6b;
     --knob-blue: #2a5fc0;
     --knob-ochre: #c98a2c;
@@ -143,6 +146,7 @@
     --accent-ink: #b33a0b;
     --accent-on-ink: #ff5a1f;
     --flow-ink: #1d4fb8;
+    --fn-ink: #7a1d9e;
     --danger: #a3221b;
     --knob-blue: #2f6fde;
     --knob-ochre: #e8a33d;
@@ -658,6 +662,7 @@
   .tape-bus[data-access="read"] polygon { stroke: var(--flow); stroke-width: 2; }
   .tape-bus[data-access="designate"] polygon, .tape-bus[data-access="address"] polygon { stroke: var(--screen-ink); stroke-width: 1.5; stroke-dasharray: 3 2; }
   .tape-bus.is-indeterminate text { fill: #b5b4ac; paint-order: stroke; stroke: var(--screen); stroke-width: 3px; }
+  .tape-bus.is-function:not([data-access="write"], [data-access="create"]) text { fill: var(--fn-screen); }
   /* A compact tape's pinned value sits on its bar above the slants that
      cross it: a halo of the bar's own fill breaks each line around the
      text, so the value reads whole. */
@@ -755,6 +760,10 @@
   .cell.is-padding .cell-value { color: var(--ink-3); font-size: 13px; font-weight: 400; }
   .cell-frame.is-static .cell-frame-name { background: var(--ink-2); }
   .cell.is-ended .cell-value { text-decoration: line-through; color: var(--ink-3); }
+  /* A pointer to a function: the function's name, in the colour of code,
+     with a rule under it like the listing's mark of the function. */
+  .cell.is-function:not([data-access="write"], [data-access="create"]) .cell-value { color: var(--fn-ink); }
+  .cell.is-function .cell-value { text-decoration: underline dotted 2px; text-underline-offset: 4px; }
   /* A string: one cell of its characters, a column per byte over an index
      ruler (a tick per byte, its index every eighth), the null character
      boxed as the byte it is. It wraps before it outgrows the strip, so a
@@ -1109,6 +1118,7 @@
   .schematic-gate.is-active text { fill: var(--on-accent); }
   .wire.is-skipped { stroke: var(--ink-3); stroke-dasharray: 1 4; stroke-linecap: round; }
   .wire-value.is-skipped { fill: var(--ink-2); font-style: italic; }
+  .wire-value.is-function { fill: var(--fn-ink); font-weight: 700; }
   .schematic-input.is-skipped circle { fill: none; stroke: var(--ink-3); stroke-width: 1.2; }
   .schematic-gate.is-skipped rect { fill: none; stroke: var(--ink-3); stroke-dasharray: 3 3; }
   .schematic-input.is-skipped text, .schematic-gate.is-skipped text { fill: var(--ink-2); font-weight: 400; }
@@ -1162,6 +1172,7 @@
   .datasheet tr.is-used .sheet-undeclared { color: inherit; }
   .datasheet tr.is-folded td, .datasheet tr.is-folded th { text-decoration: none; white-space: normal; }
   .sheet-value { white-space: normal; overflow-wrap: anywhere; }
+  .sheet-value.is-function { color: var(--fn-ink); font-weight: 700; }
   .sheet-bytes { margin-left: 6px; color: var(--ink-3); white-space: nowrap; }
 
   /* The compiler pipeline: each stage a channel of the device. */
@@ -1606,6 +1617,12 @@
   .monaco-editor .exec-fault-text { text-decoration: underline wavy #ff6b5b; text-underline-offset: 4px; }
   .monaco-editor .exec-line-fault { background: #2a1210; }
   .monaco-editor .obj-ident { text-decoration: underline 2px var(--obj-screen); text-underline-offset: 4px; }
+  /* A function a pointer leads to: its name, and before it the pointers. */
+  .monaco-editor .fn-target { text-decoration: underline dotted 2px var(--fn-screen); text-underline-offset: 4px; }
+  .monaco-editor .fn-pointer-label {
+    margin-right: 6px; padding: 0 5px; border: 1px solid var(--fn-screen); color: var(--fn-screen);
+    background: color-mix(in srgb, var(--fn-screen) 12%, transparent); font-size: 85%; font-weight: 700;
+  }
   .monaco-editor .target-line { background: #2a2210; }
   .monaco-editor .target-glyph::before { content: ""; display: block; width: 9px; height: 9px; margin: 6px auto 0; background: #e2b45c; }
   .monaco-editor .link-line { background: color-mix(in srgb, var(--flow) 16%, transparent); }

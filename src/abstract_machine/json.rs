@@ -19,7 +19,7 @@ use super::{
 };
 
 impl State {
-    /// Encodes this observation as schema version 9 JSON.
+    /// Encodes this observation as schema version 10 JSON.
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut output = String::new();
@@ -39,7 +39,7 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":9,\"source\":");
+    let mut output = String::from("{\"schema_version\":10,\"source\":");
     string(&mut output, &program.source);
     output.push_str(",\"structures\":[");
     for (index, structure) in program.structures.iter().enumerate() {
@@ -79,7 +79,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":9,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":10,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");
@@ -332,6 +332,9 @@ fn value(output: &mut String, input: &Value) {
             optional(output, *structure);
             output.push('}');
         },
+        | Value::Function(function) =>
+            write!(output, "{{\"kind\":\"function\",\"function\":{function}}}")
+                .expect("String write"),
         | Value::Array(elements) => {
             output.push_str("{\"kind\":\"array\",\"elements\":[");
             for (index, element) in elements.iter().enumerate() {

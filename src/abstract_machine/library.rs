@@ -1072,6 +1072,7 @@ fn type_text(ty: Type) -> String {
         | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
         | Type::StructPointer(_) => String::from("a pointer to a structure"),
         | Type::Indirect(..) => String::from("a pointer to a pointer"),
+        | Type::FunctionPointer(_) => String::from("a pointer to a function"),
         | _ => String::from("an aggregate"),
     }
 }

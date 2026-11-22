@@ -29,7 +29,9 @@ use super::{
         Op,
         Operand,
         Place,
+        PointerSourceKind,
         Program,
+        Signature,
         State,
         Structure,
         Type,
@@ -56,6 +58,10 @@ pub(super) struct Machine {
     pub metadata:     Vec<ObjectMetadata>,
     /// The program's structure types, for layouts and member names.
     pub structures:   Arc<[Structure]>,
+    /// The program's function types, for spelling pointers to functions.
+    pub signatures:   Arc<[Signature]>,
+    /// The program's functions' names, by index, for the pointers to them.
+    pub functions:    Arc<[String]>,
     /// How many of the program's directives have run: each is a step of
     /// its own, before the static objects exist.
     pub preprocessed: usize,
@@ -406,6 +412,9 @@ impl Machine {
                 let value = self.pop_value()?;
                 let converted = match to.arithmetic() {
                     | Some(arithmetic) => self.converted(&value, arithmetic)?,
+                    // `(void *)0` converts a null pointer constant to a
+                    // null pointer (C99 §6.3.2.3p3).
+                    | None if to == Type::VoidPointer => Value::null(),
                     | None => value.clone(),
                 };
                 self.push(Operand::Value(converted.clone()))?;
@@ -468,6 +477,8 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.address_of(range, target, offset, structure, value)
             },
+            | Op::Function { .. } | Op::FunctionIndirection { .. } | Op::CallPointer { .. } =>
+                self.function_operation(instruction, program)?,
             | Op::Dereference => {
                 let pointer = self.pop_value()?;
                 let (target, offset, structure) = self.dereference(&pointer)?;
@@ -537,14 +548,23 @@ impl Machine {
                 let left = self.pop_value()?;
                 let result = self.binary_value(operator, ty, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, operator, ty, left, right, result)
+                let constant = self.null_constant_text(program, instruction, (&left, &right));
+                self.binary(
+                    range,
+                    (source, constant.as_deref()),
+                    operator,
+                    ty,
+                    left,
+                    right,
+                    result,
+                )
             },
             | Op::ElementAddress => {
                 let right = self.pop_value()?;
                 let left = self.pop_value()?;
                 let result = self.binary_value("+", None, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, "&[]", None, left, right, result)
+                self.binary(range, (source, None), "&[]", None, left, right, result)
             },
             | &Op::Store {
                 initializer,
@@ -637,7 +657,17 @@ impl Machine {
                         .is_some_and(|last| matches!(last.op, Op::Jump(over) if over >= target));
                 self.branch(range, source, statement, value, truth, has_else)
             },
-            | Op::Call(name, types) => self.call(program, instruction, name, types)?,
+            | Op::Call(name, types) => {
+                let Some(function) = program
+                    .functions
+                    .iter()
+                    .position(|function| function.name == *name)
+                else {
+                    return Err(self.error("unknown function"));
+                };
+                let arguments = self.arguments(types)?;
+                self.call(program, instruction, function, types, &arguments, false)?
+            },
             | &Op::Return(from) => {
                 let value = self.pop_value()?;
                 self.return_from(program, range, from, value, false)?
@@ -925,12 +955,140 @@ impl Machine {
         }
     }
 
+    /// An operation on a pointer to a function: a function's name becoming
+    /// one, `*fp`, or a call through one.
+    fn function_operation(
+        &mut self,
+        instruction: &Instruction,
+        program: &Program,
+    ) -> Result<Event, Diagnostic> {
+        let range = instruction.range;
+        let source = &program.source;
+        Ok(match &instruction.op {
+            | &Op::Function { ref name, address } => {
+                let Some(function) = self.functions.iter().position(|known| known == name) else {
+                    return Err(self.error("unknown function"));
+                };
+                let value = Value::Function(function);
+                self.push(Operand::Value(value.clone()))?;
+                self.function_designator(range, program, function, address, value)
+            },
+            | &Op::FunctionIndirection { operand, form } => {
+                let pointer = self.pop_value()?;
+                let Value::Function(function) = pointer else {
+                    // A null pointer points to no function, and `*` of it
+                    // is undefined (C99 §6.5.3.2p4, footnote 87).
+                    return Err(Diagnostic::ub(
+                        self.state.source_range,
+                        &format!(
+                            "`{}` applies * to a null pointer, which points to no function: there \
+                             is no function for it to designate",
+                            source.get(range.start..range.end).unwrap_or("*")
+                        ),
+                        &clauses::INDIRECTION,
+                        Undefined::NullFunctionIndirection,
+                    ));
+                };
+                self.push(Operand::Value(pointer.clone()))?;
+                let operand = source
+                    .get(operand.start..operand.end)
+                    .unwrap_or("the pointer");
+                self.function_indirection(range, (operand, form), program, function, pointer)
+            },
+            | Op::CallPointer {
+                signature, types, ..
+            } => {
+                let arguments = self.arguments(types)?;
+                let pointer = self.pop_value()?;
+                let function = self.called_function(program, instruction, &pointer, *signature)?;
+                self.call(program, instruction, function, types, &arguments, true)?
+            },
+            | _ => return Err(self.error("expected an operation on a pointer to a function")),
+        })
+    }
+
+    /// The arguments of a call, popped in order: one per type.
+    fn arguments(&mut self, types: &[Type]) -> Result<Vec<Value>, Diagnostic> {
+        let mut arguments = Vec::new();
+        for _ in types {
+            arguments.push(self.pop_value()?);
+        }
+        arguments.reverse();
+        Ok(arguments)
+    }
+
+    /// The function a call through `pointer`, of a type that points to
+    /// functions of type `signature`, runs. A null pointer points to no
+    /// function: C defines a call only of a function (C99 §6.5.2.2p3,
+    /// §6.3.2.3p3), and leaves this one undefined by giving it no meaning
+    /// (§4p2). A function of another type than the one the pointer's type
+    /// points to, which only a cast lets the pointer reach, is undefined
+    /// too (§6.5.2.2p9, §6.3.2.3p8).
+    fn called_function(
+        &self,
+        program: &Program,
+        instruction: &Instruction,
+        pointer: &Value,
+        signature: usize,
+    ) -> Result<usize, Diagnostic> {
+        let callee = self.callee_text(program, instruction);
+        let Value::Function(function) = *pointer else {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "the call `{callee}(…)` goes through a null pointer, which points to no \
+                     function (C99 §6.3.2.3p3). A call's first expression denotes the function it \
+                     calls (§6.5.2.2p3), and C defines no call of anything else, so this one is \
+                     undefined by the omission of any definition (§4p2)"
+                ),
+                &clauses::UNDEFINED_BY_OMISSION,
+                Undefined::NullCall,
+            ));
+        };
+        let defined = program.functions[function].signature;
+        if defined != signature {
+            let spell = |index: usize| {
+                program.signatures[index].spelling(&self.structures, &self.signatures)
+            };
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "`{callee}` points to {}, a function of type {}, but its own type says it \
+                     points to a function of type {}: a cast converted the pointer, and a call \
+                     through the wrong type is undefined",
+                    program.functions[function].name,
+                    spell(defined),
+                    spell(signature)
+                ),
+                &clauses::CALL_TYPE,
+                Undefined::CallType,
+            ));
+        }
+        Ok(function)
+    }
+
+    /// The source of the expression that denotes the function a call
+    /// through a pointer calls: `fp`, `(*fp)` or `ops[i]`.
+    fn callee_text<'p>(&self, program: &'p Program, instruction: &Instruction) -> &'p str {
+        let top = self.activations.len() - 1;
+        let nodes = &program.functions[self.activations[top].function].nodes;
+        instruction
+            .node
+            .and_then(|node| nodes.get(node))
+            .and_then(|node| node.children.first())
+            .and_then(|&child| nodes.get(child))
+            .and_then(|child| program.source.get(child.range.start..child.range.end))
+            .unwrap_or("the pointer")
+    }
+
     fn call(
         &mut self,
         program: &Program,
         instruction: &Instruction,
-        name: &str,
+        function: usize,
         types: &[Type],
+        arguments: &[Value],
+        through_pointer: bool,
     ) -> Result<Event, Diagnostic> {
         if self.activations.len() >= MAX_FRAMES {
             return Err(Diagnostic::limit(
@@ -938,18 +1096,9 @@ impl Machine {
                 "call stack limit reached",
             ));
         }
-        let Some(function) = program
-            .functions
-            .iter()
-            .position(|function| function.name == name)
-        else {
-            return Err(self.error("unknown function"));
-        };
-        let mut arguments = Vec::new();
-        for _ in types {
-            arguments.push(self.pop_value()?);
-        }
-        arguments.reverse();
+        let name = program.functions[function].name.as_str();
+        // Read before the callee's activation becomes the innermost.
+        let callee_source = self.callee_text(program, instruction);
         let recursive = self
             .activations
             .iter()
@@ -981,15 +1130,23 @@ impl Machine {
         {
             parameters.push(self.allocate(name, *ty, 1, value, true)?);
         }
-        Ok(self.called(
+        let mut event = self.called(
             instruction.range,
             name,
             id,
             recursive,
-            &arguments,
+            arguments,
             types,
             parameters,
-        ))
+        );
+        if through_pointer {
+            let kind = match instruction.op {
+                | Op::CallPointer { callee, .. } => callee.kind,
+                | _ => PointerSourceKind::Value,
+            };
+            event = self.called_through(event, program, function, (callee_source, kind));
+        }
+        Ok(event)
     }
 
     fn return_from(
@@ -1127,6 +1284,24 @@ impl Machine {
             })
     }
 
+    /// The spelling of the operand of a binary operator that is an integer
+    /// 0 beside a pointer: a null pointer constant (C99 §6.3.2.3p3), which
+    /// the narration names as written.
+    fn null_constant_text(
+        &self,
+        program: &Program,
+        instruction: &Instruction,
+        (left, right): (&Value, &Value),
+    ) -> Option<String> {
+        let pointer = |value: &Value| matches!(value, Value::Pointer { .. } | Value::Function(_));
+        let at = match (left, right) {
+            | (value, Value::Integer(0)) if pointer(value) => 1,
+            | (Value::Integer(0), value) if pointer(value) => 0,
+            | _ => return None,
+        };
+        self.operand_texts(program, instruction).into_iter().nth(at)
+    }
+
     /// Record that operand `child` of the node `instruction` evaluates,
     /// and every node of its subtree, will not be evaluated.
     fn skip(&mut self, program: &Program, instruction: &Instruction, child: usize) {
@@ -1255,6 +1430,12 @@ impl Machine {
             cells: 0,
             metadata: Vec::new(),
             structures: Arc::clone(&program.structures),
+            signatures: Arc::clone(&program.signatures),
+            functions: program
+                .functions
+                .iter()
+                .map(|function| function.name.clone())
+                .collect(),
             preprocessed: 0,
             initialized: 0,
             started: false,

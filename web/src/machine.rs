@@ -573,6 +573,10 @@ fn tree(
                     lvalue:   matches!(operand, Some(Operand::Address { .. })),
                     active:   evaluation.last == Some(index),
                     skipped:  evaluation.skipped.contains(&index),
+                    function: matches!(
+                        operand,
+                        Some(Operand::Value(abstract_machine::Value::Function(_)))
+                    ),
                     object:   is_name
                         .then(|| node.label.split('[').next().unwrap_or_default().to_owned()),
                     range:    range(node.range, source),
@@ -617,6 +621,9 @@ fn value_text(
             structure,
             ..
         } => format!("&{}", location(target, offset, structure, objects, program)),
+        // A pointer to a function, as `&` and its name would make it.
+        | &abstract_machine::Value::Function(function) =>
+            format!("&{}", program.function_name(function).unwrap_or("?")),
         | abstract_machine::Value::Array(_) => "{…}".to_owned(),
         | abstract_machine::Value::Struct { members, .. } => format!(
             "{{{}}}",
@@ -739,6 +746,14 @@ fn value(
                 .iter()
                 .map(|element| self::value(element, chars, objects, program))
                 .collect(),
+        },
+        | &abstract_machine::Value::Function(function) => {
+            let defined = program.function_range(function);
+            Value::Function {
+                name: program.function_name(function).unwrap_or("?").to_owned(),
+                line: defined.map_or(0, |defined| defined.line),
+                at:   defined.and_then(|defined| range(defined, program.source())),
+            }
         },
         | abstract_machine::Value::Struct { structure, members } => {
             let layout = program.structures().get(*structure);
@@ -1464,6 +1479,47 @@ mod tests {
         );
         let oversized = machine.load(" ".repeat(32 * 1024 + 1));
         assert_eq!(oversized.status, "error");
+    }
+
+    // A pointer to a function reaches the page as the function and where
+    // the listing defines it; the cells, Table 1 and the listing's marks
+    // read it from there, and Figure 2 sets its value apart.
+    #[test]
+    fn pointers_to_functions_reach_the_page_with_their_function() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, include_str!("../docs/corpus/g04_callback.c"));
+        let call = states
+            .iter()
+            .find(|state| state.event.title.starts_with("Call square through"))
+            .expect("the call through f");
+        let f = call
+            .objects
+            .iter()
+            .find(|object| object.name == "f")
+            .expect("apply's parameter");
+        assert_eq!(f.ty, "int (*)(int)");
+        let Value::Function { name, line, at } = &f.value else {
+            panic!("f holds a pointer to a function: {:?}", f.value);
+        };
+        assert_eq!((name.as_str(), *line), ("square", 5));
+        let at = at.expect("the function's name in its definition");
+        assert_eq!((at.start.line, at.start.column, at.end.column), (5, 5, 11));
+        assert_eq!(
+            crate::panels::value_text(&f.value).as_deref(),
+            Some("→square()")
+        );
+        let designator = states
+            .iter()
+            .find(|state| state.event.kind == "function_designator")
+            .expect("square becomes a pointer");
+        let tree = designator.tree.as_ref().expect("the call's tree");
+        let node = tree
+            .nodes
+            .iter()
+            .find(|node| node.label == "square")
+            .expect("the designator's node");
+        assert!(node.function, "{node:?}");
+        assert_eq!(node.value.as_deref(), Some("&square"));
     }
 
     #[test]

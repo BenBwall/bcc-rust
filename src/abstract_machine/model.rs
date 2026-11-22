@@ -21,6 +21,10 @@ pub struct Program {
     /// Structure types, in definition order; [`Value::Struct`] and
     /// [`Operand::Address`] refer to them by index.
     pub(super) structures: Arc<[Structure]>,
+    /// Function types, each listed once: [`Type::FunctionPointer`] and
+    /// [`Target::Function`] refer to them by index, so two pointers to
+    /// functions have compatible types exactly when their indices agree.
+    pub(super) signatures: Arc<[Signature]>,
     /// Objects with static storage duration, in declaration order: file-scope
     /// objects and block-scope `static` ones. They are initialized before
     /// `main` runs and take the first object IDs. String literals are
@@ -80,6 +84,19 @@ pub struct Structure {
     pub align:   usize,
     /// Members, in declaration order.
     pub members: Vec<Member>,
+}
+
+/// A function type: what a pointer to a function points to. C99 calls two
+/// function types compatible when their return types and their parameter
+/// types agree (§6.7.5.3p15); each signature is listed once, so equal
+/// indices mean compatible types.
+///
+/// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Signature {
+    /// An arithmetic type or a structure.
+    pub returns:    Type,
+    pub parameters: Vec<Type>,
 }
 
 /// One member of a [`Structure`].
@@ -264,6 +281,9 @@ pub enum EventKind {
     Cast,
     /// An array was converted to a pointer to its first element.
     ArrayDecay,
+    /// A function's name designated the function, and was converted to a
+    /// pointer to it.
+    FunctionDesignator,
     /// `&` formed a pointer to an object.
     AddressOf,
     /// `*` designated the object a pointer points to.
@@ -336,6 +356,7 @@ impl EventKind {
             | Self::ArithmeticConversion => "arithmetic_conversion",
             | Self::Cast => "cast",
             | Self::ArrayDecay => "array_decay",
+            | Self::FunctionDesignator => "function_designator",
             | Self::AddressOf => "address_of",
             | Self::Dereference => "dereference",
             | Self::Subscript => "subscript",
@@ -376,7 +397,8 @@ impl EventKind {
             | Self::IntegerPromotion
             | Self::ArithmeticConversion
             | Self::Cast
-            | Self::ArrayDecay => "convert",
+            | Self::ArrayDecay
+            | Self::FunctionDesignator => "convert",
             | Self::Designate
             | Self::AddressOf
             | Self::Dereference
@@ -560,6 +582,10 @@ pub enum Value {
     },
     /// Fixed-size array contents.
     Array(Vec<Value>),
+    /// A pointer to the function at this index of the program's
+    /// functions. A null pointer to a function is [`Value::null`], as for
+    /// any pointer.
+    Function(usize),
     /// A structure's members' values, in declaration order.
     Struct {
         /// Index of its type in the program's structures.
@@ -593,8 +619,9 @@ impl Value {
         }
     }
 
-    /// Whether `self` and `other` are pointers to the same place, or both
-    /// null: what `==` compares, whatever array each moves in.
+    /// Whether `self` and `other` are pointers to the same place, or to
+    /// the same function, or both null: what `==` compares, whatever array
+    /// each moves in (C99 §6.5.9p6).
     pub(super) fn same_address(&self, other: &Self) -> bool {
         matches!(
             (self, other),
@@ -602,7 +629,7 @@ impl Value {
                 Self::Pointer { target: a, offset: x, .. },
                 Self::Pointer { target: b, offset: y, .. },
             ) if a == b && (a.is_none() || x == y)
-        )
+        ) || matches!((self, other), (Self::Function(a), Self::Function(b)) if a == b)
     }
 }
 
@@ -647,6 +674,9 @@ pub enum Undefined {
     FloatingConversion,
     /// `*` applied to a null pointer (C99 §6.5.3.2p4).
     NullIndirection,
+    /// `*` applied to a null pointer of a pointer-to-function type, which
+    /// points to no function (C99 §6.5.3.2p4).
+    NullFunctionIndirection,
     /// Pointer arithmetic on a null pointer, which points into no array.
     NullArithmetic,
     /// `p[i]` on a null pointer: `*(p + i)`'s addition has no meaning.
@@ -686,6 +716,12 @@ pub enum Undefined {
     /// `p < q` (or `>`, `<=`, `>=`) of pointers that do not point into the
     /// same object (C99 §6.5.8p5).
     PointerOrder,
+    /// A call through a null pointer to a function, which points to no
+    /// function to call (C99 §6.3.2.3p3, §6.5.2.2p3).
+    NullCall,
+    /// A call through a pointer whose type does not match the type of the
+    /// function it points to (C99 §6.5.2.2p9, §6.3.2.3p8).
+    CallType,
 }
 
 impl Diagnostic {
@@ -747,6 +783,10 @@ pub(super) struct Function {
     /// An integer type or a structure.
     pub returns:    Type,
     pub parameters: Vec<(String, Type)>,
+    /// Its type, by index into [`Program::signatures`].
+    pub signature:  usize,
+    /// The function's name in its definition, where a pointer to it leads.
+    pub range:      SourceRange,
     pub code:       Vec<Instruction>,
     pub nodes:      Vec<ExpressionNode>,
 }
@@ -771,6 +811,32 @@ pub(super) struct BlockObject {
     pub ty:       Type,
     pub constant: bool,
     pub typedef:  Option<&'static str>,
+}
+
+/// How an expression gives a pointer to a function, which decides how the
+/// explanations speak of it: a function designator converts to the pointer,
+/// an object holds it, and any other expression yields it (C99 §6.3.2.1p4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PointerSource {
+    pub kind:    PointerSourceKind,
+    /// Whether the expression is a postfix expression, which a call's
+    /// parentheses may follow as written (C99 §6.5.2p1); any other needs
+    /// parentheses of its own first.
+    pub postfix: bool,
+}
+
+/// What kind of expression gives a pointer to a function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointerSourceKind {
+    /// A function's name, `f`, a function designator.
+    Name,
+    /// `*e`, which designates the function `e` points to.
+    Indirection,
+    /// An object that holds the pointer: `fp` or `ops[i]`.
+    Object,
+    /// Any other expression that yields the pointer: `&f`, a cast or
+    /// `c ? f : g`.
+    Value,
 }
 
 #[derive(Debug, Clone)]
@@ -856,8 +922,24 @@ pub(super) enum Op {
     /// function's `...` (C99 §6.5.2.2p6-7).
     DefaultPromote(Arithmetic),
     Decay(Place),
+    /// The function `name` as an operand: its name designates the function,
+    /// which converts to a pointer to it (C99 §6.3.2.1p4), or, when
+    /// `address`, `&name` yields that pointer without the conversion (C99
+    /// §6.5.3.2p3).
+    Function {
+        name:    String,
+        address: bool,
+    },
     AddressOf,
     Dereference,
+    /// `*fp` of a pointer to a function: the function designator it yields
+    /// converts straight back to the same pointer (C99 §6.5.3.2p4,
+    /// §6.3.2.1p4). `operand` is the source of the expression after the
+    /// `*` and how it gives the pointer.
+    FunctionIndirection {
+        operand: SourceRange,
+        form:    PointerSource,
+    },
     Index,
     /// A unary operator; the promoted arithmetic type it computes in,
     /// `None` for `!` and pointers.
@@ -946,6 +1028,15 @@ pub(super) enum Op {
     Branch(usize, &'static str),
     /// A call with the arguments' types, which convert to the parameters'.
     Call(String, Vec<Type>),
+    /// A call through the pointer to a function below the arguments on the
+    /// stack: `signature` is the type it points to, by index into
+    /// [`Program::signatures`], and the arguments' types follow.
+    CallPointer {
+        signature: usize,
+        types:     Vec<Type>,
+        /// How the expression before the parentheses gives the pointer.
+        callee:    PointerSource,
+    },
     /// A call to a library function with the arguments' types, after the
     /// default argument promotions for those passed through `...`.
     Library(Library, Vec<Type>),
@@ -1084,6 +1175,10 @@ pub(super) struct Static {
     /// The macros whose replacements the declaration uses, in order: a
     /// literal a macro stands for, or the constants of its initializer.
     pub macros:   Vec<usize>,
+    /// The initializers the compiler worked out rather than read as a
+    /// constant: a constant expression such as `1 << 3`, or a function's
+    /// name for a pointer to it, with the value each gives (C99 §6.6p2).
+    pub computed: Vec<(SourceRange, Value)>,
     pub range:    SourceRange,
 }
 
@@ -1106,23 +1201,26 @@ pub(super) enum Type {
     Indirect(Target, u8),
     /// An array of `length` pointers, each `depth` pointers (one or more)
     /// in a row to `target`: `char *names[3]` is `PointerArray(char, 1,
-    /// 3)`.
+    /// 3)`, and a table of pointers to functions `int (*ops[2])(int)` is
+    /// `PointerArray(Function(…), 1, 2)`.
     PointerArray(Target, u8, usize),
+    /// A pointer to a function of the signature at this index of
+    /// [`Program::signatures`]: `int (*)(int, int)`.
+    FunctionPointer(usize),
+    /// `void *`, which this subset has only as the type of a null pointer
+    /// constant cast to it, `(void *)0` (C99 §6.3.2.3p3).
+    VoidPointer,
 }
 
 /// What a chain of pointers ends at: an arithmetic type, `const` when set,
 /// or a structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        variant_size_differences,
-        reason = "A small copied type description; a structure's index is the larger variant."
-    )
-)]
 pub(super) enum Target {
     Arithmetic(Arithmetic, bool),
     Struct(usize),
+    /// A function of the signature at this index of
+    /// [`Program::signatures`].
+    Function(usize),
 }
 
 impl Target {
@@ -1132,6 +1230,7 @@ impl Target {
         match (self, depth) {
             | (Self::Arithmetic(arithmetic, constant), 1) => Type::Pointer(arithmetic, constant),
             | (Self::Struct(id), 1) => Type::StructPointer(id),
+            | (Self::Function(signature), 1) => Type::FunctionPointer(signature),
             | _ => Type::Indirect(self, depth),
         }
     }
@@ -1147,7 +1246,11 @@ impl Type {
     pub(super) const fn is_pointer(self) -> bool {
         matches!(
             self,
-            Self::Pointer(..) | Self::StructPointer(_) | Self::Indirect(..)
+            Self::Pointer(..)
+                | Self::StructPointer(_)
+                | Self::Indirect(..)
+                | Self::FunctionPointer(_)
+                | Self::VoidPointer
         )
     }
 
@@ -1181,18 +1284,20 @@ impl Type {
                 Some((Target::Arithmetic(arithmetic, constant), 1)),
             | Self::StructPointer(id) => Some((Target::Struct(id), 1)),
             | Self::Indirect(target, depth) => Some((target, depth)),
+            | Self::FunctionPointer(signature) => Some((Target::Function(signature), 1)),
             | _ => None,
         }
     }
 
-    /// The type a pointer of this type points to: `int` for `int *`, `int
-    /// *` for `int **`, `struct point` for `struct point *`.
+    /// The object type a pointer of this type points to: `int` for `int
+    /// *`, `int *` for `int **`, `struct point` for `struct point *`; none
+    /// for a pointer to a function, which points to no object.
     pub(super) const fn pointee(self) -> Option<Self> {
         match self.chain() {
             | Some((Target::Arithmetic(arithmetic, _), 1)) => Some(arithmetic.ty()),
             | Some((Target::Struct(id), 1)) => Some(Self::Struct(id)),
+            | Some((Target::Function(_), 1)) | None => None,
             | Some((target, depth)) => Some(target.pointer(depth - 1)),
-            | None => None,
         }
     }
 

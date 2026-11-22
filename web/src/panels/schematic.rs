@@ -165,9 +165,12 @@ fn drawing(tree: &Tree) -> impl IntoView {
             // wire into the operator that skipped it.
             let skipped = node.skipped
                 && parent[index].is_some_and(|parent| !tree.nodes[parent].skipped);
+            // A pointer to a function leads to code, not to an object: its
+            // value is set in the colour of calls.
+            let value_class = if node.function { "wire-value is-function" } else { "wire-value" };
             view! {
                 <path class=format!("wire {state}") d=format!("M{from:.1} {y0:.1} H{bend:.1} V{y1:.1} H{to:.1}") />
-                {value.map(|value| view! { <text class="wire-value" x=from + 4.0 y=y0 - 5.0>{value}</text> })}
+                {value.map(|value| view! { <text class=value_class x=from + 4.0 y=y0 - 5.0>{value}</text> })}
                 {skipped.then(|| view! { <text class="wire-value is-skipped" x=from + 4.0 y=y0 - 5.0>"skipped"</text> })}
                 {parent[index].is_none().then(|| view! {
                     <text class="wire-value" x=to + 4.0 y=y0 + 4.0>{node.value.as_deref().map_or_else(|| "?".to_owned(), shown)}</text>
@@ -292,13 +295,20 @@ fn wire_state(evaluated: bool, active: bool) -> &'static str {
 /// The tree as nested lists, for screen readers.
 fn outline(tree: &Tree, index: usize) -> AnyView {
     let node = &tree.nodes[index];
-    let value = node.value.clone().unwrap_or_else(|| {
-        if node.skipped {
-            "skipped, never evaluated".to_owned()
-        } else {
-            "not evaluated yet".to_owned()
-        }
-    });
+    let value = node.value.clone().map_or_else(
+        || {
+            if node.skipped {
+                "skipped, never evaluated".to_owned()
+            } else {
+                "not evaluated yet".to_owned()
+            }
+        },
+        |value| match value.strip_prefix('&') {
+            // `&square` is read out as what it is.
+            | Some(function) if node.function => format!("a pointer to the function {function}"),
+            | _ => value,
+        },
+    );
     let children = node.children.clone();
     view! {
         <li>

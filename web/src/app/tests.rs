@@ -234,3 +234,48 @@ fn each_step_announces_what_it_did_on_the_tape() {
         .unwrap();
     assert_eq!(tape_summary(constant), None);
 }
+
+// The listing points to code: each function a live object points to has
+// its name marked, with the pointers that lead there before it.
+#[cfg(feature = "worker")]
+#[test]
+fn the_listing_marks_the_functions_pointers_lead_to() {
+    use crate::machine::Machine;
+    let mut machine = Machine::default();
+    let mut snapshot =
+        machine.load(include_str!("../../docs/corpus/g07_static_table.c").to_owned());
+    while !snapshot.event.title.starts_with("Call sub through") {
+        snapshot = machine.step().expect("the run reaches the second call");
+    }
+    let marks = function_marks(&snapshot);
+    let shown: Vec<(usize, Option<&str>, Option<&str>)> = marks
+        .iter()
+        .map(|mark| {
+            (
+                mark.start_line,
+                mark.before.as_deref(),
+                mark.hover.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (
+                8,
+                Some("ops[0] →"),
+                Some("ops[0] points to the function add")
+            ),
+            (
+                12,
+                Some("ops[1] →"),
+                Some("ops[1] points to the function sub")
+            ),
+        ]
+    );
+    assert!(
+        marks
+            .iter()
+            .all(|mark| mark.inline_class.as_deref() == Some("fn-target"))
+    );
+}

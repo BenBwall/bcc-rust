@@ -56,6 +56,7 @@
 )]
 
 // Compilation
+mod constant;
 mod expressions;
 mod lexer;
 mod parser;
@@ -172,7 +173,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 9.
+    /// Encodes the current observation using schema version 10.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -243,6 +244,13 @@ impl Program {
         self.functions
             .get(function)
             .map(|function| function.name.as_str())
+    }
+
+    /// Where function `function`, in definition order, is defined: its
+    /// name in its definition, where a pointer to it leads.
+    #[must_use]
+    pub fn function_range(&self, function: usize) -> Option<SourceRange> {
+        self.functions.get(function).map(|function| function.range)
     }
 
     /// The expression-tree nodes of the full expression rooted at `root` in

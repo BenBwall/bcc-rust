@@ -30,12 +30,15 @@ use super::{
         Nested,
         Op,
         Place,
+        PointerSource,
+        PointerSourceKind,
         SequencePoint,
         SourceRange,
         Type,
     },
     parser::{
         CallSite,
+        Naming,
         Parser,
         compound_operator,
         is_identifier,
@@ -59,141 +62,7 @@ impl Parser<'_> {
             }
             self.position += 1;
             let right = self.expression(precedence + 1)?;
-            let lhs = &self.expressions[left];
-            let rhs = &self.expressions[right];
-            let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
-            let ty = match (operator, lhs.ty, rhs.ty) {
-                // The integer promotions apply to each operand of a shift on
-                // its own; the result has the promoted left operand's type
-                // (C99 §6.5.7p3).
-                | ("<<" | ">>", Type::Integer(left), Type::Integer(_)) =>
-                    Type::Integer(left.promoted()),
-                | ("<<" | ">>", ..) =>
-                    return Err(Diagnostic::constraint(
-                        combined(lhs.range, rhs.range),
-                        "each operand of a shift must have an integer type (C99 §6.5.7p2)",
-                        &super::clauses::SHIFT_CONSTRAINT,
-                    )),
-                // C99 §6.5.10p2, §6.5.11p2, §6.5.12p2: integer operands
-                // only; the usual arithmetic conversions give the type.
-                | ("&" | "^" | "|", Type::Integer(left), Type::Integer(right)) =>
-                    Type::Integer(left.promoted().common(right.promoted()).0),
-                | ("&" | "^" | "|", ..) =>
-                    return Err(Diagnostic::constraint(
-                        combined(lhs.range, rhs.range),
-                        &format!(
-                            "each operand of `{operator}` must have an integer type: the bitwise \
-                             operators combine the bits of integers, and a floating value or a \
-                             pointer has none to give (C99 §6.5.10p2, §6.5.11p2, §6.5.12p2)"
-                        ),
-                        &super::clauses::BITWISE_CONSTRAINT,
-                    )),
-                // C99 §6.5.13p2-3, §6.5.14p2-3: scalar operands, an int
-                // result.
-                | ("&&" | "||", left, right)
-                    if (left.arithmetic().is_some() || left.is_pointer())
-                        && (right.arithmetic().is_some() || right.is_pointer()) =>
-                    Type::INT,
-                | ("&&" | "||", ..) =>
-                    return Err(Diagnostic::constraint(
-                        combined(lhs.range, rhs.range),
-                        &format!(
-                            "each operand of `{operator}` must be a scalar, a number or a \
-                             pointer, which it compares with 0; a structure is neither (C99 \
-                             §6.5.13p2, §6.5.14p2)"
-                        ),
-                        &super::clauses::LOGICAL_CONSTRAINT,
-                    )),
-                | ("%", left, right)
-                    if left.floating().is_some() && right.arithmetic().is_some()
-                        || right.floating().is_some() && left.arithmetic().is_some() =>
-                    return Err(Diagnostic::constraint(
-                        combined(lhs.range, rhs.range),
-                        "each operand of % must have an integer type: a floating division has no \
-                         remainder to give (C99 §6.5.5p2)",
-                        &super::clauses::MULTIPLICATIVE_CONSTRAINT,
-                    )),
-                | ("==" | "!=" | "<" | "<=" | ">" | ">=", left, right)
-                    if left.arithmetic().is_some() && right.arithmetic().is_some() =>
-                    Type::INT,
-                | (_, left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() =>
-                    left.arithmetic()
-                        .zip(right.arithmetic())
-                        .map_or(Type::INT, |(left, right)| {
-                            left.promoted().common(right.promoted()).ty()
-                        }),
-                // C99 §6.5.6p3, p9: two pointers to the same type subtract
-                // to a ptrdiff_t, `long` on x86-64; §6.5.8p2: they order
-                // as an int 0 or 1.
-                | ("-" | "<" | "<=" | ">" | ">=", left, right)
-                    if left.is_pointer() && right.is_pointer() =>
-                {
-                    let (constraint, clause) = if operator == "-" {
-                        (
-                            "subtracting two pointers needs pointers to the same type: the result \
-                             counts elements, and elements of different types have different \
-                             sizes (C99 §6.5.6p3)",
-                            &super::clauses::SUBTRACTION_CONSTRAINT,
-                        )
-                    } else {
-                        (
-                            "ordering two pointers needs pointers to the same type (C99 §6.5.8p2)",
-                            &super::clauses::RELATIONAL_CONSTRAINT,
-                        )
-                    };
-                    if !same_pointee(left, right) {
-                        return Err(Diagnostic::constraint(
-                            combined(lhs.range, rhs.range),
-                            constraint,
-                            clause,
-                        ));
-                    }
-                    if operator == "-" && matches!(left, Type::StructPointer(_)) {
-                        return Err(self.error(
-                            "arithmetic on structure pointers needs an array of structures, which \
-                             is outside this subset",
-                        ));
-                    }
-                    if operator == "-" {
-                        Type::Integer(Integer::Long)
-                    } else {
-                        Type::INT
-                    }
-                },
-                | ("==" | "!=", Type::Pointer(a, _), Type::Pointer(b, _)) if a == b => Type::INT,
-                | ("==" | "!=", left, right) if left.is_pointer() && left == right => Type::INT,
-                | (_, Type::Struct(_), _) | (_, _, Type::Struct(_)) =>
-                    return Err(self.error(
-                        "structures are not operands of arithmetic or comparison; compare their \
-                         members",
-                    )),
-                | ("+" | "-", Type::StructPointer(_), _) | ("+", _, Type::StructPointer(_)) =>
-                    return Err(self.error(
-                        "arithmetic on structure pointers needs an array of structures, which is \
-                         outside this subset",
-                    )),
-                | (
-                    "+" | "-",
-                    pointer @ (Type::Pointer(..) | Type::Indirect(..)),
-                    Type::Integer(_),
-                )
-                | ("+", Type::Integer(_), pointer @ (Type::Pointer(..) | Type::Indirect(..))) =>
-                    pointer,
-                | ("==" | "!=", pointer, Type::Integer(_)) if pointer.is_pointer() && null(rhs) =>
-                    Type::INT,
-                | ("==" | "!=", Type::Integer(_), pointer) if pointer.is_pointer() && null(lhs) =>
-                    Type::INT,
-                | _ => return Err(self.error("unsupported operand types for this operator")),
-            };
-            let effect = lhs.effect || rhs.effect;
-            left = self.node(
-                ExprKind::Binary(operator, left, right),
-                ty,
-                false,
-                combined(lhs.range, rhs.range),
-                lhs.height.max(rhs.height) + 1,
-            )?;
-            self.expressions[left].effect = effect;
+            left = self.binary_node(operator, left, right)?;
         }
         if minimum == 0 && self.at("?") {
             left = self.conditional(left)?;
@@ -202,6 +71,165 @@ impl Parser<'_> {
             left = self.assignment(left)?;
         }
         Ok(left)
+    }
+
+    /// `left operator right` for a binary operator, typed by its operands'
+    /// types. Kept out of `expression_inner`, whose frame each level of
+    /// nesting repeats, so deep nesting stays within the stack.
+    #[inline(never)]
+    fn binary_node(
+        &mut self,
+        operator: &'static str,
+        left: usize,
+        right: usize,
+    ) -> Result<usize, Diagnostic> {
+        let lhs = &self.expressions[left];
+        let rhs = &self.expressions[right];
+        let function = |ty: Type| matches!(ty, Type::FunctionPointer(_));
+        let ty = match (operator, lhs.ty, rhs.ty) {
+            // `(void *)0` is in this subset only to be compared with or
+            // stored into a pointer.
+            | (operator, Type::VoidPointer, _) | (operator, _, Type::VoidPointer)
+                if !matches!(operator, "==" | "!=" | "&&" | "||") =>
+                return Err(self.error(
+                    "`(void *)0` is in this subset only as a null pointer constant, to store into \
+                     or compare with a pointer; pointers to void are outside it",
+                )),
+            | (operator, left_type, right_type)
+                if (function(left_type) || function(right_type))
+                    && !matches!(operator, "&&" | "||") =>
+                self.function_operands(operator, left, right)?,
+            // The integer promotions apply to each operand of a shift on
+            // its own; the result has the promoted left operand's type
+            // (C99 §6.5.7p3).
+            | ("<<" | ">>", Type::Integer(left), Type::Integer(_)) =>
+                Type::Integer(left.promoted()),
+            | ("<<" | ">>", ..) =>
+                return Err(Diagnostic::constraint(
+                    combined(lhs.range, rhs.range),
+                    "each operand of a shift must have an integer type (C99 §6.5.7p2)",
+                    &super::clauses::SHIFT_CONSTRAINT,
+                )),
+            // C99 §6.5.10p2, §6.5.11p2, §6.5.12p2: integer operands
+            // only; the usual arithmetic conversions give the type.
+            | ("&" | "^" | "|", Type::Integer(left), Type::Integer(right)) =>
+                Type::Integer(left.promoted().common(right.promoted()).0),
+            | ("&" | "^" | "|", ..) =>
+                return Err(Diagnostic::constraint(
+                    combined(lhs.range, rhs.range),
+                    &format!(
+                        "each operand of `{operator}` must have an integer type: the bitwise \
+                         operators combine the bits of integers, and a floating value or a \
+                         pointer has none to give (C99 §6.5.10p2, §6.5.11p2, §6.5.12p2)"
+                    ),
+                    &super::clauses::BITWISE_CONSTRAINT,
+                )),
+            // C99 §6.5.13p2-3, §6.5.14p2-3: scalar operands, an int
+            // result.
+            | ("&&" | "||", left, right)
+                if (left.arithmetic().is_some() || left.is_pointer())
+                    && (right.arithmetic().is_some() || right.is_pointer()) =>
+                Type::INT,
+            | ("&&" | "||", ..) =>
+                return Err(Diagnostic::constraint(
+                    combined(lhs.range, rhs.range),
+                    &format!(
+                        "each operand of `{operator}` must be a scalar, a number or a pointer, \
+                         which it compares with 0; a structure is neither (C99 §6.5.13p2, \
+                         §6.5.14p2)"
+                    ),
+                    &super::clauses::LOGICAL_CONSTRAINT,
+                )),
+            | ("%", left, right)
+                if left.floating().is_some() && right.arithmetic().is_some()
+                    || right.floating().is_some() && left.arithmetic().is_some() =>
+                return Err(Diagnostic::constraint(
+                    combined(lhs.range, rhs.range),
+                    "each operand of % must have an integer type: a floating division has no \
+                     remainder to give (C99 §6.5.5p2)",
+                    &super::clauses::MULTIPLICATIVE_CONSTRAINT,
+                )),
+            | ("==" | "!=" | "<" | "<=" | ">" | ">=", left, right)
+                if left.arithmetic().is_some() && right.arithmetic().is_some() =>
+                Type::INT,
+            | (_, left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() =>
+                left.arithmetic()
+                    .zip(right.arithmetic())
+                    .map_or(Type::INT, |(left, right)| {
+                        left.promoted().common(right.promoted()).ty()
+                    }),
+            // C99 §6.5.6p3, p9: two pointers to the same type subtract
+            // to a ptrdiff_t, `long` on x86-64; §6.5.8p2: they order
+            // as an int 0 or 1.
+            | ("-" | "<" | "<=" | ">" | ">=", left, right)
+                if left.is_pointer() && right.is_pointer() =>
+            {
+                let (constraint, clause) = if operator == "-" {
+                    (
+                        "subtracting two pointers needs pointers to the same type: the result \
+                         counts elements, and elements of different types have different sizes \
+                         (C99 §6.5.6p3)",
+                        &super::clauses::SUBTRACTION_CONSTRAINT,
+                    )
+                } else {
+                    (
+                        "ordering two pointers needs pointers to the same type (C99 §6.5.8p2)",
+                        &super::clauses::RELATIONAL_CONSTRAINT,
+                    )
+                };
+                if !same_pointee(left, right) {
+                    return Err(Diagnostic::constraint(
+                        combined(lhs.range, rhs.range),
+                        constraint,
+                        clause,
+                    ));
+                }
+                if operator == "-" && matches!(left, Type::StructPointer(_)) {
+                    return Err(self.error(
+                        "arithmetic on structure pointers needs an array of structures, which is \
+                         outside this subset",
+                    ));
+                }
+                if operator == "-" {
+                    Type::Integer(Integer::Long)
+                } else {
+                    Type::INT
+                }
+            },
+            | ("==" | "!=", Type::Pointer(a, _), Type::Pointer(b, _)) if a == b => Type::INT,
+            | ("==" | "!=", left, right) if left.is_pointer() && left == right => Type::INT,
+            | (_, Type::Struct(_), _) | (_, _, Type::Struct(_)) =>
+                return Err(self.error(
+                    "structures are not operands of arithmetic or comparison; compare their \
+                     members",
+                )),
+            | ("+" | "-", Type::StructPointer(_), _) | ("+", _, Type::StructPointer(_)) =>
+                return Err(self.error(
+                    "arithmetic on structure pointers needs an array of structures, which is \
+                     outside this subset",
+                )),
+            | ("+" | "-", pointer @ (Type::Pointer(..) | Type::Indirect(..)), Type::Integer(_))
+            | ("+", Type::Integer(_), pointer @ (Type::Pointer(..) | Type::Indirect(..))) =>
+                pointer,
+            // A pointer compares with a null pointer constant (C99 §6.5.9p2).
+            | ("==" | "!=", pointer, _)
+                if pointer.is_pointer() && self.null_pointer_constant(right) =>
+                Type::INT,
+            | ("==" | "!=", _, pointer)
+                if pointer.is_pointer() && self.null_pointer_constant(left) =>
+                Type::INT,
+            | _ => return Err(self.error("unsupported operand types for this operator")),
+        };
+        let effect = lhs.effect || rhs.effect;
+        let node = self.node(
+            ExprKind::Binary(operator, left, right),
+            ty,
+            false,
+            combined(lhs.range, rhs.range),
+            lhs.height.max(rhs.height) + 1,
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
     }
 
     /// `target = value` or `target op= value`, after the left operand: an
@@ -275,7 +303,6 @@ impl Parser<'_> {
                 &super::clauses::CONDITIONAL_FIRST,
             ));
         }
-        let null = |expression: &Expr| matches!(expression.kind, ExprKind::Number(0, ..));
         let ty = match (second.ty, third.ty) {
             | (left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() => left
                 .arithmetic()
@@ -284,10 +311,18 @@ impl Parser<'_> {
                     left.promoted().common(right.promoted()).ty()
                 }),
             | (left, right) if left == right && !left.is_array() => left,
+            | (Type::FunctionPointer(_), Type::FunctionPointer(_)) =>
+                return Err(Diagnostic::constraint(
+                    combined(second.range, third.range),
+                    "the second and third operands of `?:` point to functions of different types; \
+                     they must point to compatible types (C99 §6.5.15p3)",
+                    &super::clauses::CONDITIONAL_CONSTRAINT,
+                )),
             | (Type::Pointer(left, a), Type::Pointer(right, b)) if left == right =>
                 Type::Pointer(left, a || b),
-            | (pointer, Type::Integer(_)) if pointer.is_pointer() && null(third) => pointer,
-            | (Type::Integer(_), pointer) if pointer.is_pointer() && null(second) => pointer,
+            | (pointer, _) if pointer.is_pointer() && self.null_pointer_constant(otherwise) =>
+                pointer,
+            | (_, pointer) if pointer.is_pointer() && self.null_pointer_constant(then) => pointer,
             | _ =>
                 return Err(Diagnostic::constraint(
                     combined(second.range, third.range),
@@ -310,95 +345,147 @@ impl Parser<'_> {
         Ok(node)
     }
 
+    /// A unary expression, or a postfix expression and its operators. Each
+    /// level of parentheses repeats this frame, `expression`'s and
+    /// `expression_inner`'s, so the productions live in helpers that stay
+    /// off the stack while a nested expression is parsed.
     fn prefix(&mut self) -> Result<usize, Diagnostic> {
-        let token = self.current();
-        let range = token.range;
-        let text = String::from(token.text);
-        if self.at("(")
-            && (is_type_word(self.peek(1)) || self.peek(1) == "size_t" && self.includes_stdio())
-        {
+        if self.at("(") && (is_type_word(self.peek(1)) || self.names_type(self.peek(1))) {
             return self.cast();
         }
         if self.at("sizeof") {
             return self.size_of();
         }
         if self.at("++") || self.at("--") {
-            self.position += 1;
-            let child = self.expression(UNARY)?;
-            return self.update(child, token, true);
+            return self.prefix_update();
         }
-        if let Some(operator) = unary(&text) {
-            self.position += 1;
-            let child = self.expression(UNARY)?;
-            let expression = &self.expressions[child];
-            let readonly = expression.readonly;
-            let ty = match (operator, expression.ty) {
-                | ("+" | "-" | "~", Type::Integer(integer)) => Type::Integer(integer.promoted()),
-                | ("~", _) =>
-                    return Err(Diagnostic::constraint(
-                        combined(range, expression.range),
-                        "the operand of `~` must have an integer type: it flips the bits of an \
-                         integer, and a floating value or a pointer has none to flip (C99 \
-                         §6.5.3.3p1)",
-                        &super::clauses::COMPLEMENT_CONSTRAINT,
-                    )),
-                | ("+" | "-", floating @ Type::Floating(_)) => floating,
-                | ("!", ty) if ty.arithmetic().is_some() || ty.is_pointer() => Type::INT,
-                | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
-                | ("*", pointer) if let Some(pointee) = pointer.pointee() => pointee,
-                | ("&", ty @ (Type::Integer(_) | Type::Floating(_))) => {
-                    self.check_lvalue(child)?;
-                    Type::Pointer(ty.arithmetic().unwrap_or(Arithmetic::INT), readonly)
-                },
-                | ("&", Type::Struct(id)) => {
-                    self.check_lvalue(child)?;
-                    Type::StructPointer(id)
-                },
-                // The address of a pointer object is a pointer to a pointer
-                // (C99 §6.5.3.2p3).
-                | ("&", pointer) if let Some(address) = pointer.pointer_to() => {
-                    self.check_lvalue(child)?;
-                    address
-                },
-                | _ =>
-                    return Err(self.error(
-                        "unsupported unary operand type; pointers to numbers and to structures \
-                         are modeled",
-                    )),
-            };
-            let effect = expression.effect;
-            let range = combined(range, self.expressions[child].range);
-            let height = self.expressions[child].height + 1;
-            let node = self.node(ExprKind::Unary(operator, child), ty, false, range, height)?;
-            // `*p` for a `const char *p` or a `const int *p` designates an
-            // object the program may not modify through it (C99 §6.3.2.1p1).
-            self.expressions[node].readonly =
-                operator == "*" && self.expressions[child].ty.points_to_const();
-            self.expressions[node].effect = effect;
-            return Ok(node);
+        if let Some(operator) = unary(self.current().text) {
+            return self.unary_operator(operator);
         }
-        let mut value = if self.take("(") {
-            let mut value = self.expression(0)?;
-            // In parentheses a comma is the comma operator (C99 §6.5.17);
-            // between arguments it only separates them.
-            while self.take(",") {
-                let right = self.expression(0)?;
-                let [left_operand, right_operand] = [value, right].map(|at| &self.expressions[at]);
-                let effect = left_operand.effect || right_operand.effect;
-                let (ty, height) = (
-                    right_operand.ty,
-                    left_operand.height.max(right_operand.height) + 1,
-                );
-                let range = combined(left_operand.range, right_operand.range);
-                value = self.node(ExprKind::Comma(value, right), ty, false, range, height)?;
-                self.expressions[value].effect = effect;
+        let value = if self.at("(") {
+            self.parenthesized()?
+        } else {
+            let (value, postfix) = self.primary()?;
+            if !postfix {
+                return Ok(value);
             }
-            let closing = self.current().range;
-            self.expect(")")?;
-            self.expressions[value].parenthesized = true;
-            self.expressions[value].range = combined(range, closing);
             value
-        } else if text.starts_with('"') {
+        };
+        self.postfix(value)
+    }
+
+    /// `++operand` or `--operand`.
+    #[inline(never)]
+    fn prefix_update(&mut self) -> Result<usize, Diagnostic> {
+        let token = self.current();
+        self.position += 1;
+        let child = self.expression(UNARY)?;
+        self.update(child, token, true)
+    }
+
+    /// `operator operand` for a unary operator other than `++`, `--` and
+    /// `sizeof`: `+`, `-`, `~`, `!`, `*` or `&`.
+    ///
+    /// C99: §6.5.3.2 paragraphs 1-4, pp. 78-79; PDF pp. 90-91.
+    /// C99: §6.5.3.3 paragraphs 1-5, p. 79; PDF p. 91.
+    #[inline(never)]
+    fn unary_operator(&mut self, operator: &'static str) -> Result<usize, Diagnostic> {
+        let range = self.current().range;
+        self.position += 1;
+        let child = self.expression(UNARY)?;
+        let expression = &self.expressions[child];
+        let readonly = expression.readonly;
+        let ty = match (operator, expression.ty) {
+            | ("+" | "-" | "~", Type::Integer(integer)) => Type::Integer(integer.promoted()),
+            | ("~", _) =>
+                return Err(Diagnostic::constraint(
+                    combined(range, expression.range),
+                    "the operand of `~` must have an integer type: it flips the bits of an \
+                     integer, and a floating value or a pointer has none to flip (C99 §6.5.3.3p1)",
+                    &super::clauses::COMPLEMENT_CONSTRAINT,
+                )),
+            | ("+" | "-", floating @ Type::Floating(_)) => floating,
+            | ("!", ty) if ty.arithmetic().is_some() || ty.is_pointer() => Type::INT,
+            // `*fp` is a function designator, which converts straight
+            // back to a pointer to the function (C99 §6.5.3.2p4,
+            // §6.3.2.1p4); `&f` and `&*fp` take the pointer without
+            // the conversion (§6.5.3.2p1, p3).
+            | ("*" | "&", ty @ Type::FunctionPointer(_)) if self.designator(child) => ty,
+            | ("*", ty @ Type::FunctionPointer(_)) => ty,
+            | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
+            | ("*", pointer) if let Some(pointee) = pointer.pointee() => pointee,
+            | ("&", ty @ (Type::Integer(_) | Type::Floating(_))) => {
+                self.check_lvalue(child)?;
+                Type::Pointer(ty.arithmetic().unwrap_or(Arithmetic::INT), readonly)
+            },
+            | ("&", Type::Struct(id)) => {
+                self.check_lvalue(child)?;
+                Type::StructPointer(id)
+            },
+            // The address of a pointer object is a pointer to a pointer
+            // (C99 §6.5.3.2p3).
+            | ("&", pointer) if let Some(address) = pointer.pointer_to() => {
+                self.check_lvalue(child)?;
+                address
+            },
+            | _ =>
+                return Err(self.error(
+                    "unsupported unary operand type; pointers to numbers and to structures are \
+                     modeled",
+                )),
+        };
+        let effect = expression.effect;
+        let range = combined(range, self.expressions[child].range);
+        let height = self.expressions[child].height + 1;
+        let node = self.node(ExprKind::Unary(operator, child), ty, false, range, height)?;
+        // `*p` for a `const char *p` or a `const int *p` designates an
+        // object the program may not modify through it (C99 §6.3.2.1p1).
+        self.expressions[node].readonly =
+            operator == "*" && self.expressions[child].ty.points_to_const();
+        self.expressions[node].effect = effect;
+        Ok(node)
+    }
+
+    /// `( expression )`, in which a comma is the comma operator.
+    ///
+    /// C99: §6.5.1 paragraph 5, p. 69; PDF p. 81.
+    #[inline(never)]
+    fn parenthesized(&mut self) -> Result<usize, Diagnostic> {
+        let range = self.current().range;
+        self.position += 1;
+        let mut value = self.expression(0)?;
+        // In parentheses a comma is the comma operator (C99 §6.5.17);
+        // between arguments it only separates them.
+        while self.take(",") {
+            let right = self.expression(0)?;
+            let [left_operand, right_operand] = [value, right].map(|at| &self.expressions[at]);
+            let effect = left_operand.effect || right_operand.effect;
+            let (ty, height) = (
+                right_operand.ty,
+                left_operand.height.max(right_operand.height) + 1,
+            );
+            let range = combined(left_operand.range, right_operand.range);
+            value = self.node(ExprKind::Comma(value, right), ty, false, range, height)?;
+            self.expressions[value].effect = effect;
+        }
+        let closing = self.current().range;
+        self.expect(")")?;
+        self.expressions[value].parenthesized = true;
+        self.expressions[value].range = combined(range, closing);
+        Ok(value)
+    }
+
+    /// A string literal, a constant, a call of a function by its name, a
+    /// function's name, or an object's name, with whether postfix
+    /// operators may follow it (not after a library call).
+    ///
+    /// C99: §6.5.1 paragraphs 1-4, p. 69; PDF p. 81.
+    #[inline(never)]
+    fn primary(&mut self) -> Result<(usize, bool), Diagnostic> {
+        let token = self.current();
+        let range = token.range;
+        let text = String::from(token.text);
+        let node = if text.starts_with('"') {
             let literal = self.take_literal()?;
             let (spelling, range) = (literal.spelling.clone(), literal.range);
             let macro_use = literal.macro_use;
@@ -446,12 +533,9 @@ impl Parser<'_> {
                 .rev()
                 .find(|symbol| symbol.name == text)
                 .map(|symbol| (symbol.ty, symbol.place, symbol.constant));
-            if self.take("(") {
-                if binding.is_some() {
-                    return Err(self.error("calling a local object is not supported"));
-                }
+            if binding.is_none() && self.take("(") {
                 if let Some(library) = self.library(&text) {
-                    return self.library_call(library, range);
+                    return Ok((self.library_call(library, range)?, false));
                 }
                 let mut arguments = Vec::new();
                 let mut types = Vec::new();
@@ -459,11 +543,9 @@ impl Parser<'_> {
                 if !self.take(")") {
                     loop {
                         let argument = self.expression(0)?;
+                        let null = self.null_pointer_constant(argument);
                         let expression = &self.expressions[argument];
-                        types.push((
-                            expression.ty,
-                            matches!(expression.kind, ExprKind::Number(0, ..)),
-                        ));
+                        types.push((expression.ty, null));
                         height = height.max(expression.height + 1);
                         arguments.push(argument);
                         if self.take(")") {
@@ -501,8 +583,31 @@ impl Parser<'_> {
                 )?;
                 self.expressions[node].effect = effect;
                 node
+            } else if binding.is_none()
+                && let Some(&(_, signature)) = self
+                    .function_signatures
+                    .iter()
+                    .find(|(function, _)| *function == text)
+            {
+                // A function's name not followed by a call: it designates
+                // the function, and converts to a pointer to it (C99
+                // §6.3.2.1p4).
+                self.designated.push((text.clone(), range));
+                self.node(
+                    ExprKind::Function(text),
+                    Type::FunctionPointer(signature),
+                    false,
+                    range,
+                    1,
+                )?
             } else {
                 let Some((declared, place, constant)) = binding else {
+                    if self.library(&text).is_some() {
+                        return Err(self.error(
+                            "a pointer to a library function is outside this subset; point to a \
+                             function the program defines",
+                        ));
+                    }
                     return Err(self.error("use of an undeclared identifier"));
                 };
                 // Arrays decay to pointers. A char's value keeps type char:
@@ -522,9 +627,22 @@ impl Parser<'_> {
                  syntax are rejected",
             ));
         };
+        Ok((node, true))
+    }
+
+    /// The postfix operators after `value`: member access, a call through
+    /// a pointer, `++`, `--` and a subscript.
+    ///
+    /// C99: §6.5.2 paragraph 1, pp. 69-70; PDF pp. 81-82.
+    #[inline(never)]
+    fn postfix(&mut self, mut value: usize) -> Result<usize, Diagnostic> {
         loop {
             if self.at(".") || self.at("->") {
                 value = self.member(value)?;
+                continue;
+            }
+            if self.at("(") {
+                value = self.pointer_call(value)?;
                 continue;
             }
             if self.at("++") || self.at("--") {
@@ -573,6 +691,179 @@ impl Parser<'_> {
         Ok(value)
     }
 
+    /// The type of `left operator right` where an operand points to a
+    /// function: two pointers to functions of one type, or one and the null
+    /// pointer constant, compare for equality (C99 §6.5.9p2); nothing else
+    /// computes with them.
+    #[inline(never)]
+    fn function_operands(
+        &self,
+        operator: &str,
+        left: usize,
+        right: usize,
+    ) -> Result<Type, Diagnostic> {
+        let (lhs, rhs) = (&self.expressions[left], &self.expressions[right]);
+        let range = combined(lhs.range, rhs.range);
+        match (operator, lhs.ty, rhs.ty) {
+            | ("==" | "!=", Type::FunctionPointer(a), Type::FunctionPointer(b)) if a == b =>
+                Ok(Type::INT),
+            | ("==" | "!=", Type::FunctionPointer(_), _) if self.null_pointer_constant(right) =>
+                Ok(Type::INT),
+            | ("==" | "!=", _, Type::FunctionPointer(_)) if self.null_pointer_constant(left) =>
+                Ok(Type::INT),
+            | ("==" | "!=", ..) => Err(Diagnostic::constraint(
+                range,
+                "== and != compare a pointer to a function with a pointer to a function of the \
+                 same type, or with a null pointer constant such as 0 (C99 §6.5.9p2, §6.3.2.3p3)",
+                &super::clauses::EQUALITY_CONSTRAINT,
+            )),
+            | _ => {
+                let (reason, clause) = match operator {
+                    | "+" => (
+                        "pointer arithmetic counts elements of an array of objects, and a \
+                         function is no object (C99 §6.5.6p2)",
+                        &super::clauses::FUNCTION_POINTER_ARITHMETIC,
+                    ),
+                    | "-" => (
+                        "subtraction takes a pointer to an object, an element of an array, and a \
+                         function is no object (C99 §6.5.6p3)",
+                        &super::clauses::SUBTRACTION_CONSTRAINT,
+                    ),
+                    | "<" | "<=" | ">" | ">=" => (
+                        "ordering compares pointers to objects, by their places in an array, and \
+                         a function is no object (C99 §6.5.8p2)",
+                        &super::clauses::RELATIONAL_CONSTRAINT,
+                    ),
+                    | "<<" | ">>" => (
+                        "a shift takes integers (C99 §6.5.7p2)",
+                        &super::clauses::SHIFT_CONSTRAINT,
+                    ),
+                    | "&" | "^" | "|" => (
+                        "the bitwise operators take integers (C99 §6.5.10p2, §6.5.11p2, §6.5.12p2)",
+                        &super::clauses::BITWISE_CONSTRAINT,
+                    ),
+                    | _ => (
+                        "the multiplicative operators take numbers (C99 §6.5.5p2)",
+                        &super::clauses::MULTIPLICATIVE_CONSTRAINT,
+                    ),
+                };
+                Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{operator}` does not take a pointer to a function: {reason}; a pointer \
+                         to a function can be called, compared with == and !=, and tested"
+                    ),
+                    clause,
+                ))
+            },
+        }
+    }
+
+    /// `callee(arguments)` where `callee` is not a function's name: a
+    /// pointer to a function, such as `fp`, `(*fp)` or `ops[i]`. Its
+    /// arguments must suit the parameters of the type it points to.
+    ///
+    /// C99: §6.5.2.2 paragraphs 1-3, p. 71; PDF p. 83.
+    #[inline(never)]
+    fn pointer_call(&mut self, callee: usize) -> Result<usize, Diagnostic> {
+        let opening = self.current();
+        let Type::FunctionPointer(signature) = self.expressions[callee].ty else {
+            return Err(Diagnostic::constraint(
+                combined(self.expressions[callee].range, opening.range),
+                "only a function or a pointer to a function can be called: the expression before \
+                 ( must point to a function (C99 §6.5.2.2p1)",
+                &super::clauses::CALLED_FUNCTION,
+            ));
+        };
+        self.position += 1;
+        let mut arguments = Vec::new();
+        let mut height = self.expressions[callee].height + 1;
+        if !self.take(")") {
+            loop {
+                let argument = self.expression(0)?;
+                height = height.max(self.expressions[argument].height + 1);
+                arguments.push(argument);
+                if arguments.len() > MAX_ARGUMENTS {
+                    return Err(Diagnostic::limit(opening.range, "too many arguments"));
+                }
+                if self.take(")") {
+                    break;
+                }
+                self.expect(",")?;
+            }
+        }
+        let closing = self.tokens[self.position - 1].range;
+        let range = combined(self.expressions[callee].range, closing);
+        let known = self.function_types[signature].clone();
+        if known.parameters.len() != arguments.len() {
+            return Err(Diagnostic::constraint(
+                range,
+                &format!(
+                    "this call passes {} argument{}, but the pointer points to a function of type \
+                     {}, which takes {} (C99 §6.5.2.2p2)",
+                    arguments.len(),
+                    if arguments.len() == 1 { "" } else { "s" },
+                    known.spelling(&self.structures, &self.function_types),
+                    known.parameters.len()
+                ),
+                &super::clauses::CALL_ARGUMENT_COUNT,
+            ));
+        }
+        for (&argument, &parameter) in arguments.iter().zip(&known.parameters) {
+            self.require_type(argument, parameter)?;
+        }
+        let effect = self.expressions[callee].effect || self.any_effect(&arguments);
+        let node = self.node(
+            ExprKind::CallPointer(callee, arguments),
+            known.returns,
+            true,
+            range,
+            height,
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
+    }
+
+    /// How `expression`, of a pointer-to-function type, gives its pointer:
+    /// as a function designator that converts to it, from an object that
+    /// holds it, or as any other expression's value.
+    pub(super) fn pointer_source(&self, expression: usize) -> PointerSource {
+        let node = &self.expressions[expression];
+        let kind = match node.kind {
+            | ExprKind::Function(_) => PointerSourceKind::Name,
+            | ExprKind::Unary("*", _) if self.designator(expression) =>
+                PointerSourceKind::Indirection,
+            | ExprKind::Name(..) | ExprKind::Index(..) | ExprKind::Member { .. } =>
+                PointerSourceKind::Object,
+            | _ => PointerSourceKind::Value,
+        };
+        // C99 §6.5.1, §6.5.2p1: a parenthesized expression is a primary
+        // expression, and a primary or postfix expression is a postfix
+        // expression.
+        let postfix = node.parenthesized
+            || matches!(
+                node.kind,
+                ExprKind::Function(_)
+                    | ExprKind::Name(..)
+                    | ExprKind::Index(..)
+                    | ExprKind::Member { .. }
+                    | ExprKind::Call(..)
+                    | ExprKind::CallPointer(..)
+            );
+        PointerSource { kind, postfix }
+    }
+
+    /// Whether `expression` designates a function rather than an object: a
+    /// function's name, or `*` applied to a pointer to a function.
+    pub(super) fn designator(&self, expression: usize) -> bool {
+        match self.expressions[expression].kind {
+            | ExprKind::Function(_) => true,
+            | ExprKind::Unary("*", child) =>
+                matches!(self.expressions[child].ty, Type::FunctionPointer(_)),
+            | _ => false,
+        }
+    }
+
     /// `++operand`, `--operand`, `operand++` or `operand--`, whose value is
     /// the new one for a prefix operator and the old one for a postfix one
     /// (C99 §6.5.2.4p2, §6.5.3.1p2). As a whole statement it is the
@@ -585,6 +876,15 @@ impl Parser<'_> {
         prefix: bool,
     ) -> Result<usize, Diagnostic> {
         let expression = &self.expressions[operand];
+        if matches!(expression.ty, Type::FunctionPointer(_)) {
+            return Err(Diagnostic::constraint(
+                expression.range,
+                "++ and -- add or subtract 1, and pointer arithmetic needs a pointer to an \
+                 object, an element of an array; a pointer to a function points to no object (C99 \
+                 §6.5.6p2, §6.5.2.4p2)",
+                &super::clauses::FUNCTION_POINTER_ARITHMETIC,
+            ));
+        }
         if !matches!(
             expression.ty,
             Type::Integer(_) | Type::Floating(_) | Type::Pointer(..) | Type::Indirect(..)
@@ -800,6 +1100,17 @@ impl Parser<'_> {
                 reach.seal();
                 reach.join(Reach::opaque(node.range));
             },
+            // The expression that denotes the called function is evaluated
+            // with the arguments, in no fixed order (C99 §6.5.2.2p10).
+            | ExprKind::CallPointer(callee, arguments) => {
+                reach = self.reach(*callee)?;
+                for argument in arguments {
+                    reach = self.unsequenced(reach, self.reach(*argument)?)?;
+                }
+                reach.seal();
+                reach.join(Reach::opaque(node.range));
+            },
+            | ExprKind::Function(_)
             | ExprKind::Number(..)
             | ExprKind::Real(..)
             | ExprKind::Character(..)
@@ -900,7 +1211,7 @@ impl Parser<'_> {
         let keyword = self.current();
         self.position += 1;
         let (ty, range) = if self.at("(")
-            && (is_type_word(self.peek(1)) || self.peek(1) == "size_t" && self.includes_stdio())
+            && (is_type_word(self.peek(1)) || self.names_type(self.peek(1)))
         {
             self.position += 1;
             let ty = self.type_name()?;
@@ -910,6 +1221,15 @@ impl Parser<'_> {
         } else {
             let operand = self.expression(UNARY)?;
             let expression = &self.expressions[operand];
+            if self.designator(operand) {
+                return Err(Diagnostic::constraint(
+                    combined(keyword.range, expression.range),
+                    "sizeof does not apply to a function (C99 §6.5.3.4p1): a function is code, \
+                     not an object with a size; sizeof of a pointer to it, such as sizeof &f, is \
+                     the pointer's 8 bytes",
+                    &super::clauses::SIZEOF_CONSTRAINT,
+                ));
+            }
             if expression.effect {
                 return Err(self.error(
                     "sizeof never evaluates its operand, so an assignment, ++ or -- there would \
@@ -947,11 +1267,18 @@ impl Parser<'_> {
         }
         let base = self.base_type()?;
         let depth = self.pointer()?;
+        if self.at_function_declarator() {
+            let (_, ty) = self.function_declarator(base, depth, Naming::Absent)?;
+            if !self.at(")") {
+                return Err(self.error("expected `)` after the type name"));
+            }
+            return Ok(ty);
+        }
         if !self.at(")") {
             return Err(self.error(
                 "a type name in this subset is an arithmetic type or a structure, or pointers to \
-                 one (such as `unsigned int *`, `char **` or `double`); arrays and functions in a \
-                 type name are outside it",
+                 one (such as `unsigned int *`, `char **` or `double`), or a pointer to a \
+                 function (`int (*)(int)`); arrays in a type name are outside it",
             ));
         }
         let range = combined(start.range, self.tokens[self.position - 1].range);
@@ -1080,6 +1407,37 @@ impl Parser<'_> {
         Ok((i128::from(integer.0), integer.1))
     }
 
+    /// `(void *)` and an integer constant expression with the value 0: a
+    /// null pointer constant too, the only pointer to void in this subset.
+    ///
+    /// C99: §6.3.2.3 paragraph 3, p. 47; PDF p. 59.
+    #[inline(never)]
+    fn void_pointer_cast(&mut self, opening: Token<'_>) -> Result<usize, Diagnostic> {
+        self.position += 3;
+        let child = self.expression(UNARY)?;
+        let operand = &self.expressions[child];
+        let range = combined(opening.range, operand.range);
+        if operand.ty.integer().is_none() || !self.null_pointer_constant(child) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "this subset has a pointer to void only as the null pointer constant `(void *)0`, \
+                 a cast of an integer constant expression with the value 0; other pointers to \
+                 void are outside it",
+            ));
+        }
+        let (effect, height) = (operand.effect, operand.height + 1);
+        let node = self.node(
+            ExprKind::Cast(Type::VoidPointer, child),
+            Type::VoidPointer,
+            false,
+            range,
+            height,
+        )?;
+        self.expressions[node].effect = effect;
+        Ok(node)
+    }
+
     /// `(type-name) operand`: a cast between arithmetic types, or between
     /// pointers to the same type that differ only in `const`. Its operand
     /// binds as a unary operator's does, so `(char)300 + 1` adds 1 to the
@@ -1090,6 +1448,9 @@ impl Parser<'_> {
         let opening = self.current();
         self.position += 1;
         let start = self.current();
+        if self.at("void") && self.peek(1) == "*" && self.peek(2) == ")" {
+            return self.void_pointer_cast(opening);
+        }
         if self.at("void") {
             return Err(self.error(
                 "a cast to void, which discards a value, is outside this subset; write the \
@@ -1107,6 +1468,9 @@ impl Parser<'_> {
         let allowed = match (from, to) {
             | (from, to) if from.arithmetic().is_some() && to.arithmetic().is_some() => true,
             | (Type::Pointer(a, _), Type::Pointer(b, _)) => a == b,
+            // A pointer to a function converts to a pointer to a function of
+            // another type, and back (C99 §6.3.2.3p8).
+            | (Type::FunctionPointer(_), Type::FunctionPointer(_)) => true,
             | (from, to) if from.is_pointer() => from == to,
             | (Type::Struct(_) | Type::Array(..), _) | (_, Type::Struct(_)) =>
                 return Err(Diagnostic::constraint(
@@ -1121,9 +1485,10 @@ impl Parser<'_> {
             return Err(Diagnostic::new(
                 "unsupported",
                 combined(start.range, closing.range),
-                "this subset casts between arithmetic types (integer and floating), and between \
-                 pointers to the same type that differ only in const; casts between integers and \
-                 pointers, floating values and pointers, or different pointer types are outside it",
+                "this subset casts between arithmetic types (integer and floating), between \
+                 pointers to the same type that differ only in const, and between pointers to \
+                 functions; casts between integers and pointers, floating values and pointers, or \
+                 other pointer types are outside it",
             ));
         }
         let effect = operand.effect;
@@ -1438,7 +1803,7 @@ impl Parser<'_> {
             | ExprKind::Cast(to, child) => {
                 let from = self.expressions[child].ty;
                 let operand = self.emit_expression(child, false)?;
-                let spelling = to.spelling(&self.structures);
+                let spelling = to.spelling(&self.structures, &self.function_types);
                 let tree = self.tree(&format!("({spelling})"), range, vec![operand])?;
                 self.emit_node(Op::Cast { from, to }, range, tree)?;
                 tree
@@ -1480,6 +1845,48 @@ impl Parser<'_> {
                 if !address && array.is_none() {
                     self.load(declared, range, tree)?;
                 }
+                tree
+            },
+            // A function's name designates the function and converts to a
+            // pointer to it (C99 §6.3.2.1p4).
+            | ExprKind::Function(name) => {
+                let tree = self.tree(&name, range, Vec::new())?;
+                self.emit_node(
+                    Op::Function {
+                        name,
+                        address: false,
+                    },
+                    range,
+                    tree,
+                )?;
+                tree
+            },
+            // `&f` yields the pointer without the conversion (C99
+            // §6.5.3.2p3): one step, on a node of its own.
+            | ExprKind::Unary("&", child)
+                if let ExprKind::Function(name) = self.expressions[child].kind.clone() =>
+            {
+                let text = self.source.get(range.start..range.end).unwrap_or("&");
+                let tree = self.tree(text, range, Vec::new())?;
+                self.emit_node(
+                    Op::Function {
+                        name,
+                        address: true,
+                    },
+                    range,
+                    tree,
+                )?;
+                tree
+            },
+            // `*fp` designates the function `fp` points to, which converts
+            // straight back to a pointer to it (C99 §6.5.3.2p4,
+            // §6.3.2.1p4).
+            | ExprKind::Unary("*", child) if self.designator(expression) => {
+                let form = self.pointer_source(child);
+                let operand = self.expressions[child].range;
+                let tree = self.emit_expression(child, false)?;
+                let tree = self.tree("*", range, vec![tree])?;
+                self.emit_node(Op::FunctionIndirection { operand, form }, range, tree)?;
                 tree
             },
             | ExprKind::Unary("&", child) => {
@@ -1706,6 +2113,39 @@ impl Parser<'_> {
                 self.emit_node(Op::Call(name, types), range, tree)?;
                 tree
             },
+            // The pointer to the function, then the arguments, then the call
+            // (C99 §6.5.2.2p10).
+            | ExprKind::CallPointer(callee, arguments) => {
+                let Type::FunctionPointer(signature) = self.expressions[callee].ty else {
+                    return Err(self.error("expected a pointer to a function"));
+                };
+                let after = self.next_point;
+                self.next_point = SequencePoint::Call(range);
+                let mut children = vec![self.emit_expression(callee, false)?];
+                let mut types = Vec::new();
+                for &argument in &arguments {
+                    children.push(self.emit_expression(argument, false)?);
+                    types.push(self.expressions[argument].ty);
+                }
+                self.next_point = after;
+                let callee_range = self.expressions[callee].range;
+                let text = self
+                    .source
+                    .get(callee_range.start..callee_range.end)
+                    .unwrap_or("f");
+                let tree = self.tree(&format!("{text}()"), range, children)?;
+                let callee = self.pointer_source(callee);
+                self.emit_node(
+                    Op::CallPointer {
+                        signature,
+                        types,
+                        callee,
+                    },
+                    range,
+                    tree,
+                )?;
+                tree
+            },
             | ExprKind::Library(library, arguments) => {
                 let mut children = Vec::new();
                 let mut types = Vec::new();
@@ -1902,6 +2342,14 @@ impl Parser<'_> {
     }
 
     pub(super) fn check_lvalue(&self, expression: usize) -> Result<(), Diagnostic> {
+        if self.designator(expression) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                self.expressions[expression].range,
+                "a function designator names a function, not an object, so it cannot be stored \
+                 into or updated; store into a pointer to a function instead",
+            ));
+        }
         match self.expressions[expression].kind {
             | ExprKind::Name(_, declared, _) if !declared.is_array() => Ok(()),
             // C99 §6.5.16p3, §6.5.2.4p2, §6.5.3.1p2: their results are
@@ -2050,6 +2498,10 @@ pub(super) enum ExprKind {
     /// `(type) operand`, converting to the type.
     Cast(Type, usize),
     Call(String, Vec<usize>),
+    /// A call through the pointer to a function `callee` evaluates to.
+    CallPointer(usize, Vec<usize>),
+    /// A function's name as an operand, which designates the function.
+    Function(String),
     /// `condition ? then : otherwise`.
     Conditional(usize, usize, usize),
     /// `left, right`: the comma operator, in parentheses.

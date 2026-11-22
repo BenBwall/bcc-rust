@@ -339,6 +339,72 @@ clauses! {
     /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
     INDIRECTION = "6.5.3.2p4", "p. 79; PDF p. 91", "Address and indirection operators",
         "*p designates the object p points to; using * on a null or invalid pointer is undefined.";
+    /// C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58.
+    FUNCTION_DESIGNATOR = "6.3.2.1p4", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
+        "A function's name used as an operand becomes a pointer to the function, except as the \
+         operand of sizeof or &.";
+    /// C99: §6.5.2.2 paragraph 1, p. 71; PDF p. 83.
+    CALLED_FUNCTION = "6.5.2.2p1", "p. 71; PDF p. 83", "Function calls",
+        "What comes before a call's parentheses must be a pointer to a function: a function's \
+         name becomes one, and a pointer variable already is one.";
+    /// C99: §6.5.2.2 paragraph 2, p. 71; PDF p. 83.
+    CALL_ARGUMENT_COUNT = "6.5.2.2p2", "p. 71; PDF p. 83", "Function calls",
+        "Calling through a type with a prototype passes as many arguments as it has parameters, \
+         each assignable to its parameter.";
+    /// C99: §6.5.2.2 paragraph 3, p. 71; PDF p. 83.
+    FUNCTION_CALL = "6.5.2.2p3", "p. 71; PDF p. 83", "Function calls",
+        "In a call, the expression before the parentheses denotes the function called, and the \
+         expressions inside them are its arguments.";
+    /// C99: §6.5.2.2 paragraph 9, p. 72; PDF p. 84.
+    CALL_TYPE = "6.5.2.2p9", "p. 72; PDF p. 84", "Function calls",
+        "Calling a function through a pointer to a function of an incompatible type is \
+         undefined.";
+    /// C99: §6.3.2.3 paragraph 8, p. 48; PDF p. 60.
+    FUNCTION_POINTER_CONVERSION = "6.3.2.3p8", "p. 48; PDF p. 60", "Pointers",
+        "A pointer to a function may be cast to a pointer to another function type and back \
+         unchanged; calling through the wrong type is undefined.";
+    /// C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
+    POINTER_EQUALITY = "6.5.9p6", "p. 87; PDF p. 99", "Equality operators",
+        "Two pointers compare equal exactly when both are null, or both point to the same object \
+         or the same function (or one past the same array).";
+    /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
+    EQUALITY_CONSTRAINT = "6.5.9p2", "p. 86; PDF p. 98", "Equality operators",
+        "== and != compare two numbers, two pointers to compatible types, or a pointer with the \
+         null pointer constant.";
+    /// C99: §6.5.6 paragraph 2, p. 82; PDF p. 94.
+    FUNCTION_POINTER_ARITHMETIC = "6.5.6p2", "p. 82; PDF p. 94", "Additive operators",
+        "Adding an integer to a pointer needs a pointer to an object type, the element of an \
+         array; a pointer to a function points to no object.";
+    /// C99: §6.5.3.4 paragraph 1, p. 80; PDF p. 92.
+    SIZEOF_CONSTRAINT = "6.5.3.4p1", "p. 80; PDF p. 92", "The sizeof operator",
+        "sizeof does not apply to a function or to an incomplete type.";
+    /// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48.
+    FUNCTION_TYPE = "6.2.5p20", "pp. 35-36; PDF pp. 47-48", "Types",
+        "A function type is given by its return type and its parameters' number and types; a \
+         pointer to a function points to a function of one such type.";
+    /// C99: §6.7.7 paragraph 3, p. 123; PDF p. 135.
+    TYPEDEF_NAME = "6.7.7p3", "p. 123; PDF p. 135", "Type definitions",
+        "A typedef name is a synonym for a type, not a new type: declarations may use it wherever \
+         they would spell the type.";
+    /// C99: §4 paragraph 2, p. 7; PDF p. 19.
+    UNDEFINED_BY_OMISSION = "4p2", "p. 7; PDF p. 19", "Conformance",
+        "Behavior is undefined where the standard says so, and also wherever it gives no \
+         definition at all.";
+    /// C99: §6.6 paragraph 2, p. 95; PDF p. 107.
+    CONSTANT_EXPRESSION = "6.6p2", "p. 95; PDF p. 107", "Constant expressions",
+        "A constant expression can be evaluated while the program is translated, rather than \
+         when it runs.";
+    /// C99: §6.6 paragraph 3, p. 95; PDF p. 107.
+    CONSTANT_OPERATORS = "6.6p3", "p. 95; PDF p. 107", "Constant expressions",
+        "A constant expression has no assignment, ++, --, call or comma operator, outside an \
+         operand that is not evaluated.";
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    CONSTANT_IN_RANGE = "6.6p4", "p. 95; PDF p. 107", "Constant expressions",
+        "A constant expression must evaluate to a value its type can represent.";
+    /// C99: §6.6 paragraph 8, p. 96; PDF p. 108.
+    ARITHMETIC_CONSTANT = "6.6p8", "p. 96; PDF p. 108", "Constant expressions",
+        "An arithmetic constant expression is built from constants and sizeof with operators, \
+         and casts only between arithmetic types; it reads no object.";
     /// C99: §6.5.3.3 paragraph 2, p. 79; PDF p. 91.
     UNARY_PLUS = "6.5.3.3p2", "p. 79; PDF p. 91", "Unary arithmetic operators",
         "Unary + yields the value of its operand after the integer promotions.";

@@ -202,6 +202,10 @@ pub struct Tree {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact the engine reports about a node."
+)]
 pub struct TreeNode {
     pub label:    String,
     /// Indices into [`Tree::nodes`].
@@ -216,6 +220,10 @@ pub struct TreeNode {
     /// §6.5.13p4, §6.5.14p4, §6.5.15p4): it never gets a value.
     #[serde(default)]
     pub skipped:  bool,
+    /// Whether its value is a pointer to a function, which the panels set
+    /// apart from a pointer to an object.
+    #[serde(default)]
+    pub function: bool,
     /// The object an identifier names, for colour coding.
     pub object:   Option<String>,
     pub range:    Option<Range>,
@@ -324,6 +332,19 @@ pub enum Value {
         /// What it points to, as the source names it: `values[1]`, `p.x`,
         /// `values+3` one past the end.
         to:       String,
+    },
+    /// A pointer to a function: which function, and where the listing
+    /// defines it. A null pointer to a function is a `Pointer` with no
+    /// target, as for any pointer.
+    Function {
+        /// The function's name: `square`.
+        name: String,
+        /// The line of its definition.
+        line: usize,
+        /// Its name in its definition, which the listing marks with the
+        /// pointers that lead there.
+        #[serde(default)]
+        at:   Option<Range>,
     },
     /// A structure: its members in order, each at its byte offset, with
     /// the padding after it.
