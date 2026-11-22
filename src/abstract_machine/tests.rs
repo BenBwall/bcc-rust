@@ -5943,6 +5943,8 @@ fn the_limits_the_site_states_hold() {
         "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
         "int main(void) { int i = 0; i = i++; return i; }",
         "#include <string.h>\nint main(void) { return 0; }",
+        "int main(void) { switch (1) { int x; case 1: return 0; } return 0; }",
+        "void *f(void) { return 0; } int main(void) { return 0; }",
     ] {
         let _diagnostic = compile(source).expect_err(source);
     }
@@ -6546,9 +6548,10 @@ fn small_review_fixes_say_what_happens() {
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end
-/// those whose behavior C leaves undefined (`u…`), which stop there, and
+/// those whose behavior C leaves undefined (`u…`), which stop there,
 /// those whose result depends on an order C leaves open (`o…`), which stop
-/// rather than choose one.
+/// rather than choose one, and those that read an indeterminate value
+/// (`x…`), which stop there without calling it more than C does.
 #[test]
 fn the_corpus_of_beginner_programs_runs() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/docs/corpus");
@@ -6575,7 +6578,7 @@ fn the_corpus_of_beginner_programs_runs() {
         }
         let expected = match name.as_bytes().first() {
             | Some(b'u') => "undefined_behavior",
-            | Some(b'o') => "error",
+            | Some(b'o' | b'x') => "error",
             | _ => "finished",
         };
         assert_eq!(
