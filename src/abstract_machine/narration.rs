@@ -5,6 +5,7 @@
 //! Each builder returns an [`Event`] whose clauses are the rules the
 //! operation applied (see `clauses.rs` for the citations).
 
+mod enumerations;
 mod floating;
 mod functions;
 mod upcoming;
@@ -14,6 +15,7 @@ use std::{
     fmt::Write,
 };
 
+pub(super) use enumerations::break_statement;
 use floating::{
     conversion_words,
     floating_declaration,
@@ -45,6 +47,7 @@ use super::{
         Event,
         EventKind,
         Macro,
+        Named,
         Nested,
         Op,
         Operand,
@@ -135,6 +138,9 @@ pub(super) enum Topic {
     Comma,
     FunctionPointer,
     ConstantExpression,
+    Enumeration,
+    Switch,
+    Typedef,
 }
 
 impl Topic {
@@ -460,6 +466,24 @@ impl Topic {
                  pointer to it. Anything that needs the program to run, such as a call, reading a \
                  variable or an assignment, is refused there. An automatic variable's initializer \
                  may be any expression, since it runs each time the declaration is reached.",
+            | Self::Enumeration =>
+                "An enumeration gives names to related integer values, so a program can say `state \
+                 == RUNNING` instead of `state == 2`. The names are constants of type int, not \
+                 variables: they take no memory, never change, and can appear wherever C needs a \
+                 constant, such as a case label or an array's size. C does not check that an \
+                 enumeration's object holds one of its constants: underneath it is an integer, and \
+                 any value of its integer type is allowed.",
+            | Self::Switch =>
+                "A switch chooses one of many paths by comparing one integer with constant labels, \
+                 often an enumeration's constants. Its labels are only places to jump to, not \
+                 separate blocks: after the jump, execution runs straight on through the next \
+                 labels until a break. Forgetting a break, so one case falls through into the \
+                 next, is a classic bug, which is why compilers can warn about it.",
+            | Self::Typedef =>
+                "A typedef gives a type a second name, such as `celsius` for double or `string` \
+                 for char *, so a declaration can say what a value means rather than how it is \
+                 stored. It makes no new type and no object: `celsius t` declares an ordinary \
+                 double, and everything that works on a double works on t.",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -1383,19 +1407,35 @@ impl Machine {
         range: SourceRange,
         id: usize,
         ty: Type,
-        initialized: bool,
+        (initialized, named): (bool, Named),
     ) -> Event {
         let object = &self.state.objects[id - 1];
         let function = self.function_name(object.frame_id);
         // A type spelled with a typedef name keeps it; the explanation says
         // which type it names (C99 §6.7.7p3).
         let typedef = self.metadata[id - 1].typedef;
+        let enumeration = self.enumeration_name(named);
         let what = match ty {
             | Type::Integer(integer) if let Some(typedef) = typedef => format!(
                 "a {typedef} object: {typedef} is a typedef name, which <stdio.h> defines here as \
                  {} ({}). Its value is",
                 integer.spelling(),
                 width_text(integer)
+            ),
+            | Type::Integer(integer) if let Some(enumeration) = &enumeration => format!(
+                "{} object ({}). Its value is",
+                article(enumeration),
+                width_text(integer)
+            ),
+            | Type::Array(element, count) if let Some(enumeration) = &enumeration => format!(
+                "an array of {count} {enumeration} objects, {} bytes each ({} bytes on x86-64). \
+                 Each element's value is",
+                element.bytes(),
+                count.saturating_mul(element.bytes())
+            ),
+            | Type::Pointer(..) if let Some(enumeration) = &enumeration => format!(
+                "{} object, a pointer to {enumeration} (8 bytes on x86-64). Its value is",
+                article(&object.r#type),
             ),
             | Type::Array(Arithmetic::INT, count) => format!(
                 "an array of {count} ints ({} bytes on x86-64). Each element's value is",
@@ -1483,6 +1523,12 @@ impl Machine {
             ""
         };
         let kind = match ty {
+            | Type::Array(_, count) if let Some(enumeration) = &enumeration =>
+                format!("an array of {count} {enumeration} objects"),
+            | Type::Pointer(..) if let Some(enumeration) = &enumeration =>
+                format!("a pointer to {enumeration}"),
+            | Type::Integer(_) if enumeration.is_some() =>
+                format!("{} object", article(&object.r#type)),
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
@@ -1546,6 +1592,9 @@ impl Machine {
         if typedef == Some("size_t") {
             cited.push(clauses::SIZE_T);
         }
+        let (named_words, named_clauses) = self.named_text(id, named);
+        text.push_str(&named_words);
+        cited.extend(named_clauses);
         if matches!(ty, Type::Struct(_)) {
             cited.extend([
                 clauses::STRUCTURE_TYPE,
@@ -1557,10 +1606,11 @@ impl Machine {
         // Types other than int and char state their width, which C leaves
         // to the implementation within minimum ranges.
         let element = ty.element().unwrap_or(ty);
-        let sized = matches!(
-            element,
-            Type::Integer(integer) if !matches!(integer, Integer::Int | Integer::Char)
-        );
+        let sized = enumeration.is_none()
+            && matches!(
+                element,
+                Type::Integer(integer) if !matches!(integer, Integer::Int | Integer::Char)
+            );
         let floating = element.floating().is_some();
         if sized {
             cited.push(clauses::INTEGER_LIMITS);
@@ -1586,6 +1636,10 @@ impl Machine {
                 Topic::Padding
             } else if constant {
                 Topic::Const
+            } else if enumeration.is_some() && ty.pointee().is_none() {
+                Topic::Enumeration
+            } else if named.alias.is_some() {
+                Topic::Typedef
             } else if sized {
                 Topic::IntegerSizes
             } else if floating {
@@ -1600,6 +1654,58 @@ impl Machine {
 
     /// Before `main`: static object `index` of the program, now object
     /// `id`, exists with its initial value.
+    /// The name of the enumeration a declaration's type is, or is an array
+    /// of or a pointer to, when `named` says it is one.
+    fn enumeration_name(&self, named: Named) -> Option<String> {
+        named
+            .enumeration
+            .and_then(|enumeration| self.enumerations.get(enumeration))
+            .map(|enumeration| enumeration.name.clone())
+    }
+
+    /// What object `id`'s declaration said of its type beyond the type
+    /// itself, `named`, in sentences that start with a space: that its type is
+    /// an enumeration, and the typedef name it was spelled with.
+    fn named_text(&self, id: usize, named: Named) -> (String, Vec<Clause>) {
+        let object = &self.state.objects[id - 1];
+        let mut text = String::new();
+        let mut cited = Vec::new();
+        if object.enumeration.is_some()
+            && let Some(enumeration) = named
+                .enumeration
+                .and_then(|enumeration| self.enumerations.get(enumeration))
+        {
+            let constants: Vec<String> = enumeration
+                .constants
+                .iter()
+                .map(|constant| constant.name.clone())
+                .collect();
+            let _ = write!(
+                text,
+                " Its type is an enumeration: {}. So it may hold any value of that type; C does \
+                 not check that it holds one of {}.",
+                enumerations::compatible_text(enumeration),
+                if constants.len() == 1 {
+                    format!("its constant, {}", constants[0])
+                } else {
+                    format!("the constants {}", list_words(&constants))
+                },
+            );
+            cited.push(clauses::ENUMERATED_TYPE);
+        }
+        if let Some(alias) = named.alias.and_then(|alias| self.aliases.get(alias)) {
+            let _ = write!(
+                text,
+                " Its declaration spells the type with the typedef name `{}`, which line {} \
+                 declared as a synonym for {}: a typedef names a type and creates no object, so \
+                 `{}` is simply an object of that type.",
+                alias.name, alias.line, alias.spelling, object.name
+            );
+            cited.push(clauses::TYPEDEF_NAME);
+        }
+        (text, cited)
+    }
+
     pub(super) fn static_storage(&self, program: &Program, index: usize, id: usize) -> Event {
         let declared = &program.statics[index];
         let object = &self.state.objects[id - 1];
@@ -1719,6 +1825,9 @@ impl Machine {
             }
         }
         text.push_str(" All of this happens before main is called.");
+        let (named, named_clauses) = self.named_text(id, declared.named);
+        text.push_str(&named);
+        cited.extend(named_clauses);
         if let Type::Struct(structure) = declared.ty {
             let _ = write!(
                 text,
@@ -1737,7 +1846,13 @@ impl Machine {
             cited.push(clauses::MODIFIABLE_LVALUE);
             Topic::Const
         } else if declared.computed.is_empty() {
-            Topic::StaticStorage
+            if declared.named.enumeration.is_some() {
+                Topic::Enumeration
+            } else if declared.named.alias.is_some() {
+                Topic::Typedef
+            } else {
+                Topic::StaticStorage
+            }
         } else {
             Topic::ConstantExpression
         };
@@ -2924,16 +3039,16 @@ impl Machine {
     pub(super) fn indirection(
         &self,
         range: SourceRange,
-        source: &str,
-        pointer: Value,
+        operand: &str,
+        (pointer, object): (Value, bool),
         target: usize,
         offset: i32,
         structure: Option<usize>,
     ) -> Event {
         let location = self.location_of(target, offset, structure);
-        // Only the outer `*`: `**pp`'s operand is `*pp`.
-        let written = snippet(source, range);
-        let operand = written.strip_prefix('*').unwrap_or(&written).trim_start();
+        // The operand as written: `**pp`'s is `*pp`, and a parenthesized
+        // `(*&p)`'s is `&p`.
+        let operand: &str = operand.trim();
         // `*p++` is `*(p++)`: the `*` follows the value `p++` yields, the
         // old one (C99 §6.5.2.4p2).
         let updated = ["++", "--"].into_iter().find_map(|update| {
@@ -2973,11 +3088,14 @@ impl Machine {
                     "`*{operand}` follows the pointer `{operand}` to the object it points to: \
                      `*{operand}` now stands for {location} itself."
                 ),
+                // An object holds its pointer; any other operand, such as
+                // `t + 1` or `&x`, yields one.
                 format!(
-                    "`{operand}` holds {}. The unary `*` operator (indirection) turns a pointer \
-                     back into the object it points to, so `*{operand}` is an lvalue: another \
-                     name for {location}, the same place in memory, not a copy of it. Nothing is \
-                     read or written yet: the operator around it decides which.",
+                    "`{operand}` {} {}. The unary `*` operator (indirection) turns a pointer back \
+                     into the object it points to, so `*{operand}` is an lvalue: another name for \
+                     {location}, the same place in memory, not a copy of it. Nothing is read or \
+                     written yet: the operator around it decides which.",
+                    if object { "holds" } else { "yields" },
                     self.value_text(&pointer),
                 ),
             )
@@ -6537,7 +6655,7 @@ fn count_word(count: usize) -> String {
 
 /// The source `range` covers, on one line: a line break and the
 /// indentation after it become one space, as in the "what comes next" text.
-fn snippet(source: &str, range: SourceRange) -> Cow<'_, str> {
+pub(super) fn snippet(source: &str, range: SourceRange) -> Cow<'_, str> {
     let text = source.get(range.start..range.end).unwrap_or("");
     if !text.contains('\n') {
         return Cow::Borrowed(text);

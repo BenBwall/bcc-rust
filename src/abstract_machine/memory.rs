@@ -33,6 +33,7 @@ use super::{
         Diagnostic,
         MAX_CELLS,
         MAX_OBJECTS,
+        Named,
         Object,
         Place,
         Program,
@@ -92,10 +93,41 @@ impl Machine {
         if let Some(typedef) = object.typedef {
             self.name_type(id, typedef);
         }
+        self.name(id, object.named);
         if object.constant {
             self.make_const(id);
         }
         Ok(id)
+    }
+
+    /// Record how object `id`'s declaration named its type: an enumeration's
+    /// type is spelled with its name, `enum color` rather than `unsigned
+    /// int`, and the page names the constant the object holds.
+    pub fn name(&mut self, id: usize, named: Named) {
+        let Some(enumeration) = named.enumeration else {
+            return;
+        };
+        let ty = self.metadata[id - 1].ty;
+        let Some(integer) = ty
+            .element()
+            .unwrap_or(ty)
+            .integer()
+            .or_else(|| ty.pointee().and_then(Type::integer))
+        else {
+            return;
+        };
+        let Some(spelled) = self
+            .enumerations
+            .get(enumeration)
+            .map(|known| known.name.clone())
+        else {
+            return;
+        };
+        let object = &mut self.state.objects[id - 1];
+        object.r#type = object.r#type.replacen(integer.spelling(), &spelled, 1);
+        if ty.integer().is_some() || matches!(ty, Type::Array(..)) {
+            object.enumeration = u16::try_from(enumeration).ok();
+        }
     }
 
     /// Spell object `id`'s type with the typedef name `typedef`, as its
@@ -196,6 +228,7 @@ impl Machine {
             declared: true,
             parameter,
             literal,
+            enumeration: None,
             value,
         });
         self.metadata.push(ObjectMetadata {

@@ -386,6 +386,69 @@ clauses! {
     TYPEDEF_NAME = "6.7.7p3", "p. 123; PDF p. 135", "Type definitions",
         "A typedef name is a synonym for a type, not a new type: declarations may use it wherever \
          they would spell the type.";
+    /// C99: §6.4.4.3 paragraph 2, p. 59; PDF p. 71.
+    ENUMERATION_CONSTANT = "6.4.4.3p2", "p. 59; PDF p. 71", "Enumeration constants",
+        "A name declared in an enumeration is a constant of type int, not an object: it has no \
+         storage, and the compiler puts its value wherever it appears.";
+    /// C99: §6.7.2.2 paragraph 2, p. 105; PDF p. 117.
+    ENUMERATOR_CONSTRAINT = "6.7.2.2p2", "p. 105; PDF p. 117", "Enumeration specifiers",
+        "The value written after an enumeration constant's = must be an integer constant \
+         expression whose value an int can hold.";
+    /// C99: §6.7.2.2 paragraph 3, p. 105; PDF p. 117.
+    ENUMERATOR_VALUES = "6.7.2.2p3", "p. 105; PDF p. 117", "Enumeration specifiers",
+        "Each enumeration constant is an int: the value after its =, or else the previous \
+         constant's value plus one, starting from 0 for the first.";
+    /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
+    ENUMERATED_TYPE = "6.7.2.2p4", "p. 105; PDF p. 117", "Enumeration specifiers",
+        "An enumeration's own type is compatible with an integer type the implementation \
+         chooses, one that can hold all its constants' values.";
+    /// C99: §6.7.2.3 paragraph 1, p. 106; PDF p. 118.
+    TAG_DEFINED_ONCE = "6.7.2.3p1", "p. 106; PDF p. 118", "Tags",
+        "A structure, union or enumeration type may have its contents defined only once.";
+    /// C99: §6.7.2.3 paragraph 2, p. 106; PDF p. 118.
+    TAG_KIND = "6.7.2.3p2", "p. 106; PDF p. 118", "Tags",
+        "Declarations that use one tag for one type must all say struct, or all union, or all \
+         enum.";
+    /// C99: §6.7.2.3 paragraph 3, p. 106; PDF p. 118.
+    ENUMERATION_COMPLETE = "6.7.2.3p3", "p. 106; PDF p. 118", "Tags",
+        "`enum tag` without a list of constants may appear only once the enumeration has been \
+         defined.";
+    /// C99: §6.7 paragraph 3, p. 97; PDF p. 109.
+    ONE_DECLARATION = "6.7p3", "p. 97; PDF p. 109", "Declarations",
+        "A name with no linkage, such as an enumeration constant or a local variable, may be \
+         declared only once in one scope.";
+    /// C99: §6.2.3 paragraph 1, p. 31; PDF p. 43.
+    NAME_SPACES = "6.2.3p1", "p. 31; PDF p. 43", "Name spaces of identifiers",
+        "Tags, members and labels each have names of their own; every other name, objects, \
+         functions, typedef names and enumeration constants alike, shares one name space.";
+    /// C99: §6.7.5.2 paragraph 1, p. 116; PDF p. 128.
+    ARRAY_SIZE = "6.7.5.2p1", "p. 116; PDF p. 128", "Array declarators",
+        "An array's size has an integer type, and a constant size must be greater than zero.";
+    /// C99: §6.8.4.2 paragraph 1, p. 134; PDF p. 146.
+    SWITCH_CONSTRAINT = "6.8.4.2p1", "p. 134; PDF p. 146", "The switch statement",
+        "The controlling expression of a switch must have an integer type.";
+    /// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
+    CASE_LABELS = "6.8.4.2p3", "p. 134; PDF p. 146", "The switch statement",
+        "Each case label is an integer constant expression, no two of one switch may have the \
+         same value, and a switch has at most one default label.";
+    /// C99: §6.8.4.2 paragraph 4, p. 134; PDF p. 146.
+    SWITCH_STATEMENT = "6.8.4.2p4", "p. 134; PDF p. 146", "The switch statement",
+        "A switch jumps to, into or past its body, depending on its controlling expression's \
+         value and its case and default labels.";
+    /// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
+    SWITCH_JUMP = "6.8.4.2p5", "p. 134; PDF p. 146", "The switch statement",
+        "The switch jumps to the case label whose value equals the promoted controlling \
+         expression, else to default, else past the whole body.";
+    /// C99: §6.8.1 paragraph 2, p. 131; PDF p. 143.
+    LABEL_PLACE = "6.8.1p2", "p. 131; PDF p. 143", "Labeled statements",
+        "A case or default label may appear only inside a switch statement.";
+    /// C99: §6.8.6.3 paragraph 1, p. 138; PDF p. 150.
+    BREAK_PLACE = "6.8.6.3p1", "p. 138; PDF p. 150", "The break statement",
+        "A break may appear only inside a switch body or a loop body.";
+    /// C99: §6.8.6.3 paragraph 2, p. 138; PDF p. 150.
+    BREAK = "6.8.6.3p2", "p. 138; PDF p. 150", "The break statement",
+        "A break ends the innermost switch or loop around it: control continues just after that \
+         statement.";
     /// C99: §4 paragraph 2, p. 7; PDF p. 19.
     UNDEFINED_BY_OMISSION = "4p2", "p. 7; PDF p. 19", "Conformance",
         "Behavior is undefined where the standard says so, and also wherever it gives no \

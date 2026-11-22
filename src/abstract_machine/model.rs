@@ -15,28 +15,106 @@ use super::{
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
 pub struct Program {
-    pub(super) source:     String,
-    pub(super) functions:  Vec<Function>,
-    pub(super) entry:      usize,
+    pub(super) source:            String,
+    pub(super) functions:         Vec<Function>,
+    pub(super) entry:             usize,
     /// Structure types, in definition order; [`Value::Struct`] and
     /// [`Operand::Address`] refer to them by index.
-    pub(super) structures: Arc<[Structure]>,
+    pub(super) structures:        Arc<[Structure]>,
     /// Function types, each listed once: [`Type::FunctionPointer`] and
     /// [`Target::Function`] refer to them by index, so two pointers to
     /// functions have compatible types exactly when their indices agree.
-    pub(super) signatures: Arc<[Signature]>,
+    pub(super) signatures:        Arc<[Signature]>,
     /// Objects with static storage duration, in declaration order: file-scope
     /// objects and block-scope `static` ones. They are initialized before
     /// `main` runs and take the first object IDs. String literals are
     /// among them, in source order.
-    pub(super) statics:    Vec<Static>,
+    pub(super) statics:           Vec<Static>,
     /// The preprocessing directives the machine runs itself, in source
     /// order: each `#include <stdio.h>` and each object-like `#define`.
     /// They run before the static objects are initialized, as translation
     /// phase 4 comes before execution.
-    pub(super) directives: Vec<Directive>,
+    pub(super) directives:        Vec<Directive>,
     /// The object-like macros the program defines, in definition order.
-    pub(super) macros:     Vec<Macro>,
+    pub(super) macros:            Vec<Macro>,
+    /// The enumerations the program declares, at file and block scope, in
+    /// source order.
+    pub(super) enumerations:      Arc<[Enumeration]>,
+    /// The enumerations declared at file scope, by index into
+    /// [`Program::enumerations`], in source order: each is a step of its
+    /// own before the static objects are initialized.
+    pub(super) file_enumerations: Vec<usize>,
+    /// The typedef names the program declares, in source order.
+    pub(super) aliases:           Arc<[Alias]>,
+}
+
+/// A typedef name the program declares: a synonym for a type, which creates
+/// no object (C99 §6.7.7p3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Alias {
+    pub name:     String,
+    /// The type it names, as C spells it.
+    pub spelling: String,
+    /// The line of its declaration.
+    pub line:     usize,
+}
+
+/// An enumeration type: a set of named integer constants, and the integer
+/// type GCC makes the enumeration compatible with (C99 §6.7.2.2p4 leaves
+/// the choice to the implementation): `unsigned int` when no constant is
+/// negative, and `int` otherwise.
+///
+/// C99: §6.7.2.2 paragraphs 2-4, p. 105; PDF p. 117.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "The page reads the constants; the rest is the engine's own."
+)]
+pub struct Enumeration {
+    /// How the type is spelled: `enum color`, or for an enumeration without
+    /// a tag the typedef name that names it.
+    pub name:            String,
+    /// The constants, in declaration order.
+    pub constants:       Vec<Enumerator>,
+    /// The tag, `color` in `enum color`, if it has one.
+    pub(super) tag:      Option<String>,
+    /// The compatible integer type.
+    pub(super) integer:  Integer,
+    /// The whole declaration, from `enum` (or `typedef`) to its `;`.
+    pub(super) range:    SourceRange,
+    /// The function a block-scope enumeration is declared in.
+    pub(super) function: Option<String>,
+}
+
+/// One enumeration constant: its name and its value, of type `int`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "The page reads the name and value; the rest is the engine's own."
+)]
+pub struct Enumerator {
+    /// The constant's identifier.
+    pub name:           String,
+    /// Its value, of type `int`.
+    pub value:          i128,
+    /// Where its name is declared.
+    pub(super) range:   SourceRange,
+    /// The constant expression after its `=`, as written, when it has one;
+    /// otherwise its value is the previous constant's plus one, or 0 for
+    /// the first.
+    pub(super) written: Option<String>,
+}
+
+impl Enumeration {
+    /// The name of the first of its constants whose value is `value`, which
+    /// the page writes beside an object of this type.
+    #[must_use]
+    pub fn constant_named(&self, value: i128) -> Option<&str> {
+        self.constants
+            .iter()
+            .find(|constant| constant.value == value)
+            .map(|constant| constant.name.as_str())
+    }
 }
 
 /// A preprocessing directive the machine runs as one step of translation
@@ -76,14 +154,30 @@ pub(super) struct Macro {
 /// the end, so that an array of the structure keeps every member aligned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Structure {
-    /// The tag: `point` in `struct point`.
+    /// The tag: `point` in `struct point`; for a structure without a tag,
+    /// the typedef name that names it.
     pub name:    String,
+    /// Whether `name` is the structure's tag.
+    pub tagged:  bool,
     /// Size in bytes, including padding.
     pub size:    usize,
     /// Alignment in bytes: that of its most aligned member.
     pub align:   usize,
     /// Members, in declaration order.
     pub members: Vec<Member>,
+}
+
+impl Structure {
+    /// The type as C spells it: `struct point`, or the typedef name of a
+    /// structure without a tag, which has no other name.
+    #[must_use]
+    pub fn spelling(&self) -> String {
+        if self.tagged {
+            format!("struct {}", self.name)
+        } else {
+            self.name.clone()
+        }
+    }
 }
 
 /// A function type: what a pointer to a function points to. C99 calls two
@@ -107,19 +201,22 @@ pub(super) struct Signature {
 )]
 pub struct Member {
     /// The member's identifier.
-    pub name:      String,
+    pub name:        String,
     /// Its declared type, spelled as in C (`int`, `int[3]`, `struct point`).
-    pub r#type:    String,
+    pub r#type:      String,
     /// Byte offset from the start of the structure.
-    pub offset:    usize,
+    pub offset:      usize,
     /// Size in bytes.
-    pub size:      usize,
+    pub size:        usize,
     /// Unnamed padding bytes after it, before the next member or the end.
-    pub padding:   usize,
+    pub padding:     usize,
     /// The member's first scalar (leaf) within the structure, the unit the
     /// machine addresses: [`Operand::Address`] offsets count leaves.
-    pub first:     usize,
-    pub(super) ty: Type,
+    pub first:       usize,
+    /// The enumeration its type is, or is an array of, by index into the
+    /// program's enumerations.
+    pub enumeration: Option<u16>,
+    pub(super) ty:   Type,
 }
 
 /// An immutable observation at an execution boundary.
@@ -263,6 +360,9 @@ pub enum EventKind {
     LeaveBlock,
     /// A declaration created an object with an indeterminate value.
     Declare,
+    /// An enumeration's declaration declared its constants, which are no
+    /// objects and take no storage.
+    Enumeration,
     /// An integer constant produced its value.
     Constant,
     /// `sizeof` produced the size of its operand's type, without
@@ -348,6 +448,7 @@ impl EventKind {
             | Self::EnterBlock => "enter_block",
             | Self::LeaveBlock => "leave_block",
             | Self::Declare => "declare",
+            | Self::Enumeration => "enumeration",
             | Self::Constant => "constant",
             | Self::Sizeof => "sizeof",
             | Self::Designate => "designate",
@@ -411,6 +512,7 @@ impl EventKind {
             | Self::EnterBlock
             | Self::LeaveBlock
             | Self::Declare
+            | Self::Enumeration
             | Self::StaticStorage
             | Self::StaticLocal => "lifetime",
             | Self::Start
@@ -548,6 +650,11 @@ pub struct Object {
     /// the program must not modify (C99 §6.4.5p6). Its name is the
     /// literal as written.
     pub literal:          bool,
+    /// The enumeration its type is, or is an array of, by index into the
+    /// program's enumerations: the page writes the name of the constant
+    /// whose value it holds beside the value. The subset has at most 32
+    /// enumerations, so the index is small.
+    pub enumeration:      Option<u16>,
     /// Stored scalar or aggregate contents.
     pub value:            Value,
 }
@@ -779,16 +886,19 @@ impl Diagnostic {
 
 #[derive(Debug, Clone)]
 pub(super) struct Function {
-    pub name:       String,
-    /// An integer type or a structure.
-    pub returns:    Type,
-    pub parameters: Vec<(String, Type)>,
+    pub name:         String,
+    /// An arithmetic type, a structure or a pointer to a function.
+    pub returns:      Type,
+    pub parameters:   Vec<(String, Type)>,
+    /// The enumeration each parameter's type is, if any, by index into
+    /// [`Program::enumerations`].
+    pub enumerations: Vec<Option<usize>>,
     /// Its type, by index into [`Program::signatures`].
-    pub signature:  usize,
+    pub signature:    usize,
     /// The function's name in its definition, where a pointer to it leads.
-    pub range:      SourceRange,
-    pub code:       Vec<Instruction>,
-    pub nodes:      Vec<ExpressionNode>,
+    pub range:        SourceRange,
+    pub code:         Vec<Instruction>,
+    pub nodes:        Vec<ExpressionNode>,
 }
 
 #[derive(Debug, Clone)]
@@ -811,6 +921,18 @@ pub(super) struct BlockObject {
     pub ty:       Type,
     pub constant: bool,
     pub typedef:  Option<&'static str>,
+    pub named:    Named,
+}
+
+/// How a declaration named an object's type beyond the type itself: with a
+/// typedef name the program declared, or as an enumeration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Named {
+    /// The typedef name, by index into [`Program::aliases`].
+    pub alias:       Option<usize>,
+    /// The enumeration the type is, or is an array of or a pointer to, by
+    /// index into [`Program::enumerations`].
+    pub enumeration: Option<usize>,
 }
 
 /// How an expression gives a pointer to a function, which decides how the
@@ -858,9 +980,22 @@ pub(super) enum Op {
         name:        String,
         ty:          Type,
         initialized: bool,
+        /// The typedef name or enumeration the declaration named its type
+        /// with, which the explanation mentions.
+        named:       Named,
     },
     /// Reaching the declaration of block-scope static `index`: nothing to do.
     StaticLocal(usize),
+    /// Reaching the declaration of block-scope enumeration `index`, which
+    /// declares its constants and creates no object (C99 §6.7.2.2p3).
+    Enumeration(usize),
+    /// The enumeration constant `constant` of enumeration `enumeration`: an
+    /// integer constant of type `int` with this value (C99 §6.4.4.3p2).
+    Enumerator {
+        value:       i128,
+        enumeration: usize,
+        constant:    usize,
+    },
     /// An integer constant of the given type.
     Push(i128, Integer),
     /// A floating constant: its value, and whether its type holds the
@@ -931,7 +1066,14 @@ pub(super) enum Op {
         address: bool,
     },
     AddressOf,
-    Dereference,
+    /// `*p` of a pointer to an object; `object` when the operand is an
+    /// object that holds the pointer, as `p`, `pp[1]` or `*pp` are, rather
+    /// than an expression that yields it, as `t + 1` or `&x` do.
+    Dereference {
+        object:  bool,
+        /// The source of the operand, as written.
+        operand: SourceRange,
+    },
     /// `*fp` of a pointer to a function: the function designator it yields
     /// converts straight back to the same pointer (C99 §6.5.3.2p4,
     /// §6.3.2.1p4). `operand` is the source of the expression after the
@@ -1026,6 +1168,19 @@ pub(super) enum Op {
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.
     Branch(usize, &'static str),
+    /// `switch`: pop the controlling expression's value, promoted to
+    /// `promoted`, and jump to the case label whose constant equals it, to
+    /// `default` when none does, or past the body to `end` when there is
+    /// no default either (C99 §6.8.4.2p5).
+    Switch {
+        cases:    Vec<Case>,
+        default:  Option<usize>,
+        end:      usize,
+        promoted: Integer,
+    },
+    /// `break`: jump to the target, just past the innermost enclosing
+    /// `switch` or loop, the named statement (C99 §6.8.6.3p2).
+    Break(usize, &'static str),
     /// A call with the arguments' types, which convert to the parameters'.
     Call(String, Vec<Type>),
     /// A call through the pointer to a function below the arguments on the
@@ -1055,6 +1210,16 @@ pub(super) enum Op {
     /// function's return type.
     Return(Type),
     Fallthrough,
+}
+
+/// One `case` label of a `switch`: its constant converted to the promoted
+/// type of the controlling expression, where it is written, and the
+/// instruction it labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Case {
+    pub value:  i128,
+    pub range:  SourceRange,
+    pub target: usize,
 }
 
 /// Where a `++`, `--` or assignment inside a larger expression sits: the
@@ -1169,6 +1334,8 @@ pub(super) struct Static {
     pub constant: bool,
     /// The typedef name its type was spelled with (`size_t`), if any.
     pub typedef:  Option<&'static str>,
+    /// The program's typedef name or enumeration its type was named with.
+    pub named:    Named,
     /// For a string literal, how many adjacent literals translation phase
     /// 6 joined into it.
     pub parts:    usize,

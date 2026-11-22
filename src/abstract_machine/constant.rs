@@ -48,36 +48,40 @@ impl Parser<'_> {
     /// Whether `expression` is an integer constant expression whose value
     /// is 0.
     fn zero_integer_constant(&self, expression: usize) -> bool {
-        self.integer_constant_expression(expression)
+        self.is_integer_constant_expression(expression)
             && matches!(
                 self.constant_value(expression),
                 Ok((Value::Integer(0), Arithmetic::Integer(_)))
             )
     }
 
-    /// Whether `expression` is an integer constant expression: integer and
-    /// character constants and `sizeof`, joined by operators, with a
+    /// Whether `expression` is an integer constant expression: integer,
+    /// character and enumeration constants and `sizeof`, joined by
+    /// operators, with a
     /// floating constant only as the immediate operand of a cast to an
     /// integer type. Whether it has a value, without a signed overflow or
     /// a division by zero, is `constant_value`'s question.
     ///
     /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
-    fn integer_constant_expression(&self, expression: usize) -> bool {
+    pub(super) fn is_integer_constant_expression(&self, expression: usize) -> bool {
         let node = &self.expressions[expression];
         node.ty.integer().is_some()
             && match node.kind {
-                | ExprKind::Number(..) | ExprKind::Character(..) | ExprKind::Sizeof(..) => true,
+                | ExprKind::Number(..)
+                | ExprKind::Character(..)
+                | ExprKind::Enumerator { .. }
+                | ExprKind::Sizeof(..) => true,
                 | ExprKind::Cast(_, child) =>
                     matches!(self.expressions[child].kind, ExprKind::Real(..))
-                        || self.integer_constant_expression(child),
-                | ExprKind::Unary(_, child) => self.integer_constant_expression(child),
+                        || self.is_integer_constant_expression(child),
+                | ExprKind::Unary(_, child) => self.is_integer_constant_expression(child),
                 | ExprKind::Binary(_, left, right) =>
-                    self.integer_constant_expression(left)
-                        && self.integer_constant_expression(right),
+                    self.is_integer_constant_expression(left)
+                        && self.is_integer_constant_expression(right),
                 | ExprKind::Conditional(condition, then, otherwise) =>
-                    self.integer_constant_expression(condition)
-                        && self.integer_constant_expression(then)
-                        && self.integer_constant_expression(otherwise),
+                    self.is_integer_constant_expression(condition)
+                        && self.is_integer_constant_expression(then)
+                        && self.is_integer_constant_expression(otherwise),
                 | _ => false,
             }
     }
@@ -98,7 +102,8 @@ impl Parser<'_> {
                 Value::Floating(rounded.value),
                 Arithmetic::Floating(rounded.value.format()),
             )),
-            | &ExprKind::Character(value, _) => Ok((Value::Integer(value), Arithmetic::INT)),
+            | &ExprKind::Character(value, _) | &ExprKind::Enumerator { value, .. } =>
+                Ok((Value::Integer(value), Arithmetic::INT)),
             | &ExprKind::Sizeof(size, _) => Ok((
                 Value::Integer(i128::try_from(size).unwrap_or(i128::MAX)),
                 Arithmetic::Integer(Integer::UnsignedLong),

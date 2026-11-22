@@ -89,6 +89,8 @@ impl Machine {
                 ),
                 clauses::STATIC_STORAGE,
             ),
+            | Op::Enumeration(_) | Op::Enumerator { .. } | Op::Switch { .. } | Op::Break(..) =>
+                enumeration_upcoming(program, &next.op, &code(), operands().pop()),
             | Op::Push(..) | Op::PushReal { .. } => {
                 let spelled = code();
                 let clause = match next.macro_use {
@@ -242,7 +244,7 @@ impl Machine {
                     clauses::ADDRESS_OPERATOR,
                 )
             },
-            | Op::Dereference => {
+            | Op::Dereference { .. } => {
                 let pointer = operands()
                     .into_iter()
                     .next()
@@ -555,6 +557,16 @@ impl Machine {
                 clause,
             };
         }
+        if let Some(&index) = program.file_enumerations.get(self.enumerated) {
+            return Upcoming {
+                kind:   EventKind::Enumeration,
+                text:   format!(
+                    "declare the constants of {}, before `main` runs",
+                    code(&program.enumerations[index].name)
+                ),
+                clause: clauses::ENUMERATOR_VALUES,
+            };
+        }
         if let Some(declared) = program.statics.get(self.initialized) {
             let text = if declared.literal {
                 format!(
@@ -788,6 +800,46 @@ impl Machine {
     /// ends the program (C99 §5.1.2.2.3p1), rather than a recursive one.
     fn in_initial_main(&self, program: &Program) -> bool {
         self.activations.len() == 1 && self.in_main(program)
+    }
+}
+
+/// What a step of an enumeration or a switch will do: declare an
+/// enumeration's constants, evaluate one of them, compare a switch's value
+/// with its labels, or break out of a switch or a loop. `code` is the
+/// operation's source, quoted, and `value` the spelling of its operand.
+fn enumeration_upcoming(
+    program: &Program,
+    op: &Op,
+    code: &str,
+    value: Option<String>,
+) -> (EventKind, String, Clause) {
+    match *op {
+        | Op::Enumeration(index) => (
+            EventKind::Enumeration,
+            format!(
+                "reach the declaration of {}, which declares its constants",
+                self::code(&program.enumerations[index].name)
+            ),
+            clauses::ENUMERATOR_VALUES,
+        ),
+        | Op::Switch { .. } => (
+            EventKind::Branch,
+            format!(
+                "compare the switch's value {} with its case labels",
+                value.unwrap_or_else(|| String::from(code))
+            ),
+            clauses::SWITCH_JUMP,
+        ),
+        | Op::Break(_, statement) => (
+            EventKind::Jump,
+            format!("break out of the `{statement}`"),
+            clauses::BREAK,
+        ),
+        | _ => (
+            EventKind::Constant,
+            format!("evaluate the enumeration constant {code}"),
+            clauses::ENUMERATION_CONSTANT,
+        ),
     }
 }
 
