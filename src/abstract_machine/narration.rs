@@ -15,7 +15,10 @@ use std::{
     fmt::Write,
 };
 
-pub(super) use enumerations::break_statement;
+pub(super) use enumerations::{
+    break_statement,
+    past_labels,
+};
 use floating::{
     conversion_words,
     floating_declaration,

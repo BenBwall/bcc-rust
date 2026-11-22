@@ -16,6 +16,8 @@ use super::{
         Case,
         Diagnostic,
         Op,
+        Skipped,
+        SourceRange,
         Type,
     },
     parser::{
@@ -70,12 +72,17 @@ impl Parser<'_> {
         let mut cases: Vec<Case> = Vec::new();
         let mut default = None;
         let mut labelled = false;
+        // The instruction a run of labels after a statement starts with,
+        // which execution reaches only by falling through to them.
+        let mut past: Option<usize> = None;
         while !self.at("}") {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
             }
             if self.at("case") {
                 let label = self.current();
+                let falls = !labelled && (!cases.is_empty() || default.is_some());
+                self.past_labels(&mut past, falls, label.range)?;
                 self.position += 1;
                 let constant = self.expression(0)?;
                 let written = self.expressions[constant].range;
@@ -97,6 +104,7 @@ impl Parser<'_> {
                     ));
                 }
                 self.expect(":")?;
+                self.extend_past_labels(past);
                 cases.push(Case {
                     value,
                     range: combined(label.range, written),
@@ -107,6 +115,8 @@ impl Parser<'_> {
             }
             if self.at("default") {
                 let label = self.current();
+                let falls = !labelled && (!cases.is_empty() || default.is_some());
+                self.past_labels(&mut past, falls, label.range)?;
                 self.position += 1;
                 if default.is_some() {
                     return Err(Diagnostic::constraint(
@@ -116,12 +126,10 @@ impl Parser<'_> {
                     ));
                 }
                 self.expect(":")?;
+                self.extend_past_labels(past);
                 default = Some(self.code.len());
                 labelled = true;
                 continue;
-            }
-            if labelled && self.at("}") {
-                break;
             }
             if self.current().text.starts_with('#') {
                 return Err(self.error(
@@ -149,6 +157,12 @@ impl Parser<'_> {
         }
         self.position += 1;
         let end = self.code.len();
+        let targets: Vec<usize> = cases
+            .iter()
+            .map(|case| case.target)
+            .chain(default)
+            .collect();
+        self.mark_skipped(&targets, end);
         self.close_breakable();
         self.prune_scope(self.scope);
         self.scope -= 1;
@@ -164,6 +178,76 @@ impl Parser<'_> {
             *exit = end;
         }
         Ok(())
+    }
+
+    /// Before a case or default label at `label`: when execution `falls`
+    /// to it from the statement before it, which follows an earlier label,
+    /// the instruction that shows it running on past the label. The
+    /// switch's jump to the label lands past that instruction. A run of
+    /// labels shares one, from the first.
+    ///
+    /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
+    fn past_labels(
+        &mut self,
+        past: &mut Option<usize>,
+        falls: bool,
+        label: SourceRange,
+    ) -> Result<(), Diagnostic> {
+        if falls {
+            *past = Some(self.code.len());
+            self.emit(Op::PastLabels(0), label)?;
+        }
+        Ok(())
+    }
+
+    /// Count the label just read in the run of labels' instruction `past`,
+    /// and stretch its range to the label's `:`.
+    fn extend_past_labels(&mut self, past: Option<usize>) {
+        if let Some(past) = past {
+            let colon = self.tokens[self.position - 1].range;
+            let instruction = &mut self.code[past];
+            instruction.range = combined(instruction.range, colon);
+            if let Op::PastLabels(count) = &mut instruction.op {
+                *count += 1;
+            }
+        }
+    }
+
+    /// Record in each `break` of the switch being closed, whose body ends
+    /// at instruction `end` and whose labels are at `targets`, what it
+    /// skips: the later labels, other statements, or nothing.
+    fn mark_skipped(&mut self, targets: &[usize], end: usize) {
+        let Some(breakable) = self.breakables.last_mut() else {
+            return;
+        };
+        let breaks = std::mem::take(&mut breakable.breaks);
+        for &jump in &breaks {
+            // What runs next without the break: past the ends of the blocks
+            // it is in, and past an else branch that an if's first branch
+            // jumps over.
+            let mut next = jump + 1;
+            while next < end {
+                match self.code[next].op {
+                    | Op::Leave => next += 1,
+                    | Op::Jump(over) if over > next => next = over,
+                    | _ => break,
+                }
+            }
+            let later = targets.iter().filter(|&&target| target > jump).count();
+            let skipped = if later > 0 {
+                Skipped::Labels(later)
+            } else if next < end {
+                Skipped::Statements
+            } else {
+                Skipped::Nothing
+            };
+            if let Op::Break(_, _, slot) = &mut self.code[jump].op {
+                *slot = skipped;
+            }
+        }
+        if let Some(breakable) = self.breakables.last_mut() {
+            breakable.breaks = breaks;
+        }
     }
 
     /// `break;`: leave the innermost switch or loop. Each block opened
@@ -184,7 +268,7 @@ impl Parser<'_> {
             self.emit(Op::Leave, keyword.range)?;
         }
         let jump = self.code.len();
-        self.emit(Op::Break(0, statement), keyword.range)?;
+        self.emit(Op::Break(0, statement, Skipped::Nothing), keyword.range)?;
         if let Some(breakable) = self.breakables.last_mut() {
             breakable.breaks.push(jump);
         }
@@ -226,7 +310,7 @@ impl Parser<'_> {
         let end = self.code.len();
         if let Some(breakable) = self.breakables.pop() {
             for jump in breakable.breaks {
-                if let Op::Break(target, _) = &mut self.code[jump].op {
+                if let Op::Break(target, ..) = &mut self.code[jump].op {
                     *target = end;
                 }
             }

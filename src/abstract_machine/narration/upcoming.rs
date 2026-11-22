@@ -89,7 +89,11 @@ impl Machine {
                 ),
                 clauses::STATIC_STORAGE,
             ),
-            | Op::Enumeration(_) | Op::Enumerator { .. } | Op::Switch { .. } | Op::Break(..) =>
+            | Op::Enumeration(_)
+            | Op::Enumerator { .. }
+            | Op::Switch { .. }
+            | Op::Break(..)
+            | Op::PastLabels(_) =>
                 enumeration_upcoming(program, &next.op, &code(), operands().pop()),
             | Op::Push(..) | Op::PushReal { .. } => {
                 let spelled = code();
@@ -830,10 +834,15 @@ fn enumeration_upcoming(
             ),
             clauses::SWITCH_JUMP,
         ),
-        | Op::Break(_, statement) => (
+        | Op::Break(_, statement, _) => (
             EventKind::Jump,
             format!("break out of the `{statement}`"),
             clauses::BREAK,
+        ),
+        | Op::PastLabels(_) => (
+            EventKind::Jump,
+            format!("run on past {code} into the statements after it"),
+            clauses::LABELS_FLOW,
         ),
         | _ => (
             EventKind::Constant,

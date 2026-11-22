@@ -27,6 +27,7 @@ use crate::abstract_machine::{
         EventKind,
         Operand,
         Program,
+        Skipped,
         SourceRange,
         Value,
     },
@@ -252,13 +253,13 @@ impl Machine {
         result(event, Operand::Value(Value::Integer(value)))
     }
 
-    /// A switch compared its controlling value `number`, `promoted` after
-    /// the integer promotions, with its case labels and jumped to
-    /// `matched`, to its `default` label, or past its body.
+    /// A switch compared its controlling value, `promoted` after the
+    /// integer promotions, which keep its value, with its case labels and
+    /// jumped to `matched`, to its `default` label, or past its body.
     pub(in crate::abstract_machine) fn switched(
         program: &Program,
         range: SourceRange,
-        (number, promoted): (i128, i128),
+        promoted: i128,
         matched: Option<&Case>,
         default: Option<usize>,
     ) -> Event {
@@ -304,12 +305,6 @@ impl Machine {
              constant of each of its case labels, each converted to the expression's promoted \
              type. ",
         );
-        if number != promoted {
-            let _ = write!(
-                text,
-                "The integer promotions turned {number} into {promoted}. "
-            );
-        }
         text.push_str(&outcome);
         let mut event = noted(
             explained(
@@ -332,19 +327,42 @@ impl Machine {
     }
 }
 
-/// `break`: control leaves the innermost switch or loop, `statement`.
-pub(in crate::abstract_machine) fn break_statement(range: SourceRange, statement: &str) -> Event {
+/// `break`: control leaves the innermost switch or loop, `statement`,
+/// skipping, in a switch, what its body holds after the break.
+pub(in crate::abstract_machine) fn break_statement(
+    range: SourceRange,
+    statement: &str,
+    skipped: Skipped,
+) -> Event {
     let (title, summary, text, topic) = if statement == "switch" {
+        let rest = match skipped {
+            | Skipped::Labels(1) =>
+                "and the statements after the break, including those under the later label, do not \
+                 run. Without the break, execution would run on past that label into its \
+                 statements.",
+            | Skipped::Labels(_) =>
+                "and the statements after the break, including those under the later labels, do \
+                 not run. Without the break, execution would run on past the next label into its \
+                 statements.",
+            | Skipped::Statements =>
+                "and the statements after the break, to the end of the body, do not run.",
+            | Skipped::Nothing =>
+                "Nothing in the body follows the break, so it skips nothing: reaching the body's \
+                 closing brace would leave the switch the same way.",
+        };
         (
             String::from("break: leave the switch"),
             String::from(
                 "`break` ends the switch around it, so control continues just after the switch.",
             ),
-            String::from(
+            format!(
                 "A break statement ends the smallest switch or loop that contains it. Here that \
-                 is the switch: control jumps to just after its body, and the statements after \
-                 the break, including those under later case labels, do not run. Without the \
-                 break, execution would run on into the next label's statements.",
+                 is the switch: control jumps to just after its body{} {rest}",
+                if skipped == Skipped::Nothing {
+                    "."
+                } else {
+                    ","
+                }
             ),
             Topic::Switch,
         )
@@ -371,6 +389,42 @@ pub(in crate::abstract_machine) fn break_statement(range: SourceRange, statement
             &[clauses::BREAK],
         ),
         topic,
+    )
+}
+
+/// Execution reached the `count` labels at `range` from the statement
+/// before them, so it runs on past them: a label only marks a place a
+/// switch can jump to.
+///
+/// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
+pub(in crate::abstract_machine) fn past_labels(
+    range: SourceRange,
+    source: &str,
+    count: usize,
+) -> Event {
+    let labels = snippet(source, range);
+    let (them, they) = if count == 1 {
+        ("the label", "it")
+    } else {
+        ("the labels", "them")
+    };
+    noted(
+        explained(
+            Event::new(EventKind::Jump, range, format!("Run on past `{labels}`")),
+            &format!(
+                "The statement before `{labels}` has finished, and no break came, so execution \
+                 runs on past {them} into the statements after {they}."
+            ),
+            &format!(
+                "A case or default label only marks a place the switch can jump to; it does not \
+                 alter the flow of control. Execution that reaches {them} from the statement \
+                 before, as here, continues across {they} into the statements that follow, \
+                 whatever value the switch compared. This is called falling through. A `break;` \
+                 before {them} would have left the switch instead."
+            ),
+            &[clauses::LABELS_FLOW, clauses::SWITCH_JUMP],
+        ),
+        Topic::Switch,
     )
 }
 

@@ -442,6 +442,10 @@ clauses! {
     /// C99: §6.8.1 paragraph 2, p. 131; PDF p. 143.
     LABEL_PLACE = "6.8.1p2", "p. 131; PDF p. 143", "Labeled statements",
         "A case or default label may appear only inside a switch statement.";
+    /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
+    LABELS_FLOW = "6.8.1p4", "p. 132; PDF p. 144", "Labeled statements",
+        "A label does not alter the flow of control: execution that reaches it from the statement \
+         before it continues across it.";
     /// C99: §6.8.6.3 paragraph 1, p. 138; PDF p. 150.
     BREAK_PLACE = "6.8.6.3p1", "p. 138; PDF p. 150", "The break statement",
         "A break may appear only inside a switch body or a loop body.";

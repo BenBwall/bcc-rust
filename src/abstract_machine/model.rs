@@ -1179,8 +1179,16 @@ pub(super) enum Op {
         promoted: Integer,
     },
     /// `break`: jump to the target, just past the innermost enclosing
-    /// `switch` or loop, the named statement (C99 §6.8.6.3p2).
-    Break(usize, &'static str),
+    /// `switch` or loop, the named statement (C99 §6.8.6.3p2). For a
+    /// switch, what the rest of its body holds after the break, which the
+    /// break skips; a loop's break leaves it [`Skipped::Nothing`].
+    Break(usize, &'static str, Skipped),
+    /// Execution reached this many case or default labels in a row, at
+    /// this instruction's range, from the statement before them, rather
+    /// than by the switch's jump, which lands past this instruction: labels
+    /// do not alter the flow of control, so it runs on into the statements
+    /// after them (C99 §6.8.1p4).
+    PastLabels(usize),
     /// A call with the arguments' types, which convert to the parameters'.
     Call(String, Vec<Type>),
     /// A call through the pointer to a function below the arguments on the
@@ -1210,6 +1218,16 @@ pub(super) enum Op {
     /// function's return type.
     Return(Type),
     Fallthrough,
+}
+
+/// What a switch's body holds after one of its `break`s, which the break
+/// skips: nothing, as for the body's last statement; more statements; or
+/// statements under this many later case or default labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Skipped {
+    Nothing,
+    Statements,
+    Labels(usize),
 }
 
 /// One `case` label of a `switch`: its constant converted to the promoted

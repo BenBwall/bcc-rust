@@ -661,10 +661,11 @@ impl Machine {
                 self.activations[top].pc = target;
                 narration::jump(range, backward)
             },
-            | &Op::Break(target, statement) => {
+            | &Op::Break(target, statement, skipped) => {
                 self.activations[top].pc = target;
-                narration::break_statement(range, statement)
+                narration::break_statement(range, statement, skipped)
             },
+            | &Op::PastLabels(count) => narration::past_labels(range, source, count),
             | Op::Switch { .. } => self.switch_operation(program, instruction)?,
             | &Op::Branch(target, statement) => {
                 let value = self.pop_value()?;
@@ -779,7 +780,7 @@ impl Machine {
         Ok(Self::switched(
             program,
             instruction.range,
-            (number, promoted_value),
+            promoted_value,
             matched,
             *default,
         ))
@@ -1355,6 +1356,7 @@ impl Machine {
                     | Op::Declare { .. }
                     | Op::Jump(_)
                     | Op::Break(..)
+                    | Op::PastLabels(_)
                     | Op::Enumeration(_)
             ) {
                 activation.evaluation = None;

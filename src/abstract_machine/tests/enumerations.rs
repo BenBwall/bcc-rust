@@ -509,3 +509,119 @@ fn a_typedef_of_an_array_is_no_parameter_type() {
         7,
     );
 }
+
+// C99 §6.8.6.3p2, §6.8.1p4: a break says what it skips only when something
+// follows it in the switch's body; falling through to a label is a step of
+// its own, and the switch's jump to a label is not.
+#[test]
+fn break_and_fall_through_say_what_the_body_holds() {
+    let explanation = |source: &str, expected: i128| {
+        let states = finished(source, expected);
+        step(&states, EventKind::Jump, "break: leave the switch")
+            .event
+            .explanation
+            .clone()
+    };
+    let last = explanation(
+        "int main(void) { int x = 3; int r = 0; switch (x) { case 1: r = 1; break; default: r = \
+         2; break; } return r; }",
+        2,
+    );
+    assert!(
+        last.contains("Nothing in the body follows the break, so it skips nothing"),
+        "{last}"
+    );
+    assert!(
+        !last.contains("later") && !last.contains("next label"),
+        "{last}"
+    );
+    let nested = explanation(
+        "int main(void) { int r = 0; switch (2) { case 2: { int y = 5; r = y; break; } } return \
+         r; }",
+        5,
+    );
+    assert!(nested.contains("skips nothing"), "{nested}");
+    let branches = explanation(
+        "int main(void) { int r = 0; switch (1) { case 1: if (r == 0) { r = 1; break; } else { r \
+         = 2; break; } } return r; }",
+        1,
+    );
+    assert!(branches.contains("skips nothing"), "{branches}");
+    let one = explanation(
+        "int main(void) { int r = 0; switch (1) { case 1: r = 1; break; case 2: r = 2; } return \
+         r; }",
+        1,
+    );
+    assert!(
+        one.contains("including those under the later label, do not run")
+            && one.contains("run on past that label"),
+        "{one}"
+    );
+    let two = explanation(
+        "int main(void) { int r = 0; switch (1) { case 1: r = 1; break; case 2: case 3: r = 2; } \
+         return r; }",
+        1,
+    );
+    assert!(two.contains("under the later labels"), "{two}");
+    let statements = explanation(
+        "int main(void) { int r = 0; switch (4) { default: if (r == 0) break; r = 9; } return r; }",
+        0,
+    );
+    assert!(
+        statements.contains("the statements after the break, to the end of the body, do not run"),
+        "{statements}"
+    );
+    // A loop's break inside a switch leaves the loop alone.
+    let states = finished(
+        "int main(void) { int r = 0; switch (1) { case 1: while (1) { r = 1; break; } r += 1; } \
+         return r; }",
+        2,
+    );
+    let _loop = step(&states, EventKind::Jump, "break: leave the loop");
+    // Falling through: one step at the run of labels it passes, none where
+    // the switch jumps to a label.
+    let states = finished(
+        "int main(void) {\n    int r = 0;\n    switch (1) {\n    case 1:\n        r = 1;\n    \
+         case 2:\n    case ':':\n        r += 10;\n    default:\n        r += 100;\n    }\n    \
+         return r;\n}\n",
+        111,
+    );
+    let past: Vec<&str> = states
+        .iter()
+        .filter(|state| state.event.title.starts_with("Run on past"))
+        .map(|state| state.event.title.as_str())
+        .collect();
+    assert_eq!(
+        past,
+        ["Run on past `case 2: case ':':`", "Run on past `default:`"]
+    );
+    let first = step(&states, EventKind::Jump, "Run on past `case 2: case ':':`");
+    assert!(
+        first
+            .event
+            .summary
+            .contains("runs on past the labels into the statements after them"),
+        "{}",
+        first.event.summary
+    );
+    assert_eq!(first.event.clauses[0].id, "6.8.1p4");
+    let second = step(&states, EventKind::Jump, "Run on past `default:`");
+    assert!(
+        second
+            .event
+            .summary
+            .contains("past the label into the statements after it"),
+        "{}",
+        second.event.summary
+    );
+    let states = finished(
+        "int main(void) { int r = 0; switch (2) { case 1: r = 1; case 2: r += 2; } return r; }",
+        2,
+    );
+    assert!(
+        states
+            .iter()
+            .all(|state| !state.event.title.starts_with("Run on past")),
+        "the switch's jump to `case 2:` passes no label"
+    );
+}
