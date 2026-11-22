@@ -1316,6 +1316,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether the unit so far has a body for the function `identity`, an
+    /// inline definition included.
+    /// C99: §6.9.1, pp. 141-142; PDF pp. 153-154.
+    pub(super) fn function_body_seen(&self, identity: StringCacheId) -> bool {
+        self.functions
+            .entities
+            .get(&identity)
+            .is_some_and(|entity| entity.function_body.is_some())
+    }
+
     /// Where an earlier declaration defines the linked entity that `binding`
     /// redeclares: its function body or its initialized object. A tentative
     /// definition completes only at the end of the translation unit, so it

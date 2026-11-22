@@ -15198,6 +15198,69 @@ warn.c:34: warning: cast between pointer and integer of different size
         assert!(!directory.path("w.o").exists());
     }
 
+    /// A `static inline` definition after an external declaration keeps
+    /// TCC's `inline` flag, which makes the function internal: TCC emits it
+    /// as a local symbol, which the calls before it bind to too
+    /// (`patch_type` and `update_storage` in `tccgen.c`). So a unit that
+    /// replaces `rand` this way leaves the C library's alone, and a header
+    /// that does it links into two units. A declaration that clears the
+    /// flag again would make the function external once more, which bcc
+    /// refuses, as the other identities refuse them all. Ubuntu's TCC
+    /// 0.9.27 emits the same bindings, and its program exits with 0.
+    #[test]
+    fn tcc_makes_a_static_inline_redeclaration_internal() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "h.h",
+            "int helper(void);\nstatic inline int helper(void) { return 7; }\n",
+        );
+        directory.write(
+            "a.c",
+            "#include <stdlib.h>\n#include \"h.h\"\nstatic inline int rand(void) { return 4; \
+             }\nint g(void);\nint early(void) { return g(); }\nstatic inline int g(void) { return \
+             3; }\nint mine(void) { return rand() + helper() + early(); }\n",
+        );
+        directory.write(
+            "b.c",
+            "#include <stdlib.h>\n#include \"h.h\"\nint mine(void);\nint g(void) { return 30; \
+             }\nint main(void) {\n  srand(1);\n  int r = rand();\n  return mine() == 14 && \
+             helper() == 7 && g() == 30 && r != rand() ? 0 : 1;\n}\n",
+        );
+        let ir = directory.bcc("--compiler-identity=tcc", &["--emit=ir", "a.c"]);
+        succeeds(&ir);
+        let functions = stdout(&ir)
+            .lines()
+            .filter(|line| line.starts_with("function @"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            functions,
+            "function @helper() -> i32 internal {\nfunction @rand() -> i32 internal {\nfunction \
+             @early() -> i32 external {\nfunction @g() -> i32 internal {\nfunction @mine() -> i32 \
+             external {"
+        );
+        let output = directory.bcc("--tcc-mode", &["a.c", "b.c", "-o", "p"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("p")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        directory.write(
+            "c.c",
+            "int h(void);\nstatic inline int h(void) { return 1; }\nint h(void);\n",
+        );
+        let cleared = directory.bcc("--tcc-mode", &["-c", "c.c", "-o", "c.o"]);
+        assert_eq!(cleared.status.code(), Some(1));
+        assert_eq!(
+            stderr(&cleared),
+            "c.c:3: error: identifier has both internal and external linkage: `h`\n"
+        );
+        let gcc = directory.bcc("--gcc-mode", &["-c", "a.c", "-o", "g.o"]);
+        assert_eq!(gcc.status.code(), Some(1));
+    }
+
     /// The text of `cl /E` as the real `cl.exe` 19.44 writes it, compared
     /// under Wine: a line for each source line, `#line` markers on the
     /// first line, after a skipped group's `#endif`, after an `#elif` that

@@ -266,9 +266,24 @@ impl Analyzer<'_, '_, '_> {
         storage: Option<StorageClass>,
         definition: bool,
     ) -> bool {
+        let state = self.tcc_inline_after(name, inline, storage, definition);
+        _ = self.unused.tcc_inline.insert(name, state);
+        definition && state.0
+    }
+
+    /// TCC's `inline` flag of the function `name` after a declaration, and
+    /// whether its first declaration was `static`, without noting it
+    /// ([`Self::note_tcc_inline`]).
+    pub(in crate::translation_phases::semantic_analysis) fn tcc_inline_after(
+        &self,
+        name: StringCacheId,
+        inline: bool,
+        storage: Option<StorageClass>,
+        definition: bool,
+    ) -> (bool, bool) {
         let inline = inline && storage != Some(StorageClass::Extern);
         let written_static = storage == Some(StorageClass::Static);
-        let state = match self.unused.tcc_inline.get(&name) {
+        match self.unused.tcc_inline.get(&name) {
             | None => (inline, written_static),
             | Some(&(old, first_static)) => {
                 let merged = (old || inline) && (old == inline || first_static || written_static);
@@ -277,9 +292,7 @@ impl Analyzer<'_, '_, '_> {
                     first_static,
                 )
             },
-        };
-        _ = self.unused.tcc_inline.insert(name, state);
-        definition && state.0
+        }
     }
 
     /// What TCC says of the deferred `inline` definitions it compiles once
