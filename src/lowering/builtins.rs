@@ -320,20 +320,47 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// The refusal of a call of a reserved `__builtin_` name semantic
     /// analysis has no contract for, whose result type it could not
-    /// analyze: by name where GCC has the builtin.
-    pub(super) fn opaque_builtin(&self, mut e: &'tu Expression<'tu>) -> Option<LoweringError> {
-        // The call may sit under parentheses and casts, as in
-        // `(void) __builtin_apply_args ()`, whose cast has no type either.
+    /// analyze: by name where GCC has the builtin. The call may be `e` or
+    /// an operand of the operators `e` applies, whose type it leaves
+    /// unanalyzed in turn (`__builtin_stack_save () != 0`).
+    pub(super) fn opaque_builtin(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
         use crate::translation_phases::parsing::syntax::ExpressionType as E;
-        loop {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(e);
+        while let Some(e) = work.pop() {
             match e.kind {
-                | E::Parenthesized { expression } => e = expression,
+                // As in `(void) __builtin_apply_args ()`, whose cast has no
+                // type either.
+                | E::Parenthesized {
+                    expression: operand,
+                }
                 | E::Cast {
-                    operand_expression, ..
-                } => e = operand_expression,
-                | _ => break,
+                    operand_expression: operand,
+                    ..
+                }
+                | E::Unary {
+                    operand_expression: operand,
+                    ..
+                } => work.push(operand),
+                | E::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => {
+                    work.push(right_expression);
+                    work.push(left_expression);
+                },
+                | _ =>
+                    if let Some(refusal) = self.opaque_builtin_call(e) {
+                        return Some(refusal);
+                    },
             }
         }
+        None
+    }
+
+    /// [`Self::opaque_builtin`] for `e` itself.
+    fn opaque_builtin_call(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
         let crate::translation_phases::semantic_analysis::Callee::Builtin {
             binding: Some(binding),
             instance: None,
