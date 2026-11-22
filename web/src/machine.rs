@@ -1118,6 +1118,7 @@ mod tests {
             ("constants", "finished", Some("0")),
             ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
+            ("strings", "finished", Some("0")),
             ("recursion", "finished", Some("24")),
             ("logic", "finished", Some("0")),
             ("bits", "finished", Some("0")),
