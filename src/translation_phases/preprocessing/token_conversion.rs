@@ -1764,8 +1764,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// whose character takes several UTF-8 bytes, or that has several
     /// characters, gets an implementation-defined multi-character value. A
     /// wide constant with more than one character, also
-    /// implementation-defined, is rejected. An empty constant does not match
-    /// `c-char-sequence` (paragraph 1, p. 59; PDF p. 71).
+    /// implementation-defined, is rejected, except under TCC's identity,
+    /// which takes the last one and packs a narrow constant's bytes as signed
+    /// `char`s (`parse_escape_string` in `tccpp.c`). An empty constant does
+    /// not match `c-char-sequence` (paragraph 1, p. 59; PDF p. 71).
     fn character_value(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -1773,14 +1775,22 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         wide: bool,
         had_escape_error: bool,
     ) -> CharacterTokenType {
+        let tcc = context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         if wide {
-            if units.len() != 1 && (!units.is_empty() || !had_escape_error) {
+            // TCC takes a wide constant's last character, with a warning.
+            if tcc && units.len() > 1 {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::TccMulticharacterConstant,
+                    source_vectors: token.source_vectors,
+                });
+            } else if units.len() != 1 && (!units.is_empty() || !had_escape_error) {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
                     source_vectors: token.source_vectors,
                 });
             }
-            let value = units.first().map_or(0, |unit| match *unit {
+            let unit = if tcc { units.last() } else { units.first() };
+            let value = unit.map_or(0, |unit| match *unit {
                 | LiteralUnit::Character(c) => u32::from(c),
                 | LiteralUnit::Numeric(code) => code,
             });
@@ -1817,6 +1827,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     }
                     CharacterTokenType::Char('\0')
                 },
+                // TCC reads each byte as its own (signed) `char`.
+                | _ if tcc => CharacterTokenType::MultiChar(bytes.fold(0_i32, |value, byte| {
+                    value.wrapping_shl(8) | i32::from(byte.cast_signed())
+                })),
                 | _ => CharacterTokenType::MultiChar(
                     bytes.fold(0_i32, |value, byte| value.wrapping_shl(8) | i32::from(byte)),
                 ),

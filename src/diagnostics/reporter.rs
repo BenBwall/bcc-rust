@@ -108,6 +108,27 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | TranslationError::Parsing(error) => error.ordering_location,
             // Preprocessing errors may still point into a macro definition.
             | _ if diagnostic.severity != ErrorSeverity::Warning => None,
+            // TCC reports as it reads, one pass over the unit, and what it
+            // says of one line comes in the order of its own code generation,
+            // which semantic analysis follows, rather than where in the line
+            // each report points: `return c ? p : q;` reports the
+            // conditional's mismatch before the conversion the `return`
+            // makes, though that conversion's range starts first.
+            | _ if is_semantic(error)
+                && report_order(error) == ReportOrder::AtSite
+                && context.configuration.diagnostic_format()
+                    == crate::configuration::DiagnosticFormat::Tcc =>
+                location.first().map(|source| {
+                    let line_start = context
+                        .source_text(source.source_file_index)
+                        .and_then(|text| text.get(..source.index as usize))
+                        .and_then(|before| before.rfind('\n'))
+                        .map_or(0, |newline| newline + 1);
+                    (
+                        source.source_file_index,
+                        u32::try_from(line_start).unwrap_or(source.index),
+                    )
+                }),
             | _ => match report_order(error) {
                 | ReportOrder::AtSite => location
                     .first()
@@ -479,6 +500,14 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
 /// Where a diagnostic falls among the others: some of GCC's semantic warnings
 /// come after the place they name.
+fn is_semantic(error: &TranslationError<'_>) -> bool {
+    match error {
+        | TranslationError::Semantic(_) => true,
+        | TranslationError::Classified(classified) => is_semantic(classified.error),
+        | _ => false,
+    }
+}
+
 fn report_order(error: &TranslationError<'_>) -> ReportOrder {
     match error {
         | TranslationError::Semantic(error) => error.order,

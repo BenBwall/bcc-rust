@@ -568,6 +568,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// as its wrapped value (`parse_number` in `tccpp.c`). C99: §6.4.4.1
     /// paragraph 6, p. 56; PDF p. 68.
     TccIntegerOverflow,
+    /// A character constant of more than one character in a conditional
+    /// directive, or a wide one anywhere, which TCC 0.9.27 reports as it
+    /// reads it (`parse_escape_string` in `tccpp.c`); semantic analysis
+    /// reports the others. C99: §6.4.4.4 paragraphs 10-11, p. 61; PDF p. 73.
+    TccMulticharacterConstant,
     /// `#include_next` or `__has_include_next`, named by the payload, in the
     /// primary source file, where there is no entry to continue after; the
     /// lookup searches as `#include` would, as GCC's and Clang's do. The
@@ -1455,6 +1460,7 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("TCC would apply it from here on"),
             | Self::TccIntegerOverflow => new("integer constant overflow"),
+            | Self::TccMulticharacterConstant => new("multi-character character constant"),
             | Self::TccPragmaLibrary(library) => new(format_in!(
                 arena,
                 "'#pragma comment(lib, \"{library}\")' is ignored: bcc adds no library from a \
@@ -2145,7 +2151,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
             | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..)
             | PreprocessorErrorType::TccPragmaLibrary(..)
-            | PreprocessorErrorType::TccIntegerOverflow => ErrorSeverity::Warning,
+            | PreprocessorErrorType::TccIntegerOverflow
+            | PreprocessorErrorType::TccMulticharacterConstant => ErrorSeverity::Warning,
         }
     }
 }
