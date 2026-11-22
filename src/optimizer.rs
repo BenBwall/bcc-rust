@@ -146,7 +146,9 @@ pub(crate) use report::OptimizationReport;
 use crate::{
     ir::{
         FuncId,
+        InstData,
         Module,
+        Opcode,
         Profile,
         verify_function,
     },
@@ -309,8 +311,8 @@ fn drop_assumptions(draft: &mut Draft<'_, '_>) -> bool {
         assumptions.extend(draft.block(block).insts.iter().copied().filter(|&inst| {
             matches!(
                 *draft.inst(inst),
-                crate::ir::InstData::Unary {
-                    opcode: crate::ir::Opcode::Assume,
+                InstData::Unary {
+                    opcode: Opcode::Assume,
                     ..
                 }
             )
