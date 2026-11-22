@@ -3652,7 +3652,7 @@ sequence-point note.
   dumps, 8 programs changed outcome: the 6 above now run, and `i++ < f()`
   and `*pp++` are refused with their new messages.
 - **Tests:** as `pages.yml` runs them, the engine's tests (132, 3 of them
-  new and 3 updated for the wider rule and the new messages) and its
+  new and 4 updated for the wider rule and the new messages) and its
   clippy pass, as do the site's tests (164, and the prerender's 2), the
   WebAssembly stepper's (79) and the site's four clippy runs; the worker
   run prints the engine's existing unfulfilled lint expectation in
