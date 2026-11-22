@@ -36,6 +36,7 @@ use super::{
         Diagnostic,
         ExpressionNode,
         Program,
+        SourceRange,
         Undefined,
     },
 };
@@ -163,6 +164,13 @@ impl Machine {
             .unwrap_or("")
     }
 
+    /// Where the access at `node` is in the source: for a call's body,
+    /// the call. A stop points there rather than at the operation that
+    /// found the clash, which for a call is its `return`.
+    fn node_range(nodes: &[ExpressionNode], node: usize, fallback: SourceRange) -> SourceRange {
+        nodes.get(node).map_or(fallback, |node| node.range)
+    }
+
     /// The object an access reaches, in words.
     fn accessed(&self, access: &Access) -> String {
         if access.target == STANDARD_OUTPUT {
@@ -208,7 +216,7 @@ impl Machine {
              value stored there"
         );
         Diagnostic::ub(
-            self.state.source_range,
+            Self::node_range(nodes, later.node, self.state.source_range),
             &message,
             &clauses::UNSEQUENCED,
             Undefined::Unsequenced,
@@ -254,7 +262,11 @@ impl Machine {
         Diagnostic {
             citation: Some(clauses::EVALUATION_ORDER.citation),
             clause: Some(&clauses::EVALUATION_ORDER),
-            ..Diagnostic::new("unsupported", self.state.source_range, &message)
+            ..Diagnostic::new(
+                "unsupported",
+                Self::node_range(nodes, later.node, self.state.source_range),
+                &message,
+            )
         }
     }
 
@@ -283,7 +295,11 @@ impl Machine {
         Diagnostic {
             citation: Some(clauses::UNSEQUENCED.citation),
             clause: Some(&clauses::UNSEQUENCED),
-            ..Diagnostic::new("unsupported", self.state.source_range, &message)
+            ..Diagnostic::new(
+                "unsupported",
+                Self::node_range(nodes, later.node, self.state.source_range),
+                &message,
+            )
         }
     }
 

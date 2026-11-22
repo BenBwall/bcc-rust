@@ -843,7 +843,11 @@ impl Parser<'_> {
             let operand = self.expression(UNARY)?;
             let expression = &self.expressions[operand];
             if expression.effect {
-                return Err(self.error("sizeof of an increment is outside this subset"));
+                return Err(self.error(
+                    "sizeof never evaluates its operand, so an assignment, ++ or -- there would \
+                     never happen; this subset refuses one rather than show a store that does not \
+                     occur",
+                ));
             }
             let ty = match expression.kind {
                 | ExprKind::Name(_, declared, _) | ExprKind::Member { declared, .. } => declared,
@@ -1824,6 +1828,14 @@ impl Parser<'_> {
     pub(super) fn check_lvalue(&self, expression: usize) -> Result<(), Diagnostic> {
         match self.expressions[expression].kind {
             | ExprKind::Name(_, declared, _) if !declared.is_array() => Ok(()),
+            // C99 §6.5.16p3, §6.5.2.4p2, §6.5.3.1p2: their results are
+            // values.
+            | ExprKind::Assign { .. } | ExprKind::Update { .. } => Err(Diagnostic::new(
+                "unsupported",
+                self.expressions[expression].range,
+                "an assignment, ++ or -- yields a value, not an object, so it cannot be stored \
+                 into, updated or have its address taken (C99 §6.5.16p3, §6.5.2.4p2)",
+            )),
             | ExprKind::Unary("*", _) | ExprKind::Index(_, _) => Ok(()),
             | ExprKind::Member { declared, .. } if !declared.is_array() => Ok(()),
             | _ => Err(Diagnostic::new(

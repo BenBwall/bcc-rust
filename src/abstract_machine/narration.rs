@@ -801,7 +801,10 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         ),
         | "unsupported" if diagnostic.clause == Some(&clauses::EVALUATION_ORDER) => (
             "Stopped: the result depends on an open order",
-            sentence(&diagnostic.message),
+            String::from(
+                "A compiler may run the call before or after the other operand, and the two \
+                 orders give different results here, so the machine stops rather than pick one.",
+            ),
             String::from(
                 "C leaves the order of most operands unspecified, and a call's body runs as a \
                  whole, before or after the others. When the call and another operand use the \
@@ -815,7 +818,10 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         ),
         | "unsupported" if diagnostic.clause == Some(&clauses::UNSEQUENCED) => (
             "Stopped: a store that reads where it stores",
-            sentence(&diagnostic.message),
+            String::from(
+                "C99 does not settle whether a store may read the object it stores into to find \
+                 where to store, so the machine stops rather than guess.",
+            ),
             String::from(
                 "C99 lets an object that an expression stores into be read only to compute the \
                  value stored. Reading it to find where to store, as here, is a case its wording \
