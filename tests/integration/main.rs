@@ -59,6 +59,7 @@ mod pointer_diagnostics;
 mod powi;
 mod preprocessing_cli;
 mod reachable_functions;
+mod runtime_names;
 mod semantic_cli;
 mod static_compound_literals;
 mod static_function_designators;
