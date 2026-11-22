@@ -3501,7 +3501,10 @@ impl SemanticError {
     /// "Compiler Warning (level 4) C4189", "Compiler Warning (level 3)
     /// C4018", "Compiler Warning (level 4) C4389", "Compiler Warning (level
     /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Warning
-    /// (level 1) C4532", "Compiler Error C2124".
+    /// (level 1) C4532", "Compiler Error C2124", "Compiler Warning (level 4)
+    /// C4127", "Compiler Warning (level 2) C4244", "Compiler Warning (levels
+    /// 3 and 4) C4244", "Compiler Warning (level 4, off) C4242", "Compiler
+    /// Warning (level 4) C4245", "Compiler Warning (level 1) C4305".
     fn msvc_message<'d>(
         &self,
         context: &Context<'_>,

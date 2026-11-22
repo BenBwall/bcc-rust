@@ -976,7 +976,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && let ExpressionType::Binary { operator, .. } = e.kind
             {
                 self.check_compound_conversion_as_cl(
-                    e,
                     operator,
                     left.expression,
                     right.expression,

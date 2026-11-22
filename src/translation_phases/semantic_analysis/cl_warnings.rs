@@ -158,18 +158,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !self.cl_conversions_checked(site) || self.cl_unknown_constant(source) {
             return None;
         }
-        // `cl` reports a conversion where the value is: at the operator of
-        // the expression that computes it, or where it begins.
-        let site = {
-            let mut value = source.expression;
-            while let E::Parenthesized { expression } = value.kind {
-                value = expression;
-            }
-            match value.kind {
-                | E::Binary { .. } => value.operator_source_vectors.unwrap_or(value.source_vectors),
-                | _ => value.source_vectors,
-            }
-        };
+        let site = Self::cl_value_site(source.expression);
         let constant = self.cl_constant(source);
         let (mut group, truncation) = match (from, to) {
             | (Arithmetic::Floating(_), Arithmetic::Bool)
@@ -298,8 +287,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         });
     }
 
-    /// C4244 and C4305 for the compound assignment `e` of `right` to
-    /// `left` by `operator`, whose operation is in `operation`: as for a
+    /// C4244 and C4305 for the compound assignment of `right` to `left` by
+    /// `operator`, whose operation is in `operation`, at `right`: as for a
     /// simple one from the operation's type, which `cl` names, except that
     /// `+=`, `-=`, `*=` and `/=` narrow an integer only when `right` is
     /// wider than `left`, the other operators never, an integer made a
@@ -308,7 +297,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `cl`.
     pub(super) fn check_compound_conversion_as_cl(
         &mut self,
-        e: &'tu Expression<'tu>,
         operator: B,
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
@@ -323,7 +311,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         ) else {
             return;
         };
-        let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+        let site = Self::cl_value_site(right);
         if !self.cl_conversions_checked(site) || self.cl_unknown_constant(right_info) {
             return;
         }
@@ -398,6 +386,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             words,
         );
+    }
+
+    /// Where `cl` reports the conversion of the value `e`: at the operator
+    /// of the expression that computes it, or where it begins.
+    fn cl_value_site(mut e: &'tu Expression<'tu>) -> SourceVectors {
+        while let E::Parenthesized { expression } = e.kind {
+            e = expression;
+        }
+        match e.kind {
+            | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
+            | _ => e.source_vectors,
+        }
     }
 
     /// Whether `cl` checks conversions at all at `site`: only where the
@@ -631,7 +631,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// to `cl` is an arithmetic one, a null pointer or another integer made
     /// a pointer, or a string literal, but not an object's or a function's
     /// address; and `0 && x` is one. Reported at the operator of the folded
-    /// expression, or where it begins.
+    /// expression, or where it begins, under its parentheses and casts.
     pub(super) fn check_constant_condition_as_cl(&mut self, slot: ExpressionSlot<'tu>) {
         let Some(e) = super::statements::slot_expression(slot) else {
             return;
@@ -646,8 +646,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         }
         let mut folded = e;
-        while let E::Parenthesized { expression } = folded.kind {
-            folded = expression;
+        while let E::Parenthesized {
+            expression: inner,
+        }
+        | E::Cast {
+            operand_expression: inner,
+            ..
+        } = folded.kind
+        {
+            folded = inner;
         }
         let site = folded.operator_source_vectors.unwrap_or(folded.source_vectors);
         let text = self
