@@ -105,7 +105,7 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                      strings",
                 ));
             }
-        } else if b"{}()[];,+-*/%<>=!&.".contains(&byte) {
+        } else if b"{}()[];,+-*/%<>=!&.~|^?:".contains(&byte) {
             offset += 1;
             if offset < bytes.len()
                 && matches!(
@@ -122,6 +122,10 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                         | b"/="
                         | b"%="
                         | b"&&"
+                        | b"||"
+                        | b"&="
+                        | b"|="
+                        | b"^="
                         | b"->"
                         | b"<<"
                         | b">>"

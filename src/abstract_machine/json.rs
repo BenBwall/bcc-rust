@@ -104,7 +104,12 @@ fn state(output: &mut String, state: &State) {
         }
         output.push_str("],\"last\":");
         optional(output, evaluation.last);
-        output.push_str(",\"calling\":");
+        output.push_str(",\"skipped\":[");
+        for (index, node) in evaluation.skipped.iter().enumerate() {
+            comma(output, index);
+            write!(output, "{node}").expect("String write");
+        }
+        output.push_str("],\"calling\":");
         optional(output, evaluation.calling);
         output.push('}');
     } else {

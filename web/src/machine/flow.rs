@@ -122,6 +122,7 @@ pub(super) fn flow(
         ],
         | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, to.unwrap_or("int")))],
         | EventKind::Branch => chips.branch(first),
+        | EventKind::Logical | EventKind::Conditional | EventKind::Comma => chips.sequenced(event),
         | EventKind::Call => chips.call(event),
         | EventKind::LibraryCall => chips.library_call(event, written),
         | EventKind::Directive => directive(event, program),
@@ -341,17 +342,53 @@ impl Chips<'_, '_> {
 
     /// A condition and whether C counts it as true.
     fn branch(&self, condition: Option<&Operand>) -> Vec<Option<FlowPart>> {
-        let truth = condition.is_some_and(|operand| match operand {
-            | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
-            | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
-            | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
-            | _ => false,
-        });
         vec![
             condition.map(|operand| self.operand(operand)),
             Some(arrow("counts as")),
-            Some(part("label", if truth { "true" } else { "false" })),
+            Some(part("label", if truth(condition) { "true" } else { "false" })),
         ]
+    }
+
+    /// A step of `&&`, `||`, `?:` or a comma operator: the test of the
+    /// first operand, what it counts as and the result when that settles
+    /// it (C99 §6.5.13p4, §6.5.14p4, §6.5.15p4); the end of a comma's left
+    /// operand, its value discarded (§6.5.17p2); or the value the operator
+    /// yields from its last operand.
+    fn sequenced(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        let first = event.operands.first();
+        let result = event.result.as_ref();
+        let operand = |operand: Option<&Operand>| operand.map(|operand| self.operand(operand));
+        match event.kind {
+            | EventKind::Comma if event.sequence_point => vec![
+                operand(first),
+                Some(arrow(if first.is_some() { "discarded" } else { "done" })),
+            ],
+            | _ if event.sequence_point => {
+                let mut parts = self.branch(first);
+                parts.push(Some(arrow("so")));
+                parts.push(Some(part(
+                    "label",
+                    match (event.kind, result) {
+                        | (EventKind::Logical, Some(_)) => "skip the right",
+                        | (EventKind::Logical, None) => "evaluate the right",
+                        | _ if truth(first) => "choose the second",
+                        | _ => "choose the third",
+                    },
+                )));
+                if result.is_some() {
+                    parts.extend([Some(arrow("result")), operand(result)]);
+                }
+                parts
+            },
+            | _ => vec![
+                operand(first),
+                Some(arrow("yields")),
+                operand(result).map(|chip| match event.result_type.as_deref() {
+                    | Some(ty) => typed(chip, ty),
+                    | None => chip,
+                }),
+            ],
+        }
     }
 
     /// The objects a block's entry created, indeterminate, or its exit
@@ -483,6 +520,17 @@ fn part(role: &str, text: &str) -> FlowPart {
         text: text.to_owned(),
         ..FlowPart::default()
     }
+}
+
+/// Whether C counts `condition` as true: it compares unequal to 0, and a
+/// pointer is true unless it is null (C99 §6.8.4.1p2, §6.5.15p4).
+fn truth(condition: Option<&Operand>) -> bool {
+    condition.is_some_and(|operand| match operand {
+        | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
+        | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
+        | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
+        | _ => false,
+    })
 }
 
 fn arrow(verb: &str) -> FlowPart {

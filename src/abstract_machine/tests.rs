@@ -169,7 +169,9 @@ fn dereference_increment_precedence_is_preserved_or_explicitly_rejected() {
         let diagnostic =
             compile(&source).expect_err("unparenthesized postfix dereference must be rejected");
         assert!(
-            diagnostic.message.contains("nested side effects"),
+            diagnostic
+                .message
+                .contains("an increment nested in an operand"),
             "precise subset limitation"
         );
     }
@@ -583,18 +585,18 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { return 1.5 % 2; }",
         "int main(void) { if (0) { _Bool x; } return 0; }",
         "int main(void) { int i = 0; return i++ + i; }",
-        "int f(void) { return 1; } int main(void) { return f() + f(); }",
         "int main(void) { return missing(); }",
-        "int main(void) { int x = 1; int **p; return x; }",
         "int f(int x) { return x; } int main(void) { return f(); }",
         "int main(void) { int *p; int x = 0; p = x; return 0; }",
         "int main(void) { int a[2]; a = 0; return 0; }",
         "int main(void) { int x; int x; return 0; }",
         "int f(int x) { int x; return 0; } int main(void) { return f(1); }",
-        "int main(void) { return 010; }",
-        "int main(void) { return 0 && 1 / 0; }",
-        "int main(void) { return 1 & 2; }",
-        "int main(void) { return ~1; }",
+        "int main(void) { return 08; }",
+        "int main(void) { return 0x; }",
+        "struct s { int x; }; int main(void) { struct s a = {1}; return a && 1; }",
+        "int main(void) { double d = 1.0; return d & 1; }",
+        "int main(void) { double d = 1.0; return ~d; }",
+        "int main(void) { int *p = 0; return 1 ? p : 2; }",
         "int main(void) { double _Complex x; return 0; }",
         "int main(void) { long float x; return 0; }",
         "int main(void) { unsigned double x; return 0; }",
@@ -602,13 +604,12 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { double x = 0x1.8; return 0; }",
         "int main(void) { double d = 1.0; d <<= 1; return 0; }",
         "int main(void) { double d = 1.0; return (int)d % 2.0; }",
-        "int main(void) { return 0x10; }",
         "int main(void) { return 99999999999999999999; }",
         "int main(void) { return 1lul; }",
         "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
         "int main(void) { int i = 0; int *p = &i; while (i++ < *p) {} return 0; }",
-        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
+        "int main(void) { int i = 0; while (i++ < i++) {} return 0; }",
         "int main(void) { unsigned short long x; return 0; }",
         "int main(void) { signed unsigned x; return 0; }",
         "// comment ending in a splice\\\nint main(void) { return 0; }",
@@ -1565,13 +1566,8 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
         increment.event.explanation
     );
     returned("int main(void) { char c = 127; c++; return c; }", -128);
-    for rejected in [
-        "int main(void) { char c = 1; int *p = &c; return 0; }",
-        "int main(void) { char *s[2]; return 0; }",
-    ] {
-        let _diagnostic = compile(rejected)
-            .expect_err("a char's address is no int pointer, and arrays of pointers are outside");
-    }
+    let _diagnostic = compile("int main(void) { char c = 1; int *p = &c; return 0; }")
+        .expect_err("a char's address is no int pointer");
 }
 
 #[test]
@@ -2979,7 +2975,7 @@ fn object_like_macros_replace_every_later_use() {
             "one integer constant",
         ),
         (
-            "#define N 010\nint main(void) { return 0; }",
+            "#define N 08\nint main(void) { return 0; }",
             "one integer constant",
         ),
         (
@@ -3961,7 +3957,8 @@ fn integer_constants_take_their_type_from_their_value_and_suffix() {
         "{}",
         big.event.explanation
     );
-    assert!(rejected("int main(void) { return 0x10; }").contains("hexadecimal"));
+    assert!(rejected("int main(void) { return 0x; }").contains("hexadecimal digits"));
+    assert!(rejected("int main(void) { return 09; }").contains("not an octal digit"));
     assert!(rejected("int main(void) { return 1lul; }").contains("suffix"));
     assert!(rejected("int main(void) { return 99999999999999999999; }").contains("no type"));
     returned(
@@ -4084,10 +4081,16 @@ fn a_condition_may_count_down_with_a_postfix_decrement() {
          {} return 0; }",
     );
     assert_eq!(cause, Some(super::Undefined::PointerOutside));
+    // Two variables may each be updated: they are different objects, so the
+    // order of the two stores does not matter (C99 §6.5p2-3).
+    returned(
+        "int main(void) { int i = 0; int j = 2; int n = 0; while (i++ < j--) n = n + 1; return n \
+         * 100 + i * 10 + j + 1; }",
+        121,
+    );
     for source in [
         "int main(void) { int i = 0; i++ > 0; return 0; }",
         "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
-        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
         "int main(void) { int a[2] = {0, 0}; int i = 0; while (a[i]++ < 1) {} return 0; }",
         "int main(void) { const int i = 1; while (i--) {} return 0; }",
     ] {
@@ -4144,10 +4147,8 @@ fn parameters_returns_members_and_pointers_take_every_integer_type() {
                   p++;\n    struct wide w = {1, 4294967296};\n    unsigned long *q = &w.count;\n    \
                   *q = *q + 1;\n    return (down(0) == 4294967295u) + (down(-1) == 4294967294u) + \
                   *p + (widen(-1) == -1) + (w.count == 4294967297);\n}\n";
-    assert!(
-        compile(source).is_err(),
-        "nested calls are outside the subset"
-    );
+    // Calls are operands like any other.
+    returned(source, 1 + 1 + 8 + 1 + 1);
     let source = "struct wide { char tag; unsigned long count; };\nunsigned int down(unsigned int \
                   x) {\n    return x - 1;\n}\nlong widen(int x) {\n    return x;\n}\nint \
                   main(void) {\n    unsigned int a[2] = {7, 8};\n    unsigned int *p = a;\n    \
@@ -5039,4 +5040,882 @@ fn a_stop_ends_the_description_and_the_trace_carries_it() {
         ),
         "{json}"
     );
+}
+
+/// Every state of a run, each step checked against the description of it
+/// the state before gave.
+fn stepped(source: &str) -> Vec<State> {
+    let program = compile(source).expect("test source must compile");
+    let mut session = program.session();
+    let mut states = vec![session.state().clone()];
+    while !session.state().terminal() {
+        let upcoming = session.state().upcoming.clone();
+        let state = session.step().clone();
+        foretold(upcoming.as_ref(), &state);
+        states.push(state);
+    }
+    states
+}
+
+/// The first step of `kind` whose title starts with `title`.
+fn step<'a>(states: &'a [State], kind: EventKind, title: &str) -> &'a State {
+    states
+        .iter()
+        .find(|state| state.event.kind == kind && state.event.title.starts_with(title))
+        .unwrap_or_else(|| {
+            panic!(
+                "no {kind:?} step titled {title:?} in {:?}",
+                states
+                    .iter()
+                    .map(|state| &state.event.title)
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+// C99 §6.5.10-§6.5.12: `&`, `^` and `|` combine the bits of their operands
+// after the usual arithmetic conversions; §6.5.3.3p4: `~` flips the bits of
+// its promoted operand.
+#[test]
+fn bitwise_operators_show_the_bits_they_combine() {
+    let states =
+        stepped(
+            "int main(void) {\n    int flags = 13;\n    int low = flags & 3;\n    int set = 8 | \
+             1;\n    int toggled = 12 ^ 10;\n    unsigned char byte = 15;\n    int inverted = \
+             ~byte;\n    unsigned int all = ~0u;\n    return low + set + toggled + (inverted & \
+             255) + (all == 4294967295u);\n}\n",
+        );
+    let and = step(&states, EventKind::Arithmetic, "Compute 13 & 3 = 1");
+    assert_eq!(
+        and.event.summary,
+        "`&` keeps only the bits that are 1 in both operands: 0000 1101 & 0000 0011 = 0000 0001, \
+         which is 1."
+    );
+    assert!(
+        and.event
+            .explanation
+            .contains("the 24 bits above those shown are 0 in all three"),
+        "{}",
+        and.event.explanation
+    );
+    assert_eq!(and.event.clauses[0].id, "6.5.10p4");
+    assert!(
+        and.event
+            .note
+            .starts_with("The bitwise operators treat an integer")
+    );
+    let or = step(&states, EventKind::Arithmetic, "Compute 8 | 1 = 9");
+    assert_eq!(or.event.clauses[0].id, "6.5.12p4");
+    let xor = step(&states, EventKind::Arithmetic, "Compute 12 ^ 10 = 6");
+    assert!(
+        xor.event
+            .summary
+            .contains("0000 1100 ^ 0000 1010 = 0000 0110")
+    );
+    assert_eq!(xor.event.clauses[0].id, "6.5.11p4");
+    // The unsigned char is promoted to int before `~` flips 32 bits.
+    let promoted = states
+        .iter()
+        .position(|state| state.event.kind == EventKind::IntegerPromotion)
+        .expect("the char is promoted");
+    let complement = step(&states, EventKind::Unary, "Complement 15 → -16");
+    assert!(states[promoted].step < complement.step);
+    assert_eq!(
+        complement.event.summary,
+        "`~` flips every bit of 15: 0000 … 0000 1111 becomes 1111 … 1111 0000, which is -16."
+    );
+    assert!(complement.event.explanation.contains("~x is -x - 1 there"));
+    assert_eq!(complement.event.clauses[0].id, "6.5.3.3p4");
+    let unsigned = step(&states, EventKind::Unary, "Complement 0 → 4294967295");
+    assert!(
+        unsigned
+            .event
+            .explanation
+            .contains("the largest value minus x: 4294967295 - 0 = 4294967295"),
+        "{}",
+        unsigned.event.explanation
+    );
+    returned(
+        "int main(void) { int a = -16; return (a & 255) + (-1 ^ 1) + (5 | -8); }",
+        240 - 2 - 3,
+    );
+    for source in [
+        "int main(void) { double d = 1.0; return d & 1; }",
+        "int main(void) { int *p = 0; return 1 | p; }",
+        "int main(void) { double d = 1.0; return ~d; }",
+        "int main(void) { double d = 1.0; d |= 1; return 0; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert_eq!(diagnostic.kind, "constraint", "{source}");
+    }
+}
+
+// C99 §6.5.16.2p3: `E1 op= E2` is `E1 = E1 op (E2)` with E1 evaluated once.
+#[test]
+fn bitwise_compound_assignments_set_clear_and_flip_bits() {
+    let source = "int main(void) {\n    unsigned int flags = 0;\n    flags |= 4;\n    flags |= \
+                  1;\n    flags &= 6;\n    flags ^= 3;\n    return flags;\n}\n";
+    returned(source, 7);
+    let states = stepped(source);
+    let set = step(&states, EventKind::CompoundAssign, "Update `flags`: 4 → 5");
+    assert!(
+        set.event
+            .explanation
+            .contains("In binary, 4 is 0000 0100 and 1 is 0000 0001, so the result is 0000 0101"),
+        "{}",
+        set.event.explanation
+    );
+    assert!(
+        set.event
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.5.12p4")
+    );
+    let cleared = step(&states, EventKind::CompoundAssign, "Update `flags`: 5 → 4");
+    assert!(
+        cleared
+            .event
+            .explanation
+            .contains("keeps only the bits it shares with 6")
+    );
+    assert!(
+        compile("int main(void) { double d = 1.0; d ^= 2; return 0; }").is_err(),
+        "bitwise operands are integers"
+    );
+}
+
+// C99 §6.5.13p3-4 and §6.5.14p3-4: `&&` and `||` evaluate their left operand
+// first, with a sequence point after it, and the right one only when the
+// left leaves the result open.
+#[test]
+fn logical_operators_skip_their_right_operand_when_the_left_decides() {
+    let source = "int main(void) {\n    int *p = 0;\n    int positive = 0;\n    if (p != 0 && *p \
+                  > 0) {\n        positive = 1;\n    }\n    return positive;\n}\n";
+    returned(source, 0);
+    let states = stepped(source);
+    assert!(
+        states
+            .iter()
+            .all(|state| state.event.kind != EventKind::Dereference),
+        "`*p` is never evaluated"
+    );
+    let test = step(&states, EventKind::Logical, "Left of && is false");
+    assert_eq!(
+        test.event.title,
+        "Left of && is false: skip the right, result 0"
+    );
+    assert_eq!(
+        test.event.summary,
+        "`p != 0` is 0, so `p != 0 && *p > 0` is 0 whatever its right operand would give, and `*p \
+         > 0` is never evaluated."
+    );
+    assert!(test.event.sequence_point, "a sequence point follows");
+    assert_eq!(test.event.result, Some(Operand::Value(Value::Integer(0))));
+    let cited: Vec<&str> = test.event.clauses.iter().map(|clause| clause.id).collect();
+    assert_eq!(cited, ["6.5.13p4", "6.5.13p3", "Cp1"]);
+    // The skipped operand's nodes are recorded as never evaluated, and
+    // none of them has a value.
+    let evaluation = test
+        .evaluation
+        .as_ref()
+        .expect("the condition's evaluation");
+    let program = compile(source).expect("compiles");
+    let nodes = program.expression(evaluation.function, evaluation.root);
+    let skipped: Vec<&str> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| evaluation.skipped.contains(&(nodes[0].first + index)))
+        .map(|(_, node)| node.label.as_str())
+        .collect();
+    assert_eq!(skipped, ["p", "*", "0", ">"]);
+    assert!(
+        evaluation
+            .values
+            .iter()
+            .all(|(node, _)| !evaluation.skipped.contains(node))
+    );
+
+    let source = "int main(void) {\n    int x = 5;\n    int y = 0;\n    int inside = x > 0 && x < \
+                  10;\n    int either = y == 1 || x == 5;\n    int none = y || 0;\n    return \
+                  inside + either + none;\n}\n";
+    returned(source, 2);
+    let states = stepped(source);
+    let open = step(&states, EventKind::Logical, "Left of && is true");
+    assert_eq!(open.event.title, "Left of && is true: evaluate the right");
+    assert_eq!(open.event.result, None);
+    assert!(open.event.sequence_point);
+    let decided = step(&states, EventKind::Logical, "`x < 10` is 1");
+    assert_eq!(decided.event.title, "`x < 10` is 1: && yields 1");
+    assert!(!decided.event.sequence_point);
+    assert_eq!(decided.event.result_type.as_deref(), Some("int"));
+    let either = step(&states, EventKind::Logical, "`x == 5` is 1");
+    assert!(
+        either
+            .event
+            .summary
+            .contains("its left operand was 0, but its right one is nonzero"),
+        "{}",
+        either.event.summary
+    );
+    let none = step(&states, EventKind::Logical, "`0` is 0");
+    assert!(none.event.summary.contains("neither operand is nonzero"));
+    // `||` with a nonzero left operand yields 1 at once; a guard keeps a
+    // division by zero from running.
+    returned(
+        "int main(void) { int d = 0; int safe = d == 0 || 10 / d > 1; return safe; }",
+        1,
+    );
+    returned(
+        "int main(void) { int v[5] = {4, 8, 15, 16, 23}; int i = 0; while (i < 5 && v[i] != 15) { \
+         i++; } return i; }",
+        2,
+    );
+    returned(
+        "int main(void) { double half = 0.5; int *p = 0; return (half && 1) + !(p || 0); }",
+        2,
+    );
+}
+
+// C99 §6.5.15p4-5: `?:` evaluates its first operand, then only the operand
+// it chooses, converted to the type of the result.
+#[test]
+fn the_conditional_operator_evaluates_only_the_chosen_operand() {
+    let source = "int main(void) {\n    int a = 4;\n    int b = 9;\n    int max = a > b ? a : \
+                  b;\n    return max;\n}\n";
+    returned(source, 9);
+    let states = stepped(source);
+    let test = step(&states, EventKind::Conditional, "Condition of ?: is false");
+    assert_eq!(test.event.title, "Condition of ?: is false: choose `b`");
+    assert!(test.event.sequence_point);
+    let cited: Vec<&str> = test.event.clauses.iter().map(|clause| clause.id).collect();
+    assert_eq!(cited, ["6.5.15p4", "Cp1"]);
+    let yielded = step(&states, EventKind::Conditional, "`?:` yields 9");
+    assert_eq!(
+        yielded.event.summary,
+        "The chosen operand `b` is 9, so `a > b ? a : b` is 9."
+    );
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| state.event.kind == EventKind::LvalueConversion)
+            .filter(|state| state.event.title.starts_with("Read `a`"))
+            .count(),
+        1,
+        "`a` is read once, for the condition only"
+    );
+    // A division by zero in the operand not chosen never happens.
+    returned(
+        "int main(void) { int n = 0; int total = 10; return n != 0 ? total / n : -1; }",
+        -1,
+    );
+    // The result has the operands' common type: an int converts to double.
+    let states = stepped("int main(void) { int c = 1; double d = c ? 1 : 2.5; return d == 1.0; }");
+    let converted = step(&states, EventKind::Conditional, "`?:` yields 1.0");
+    assert!(
+        converted
+            .event
+            .explanation
+            .contains("the second and third operands together, double, so 1 is converted to 1.0"),
+        "{}",
+        converted.event.explanation
+    );
+    assert!(
+        converted
+            .event
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.5.15p5")
+    );
+    returned(
+        "#include <stdio.h>\nint main(void) { int count = 2; printf(\"%d item%s\\n\", count, \
+         count == 1 ? \"\" : \"s\"); return count > 1 ? count < 3 ? 7 : 8 : 9; }",
+        7,
+    );
+    returned(
+        "int main(void) { int x = 3; int *p = x > 2 ? &x : 0; return p != 0; }",
+        1,
+    );
+    for source in [
+        "int main(void) { int *p = 0; return 1 ? p : 2; }",
+        "struct s { int x; }; int main(void) { struct s a = {1}; return a ? 1 : 2; }",
+    ] {
+        assert_eq!(
+            compile(source).expect_err(source).kind,
+            "constraint",
+            "{source}"
+        );
+    }
+}
+
+// C99 §6.5.17p2: the comma operator's left operand is evaluated as a void
+// expression, a sequence point follows, and the right gives the result.
+#[test]
+fn the_comma_operator_sequences_two_expressions() {
+    let source =
+        "int main(void) {\n    int values[4] = {1, 2, 3, 4};\n    int i;\n    int j;\n    for (i \
+         = 0, j = 3; i < j; i++, j--) {\n        int saved = values[i];\n        values[i] = \
+         values[j];\n        values[j] = saved;\n    }\n    return values[0] * 1000 + values[1] * \
+         100 + values[2] * 10 + values[3];\n}\n";
+    returned(source, 4321);
+    let states = stepped(source);
+    let comma = step(&states, EventKind::Comma, "Comma: `i = 0` is done");
+    assert_eq!(
+        comma.event.title,
+        "Comma: `i = 0` is done, go on to `j = 3`"
+    );
+    assert!(comma.event.sequence_point);
+    let cited: Vec<&str> = comma.event.clauses.iter().map(|clause| clause.id).collect();
+    assert_eq!(cited, ["6.5.17p2", "Cp1"]);
+    // Only the last operand ends the full expression.
+    let first = step(&states, EventKind::Assign, "Store 0 into `i`");
+    assert!(!first.event.sequence_point);
+    assert!(!first.event.explanation.contains("full expression ends"));
+    let second = step(&states, EventKind::Assign, "Store 3 into `j`");
+    assert!(second.event.sequence_point);
+    let increment = step(&states, EventKind::Increment, "Update `i`: 0 → 1");
+    assert!(!increment.event.sequence_point);
+    assert!(
+        increment
+            .event
+            .explanation
+            .contains("the left operand of a comma operator"),
+        "{}",
+        increment.event.explanation
+    );
+    let decrement = step(&states, EventKind::Increment, "Update `j`: 3 → 2");
+    assert!(decrement.event.sequence_point);
+    // In parentheses the left operand's value is discarded, and the right
+    // operand's is the result.
+    let states = stepped("int main(void) { int x = 2; int y = (x + 1, x * 10); return y; }");
+    let discarded = step(&states, EventKind::Comma, "Comma: `x + 1` is done");
+    assert!(
+        discarded
+            .event
+            .summary
+            .contains("throws away `x + 1`'s value, 3")
+    );
+    let yielded = step(&states, EventKind::Comma, "The comma operator yields 20");
+    assert_eq!(
+        yielded.event.result,
+        Some(Operand::Value(Value::Integer(20)))
+    );
+    returned(
+        "int main(void) { int a = 1; int b = 2; a += 2, b *= 3; return a * 10 + b; }",
+        36,
+    );
+}
+
+// C99 Annex C, §6.5.2.2p10, §6.5.13p4, §6.5.14p4, §6.5.15p4, §6.5.17p2,
+// §6.8p4: an update inside a condition completes its store by the sequence
+// point that next follows it, and the next step that is a sequence point is
+// that one.
+#[test]
+fn an_update_in_a_condition_completes_by_the_next_sequence_point() {
+    let cases: [(&str, &str, EventKind, Option<&str>); 8] = [
+        (
+            "int main(void) { int i = 2; int n = 0; while (i-- > 0 && n < 5) n = n + 1; return n; \
+             }",
+            "the end of `i-- > 0`, the first operand of `&&`",
+            EventKind::Logical,
+            Some("6.5.13p4"),
+        ),
+        (
+            "int main(void) { int i = 2; int s = 1; while (i-- > 0 || s < 0) {} return i; }",
+            "the end of `i-- > 0`, the first operand of `||`",
+            EventKind::Logical,
+            Some("6.5.14p4"),
+        ),
+        (
+            "int main(void) { int i = 2; while (i-- ? 1 : 0) {} return i; }",
+            "the end of `i--`, the first operand of `?:`",
+            EventKind::Conditional,
+            Some("6.5.15p4"),
+        ),
+        (
+            "int main(void) { int i = 2; while ((i--, i >= 0)) {} return i; }",
+            "the end of `i--`, the left operand of a comma operator",
+            EventKind::Comma,
+            Some("6.5.17p2"),
+        ),
+        (
+            "int f(int x) { return x; } int main(void) { int i = 2; while (f(i--)) {} return i; }",
+            "the one just before the call `f(i--)`, once its arguments are evaluated",
+            EventKind::Call,
+            Some("6.5.2.2p10"),
+        ),
+        (
+            "int main(void) { int i = 2; int x = 1; if ((x && i++ == 2) && x) {} return i; }",
+            "the end of `(x && i++ == 2)`, the first operand of `&&`",
+            EventKind::Logical,
+            Some("6.5.13p4"),
+        ),
+        // In the second operand of `&&`, or alone, the next sequence point
+        // is the end of the condition.
+        (
+            "int main(void) { int i = 2; int x = 1; if (x && i++ == 2) {} return i; }",
+            "the end of the condition",
+            EventKind::Branch,
+            None,
+        ),
+        (
+            "int main(void) { int i = 2; while (i-- > 0) {} return i; }",
+            "the end of the condition",
+            EventKind::Branch,
+            None,
+        ),
+    ];
+    for (source, point, kind, clause) in cases {
+        let states = stepped(source);
+        let at = states
+            .iter()
+            .position(|state| state.event.kind == EventKind::Increment)
+            .expect(source);
+        let update = &states[at].event;
+        assert!(
+            update
+                .explanation
+                .contains(&format!("by the next sequence point, {point};")),
+            "{source}: {}",
+            update.explanation
+        );
+        assert!(!update.sequence_point, "{source}");
+        let next = states[at + 1..]
+            .iter()
+            .find(|state| state.event.sequence_point)
+            .expect(source);
+        assert_eq!(next.event.kind, kind, "{source}: {}", next.event.title);
+        let cited: Vec<&str> = update.clauses.iter().map(|clause| clause.id).collect();
+        if let Some(clause) = clause {
+            assert!(cited.contains(&clause), "{source}: {cited:?}");
+        }
+        assert!(cited.contains(&"6.5p2"), "{source}: {cited:?}");
+    }
+}
+
+// C99 §6.5.2.2p10, §6.8p3-4: the comma operator is a sequence point, the
+// commas between arguments give no order and no sequence point, and the
+// commas between declarators leave each initializer a full expression,
+// evaluated in order.
+#[test]
+fn the_comma_operator_s_note_tells_the_three_commas_apart() {
+    let states = stepped("int main(void) { int x = 2; int y = (x + 1, x * 10); return y; }");
+    let comma = step(&states, EventKind::Comma, "Comma: `x + 1` is done");
+    let note = &comma.event.note;
+    assert!(
+        note.contains(
+            "The commas between a call's arguments only separate them: C fixes no order among the \
+             arguments and puts no sequence point between them."
+        ),
+        "{note}"
+    );
+    assert!(
+        note.contains("each initializer is a full expression, evaluated in declarator order"),
+        "{note}"
+    );
+    assert!(!note.contains("in a declaration only separate"), "{note}");
+    // The left operand is a plain read: it has no side effects to keep.
+    assert!(
+        comma
+            .event
+            .explanation
+            .contains("only its side effects, if it has any, matter"),
+        "{}",
+        comma.event.explanation
+    );
+}
+
+// C99 §6.5p2, Annex C: a condition may update a variable and use it again,
+// or call a function, where a sequence point separates the two; without
+// one, the machine refuses, and says why without misstating C.
+#[test]
+fn a_condition_may_reuse_an_updated_variable_across_a_sequence_point() {
+    // GCC 14 gives each of these the same result.
+    returned(
+        "int main(void) { int i = 0; int r = 0; if (i++ && i++) r = 1; return i * 10 + r; }",
+        10,
+    );
+    returned(
+        "int main(void) { int i = 0; int n = 0; if (i++ == 0 && i == 1) n = 1; return n; }",
+        1,
+    );
+    returned(
+        "int main(void) { int i = 0; int n = 0; while (i++ < 3 && i != 2) n = n + 1; return i * \
+         10 + n; }",
+        21,
+    );
+    returned(
+        "int f(int x) { return x; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && \
+         f(1)) n = n + 1; return n; }",
+        3,
+    );
+    returned(
+        "int main(void) { int i = 1; int j = 5; int n = 0; while (i < 3 ? i++ : j--) n = n + 1; \
+         return n; }",
+        7,
+    );
+    // The read after `&&` sees the store, which the update says is
+    // separated from it.
+    let states = stepped(
+        "int main(void) { int i = 0; int n = 0; if (i++ == 0 && i == 1) n = 1; return n; }",
+    );
+    let update = step(&states, EventKind::Increment, "Update `i`: 0 → 1");
+    assert!(
+        update
+            .event
+            .explanation
+            .contains("separated from this update by a sequence point"),
+        "{}",
+        update.event.explanation
+    );
+    let read = step(&states, EventKind::LvalueConversion, "Read `i`");
+    assert_eq!(read.event.title, "Read `i` → 1");
+    // Unsequenced with the update: undefined in C, refused.
+    for source in [
+        "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
+        "int main(void) { int i = 0; if (i++ == i++) {} return 0; }",
+        "int f(int x) { return x; } int main(void) { int i = 3; while (f(i--) > i) {} return 0; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert!(
+            diagnostic
+                .message
+                .contains("with no sequence point between the two"),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+    // What the machine cannot see through is refused as its own limit.
+    for source in [
+        "int main(void) { int i = 0; int *p = &i; if (i++ == *p) {} return 0; }",
+        "int f(int x) { return x; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
+        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
+    ] {
+        let diagnostic = compile(source).expect_err(source);
+        assert!(
+            diagnostic
+                .message
+                .starts_with("this machine does not track which objects"),
+            "{source}: {}",
+            diagnostic.message
+        );
+        assert!(!diagnostic.message.contains("undefined"), "{source}");
+    }
+}
+
+// C99 §6.4.4.1p3-5: an octal or hexadecimal constant is computed in its
+// base, and its type list includes the unsigned types.
+#[test]
+fn octal_and_hexadecimal_constants_take_their_own_type_list() {
+    let states = stepped(
+        "int main(void) {\n    int mask = 0xFF;\n    int mode = 0755;\n    unsigned int all = \
+         0xFFFFFFFF;\n    long big = 0x7FFFFFFFFFFFFFFF;\n    return mask + mode + (all == \
+         4294967295u) + (big > 0) + 0x10u + 0;\n}\n",
+    );
+    let hexadecimal = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the constant 0xFF = 255",
+    );
+    assert_eq!(
+        hexadecimal.event.summary,
+        "The hexadecimal constant 0xFF is the int value 255."
+    );
+    assert!(
+        hexadecimal
+            .event
+            .explanation
+            .contains("so 15 × 16 + 15 = 255. It has type int, the first of int, unsigned int"),
+        "{}",
+        hexadecimal.event.explanation
+    );
+    let cited: Vec<&str> = hexadecimal
+        .event
+        .clauses
+        .iter()
+        .map(|clause| clause.id)
+        .collect();
+    assert_eq!(cited, ["6.4.4.1p4", "6.4.4.1p5"]);
+    let octal = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the constant 0755 = 493",
+    );
+    assert!(octal.event.explanation.contains("7 × 64 + 5 × 8 + 5 = 493"));
+    let all = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the constant 0xFFFFFFFF",
+    );
+    assert_eq!(all.event.result_type.as_deref(), Some("unsigned int"));
+    assert!(
+        all.event
+            .explanation
+            .contains("A decimal constant without a u would never be unsigned")
+    );
+    let big = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the constant 0x7FFFFFFFFFFFFFFF",
+    );
+    assert_eq!(big.event.result_type.as_deref(), Some("long"));
+    let suffixed = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the constant 0x10u = 16",
+    );
+    assert!(
+        suffixed
+            .event
+            .explanation
+            .contains("the first of unsigned int, unsigned long and unsigned long long"),
+        "{}",
+        suffixed.event.explanation
+    );
+    let zero = states
+        .iter()
+        .find(|state| state.event.title == "Evaluate the constant 0")
+        .expect("a plain 0");
+    assert_eq!(
+        zero.event.summary,
+        "The constant 0 is simply the int value 0."
+    );
+    returned(
+        "int main(void) { return 0x7fffffff == 2147483647 && 017 == 15; }",
+        1,
+    );
+    returned(
+        "int main(void) { return 0xFFFFFFFF > 0 && -1 < 0xFFFFFFFFFFFFFFFF; }",
+        0,
+    );
+}
+
+// C99 §6.5.2.1p1-2: `E1[E2]` is `*((E1) + (E2))`, so the pointer may come
+// second.
+#[test]
+fn a_subscript_takes_its_pointer_in_either_order() {
+    returned(
+        "int main(void) { int v[3] = {10, 20, 30}; int i = 2; return i[v] + 1[v]; }",
+        50,
+    );
+    let states = stepped("int main(void) { int v[3] = {10, 20, 30}; int i = 2; return i[v]; }");
+    let subscript = step(&states, EventKind::Subscript, "Select");
+    assert!(
+        subscript.event.summary.contains("*(i + v)"),
+        "{}",
+        subscript.event.summary
+    );
+}
+
+// C99 §6.5.2.2p10: a call is an operand like any other, with a sequence
+// point before it; the machine evaluates operands left to right.
+#[test]
+fn calls_are_operands_of_larger_expressions() {
+    returned(
+        "int square(int n) { return n * n; } int main(void) { return square(2) + square(3); }",
+        13,
+    );
+    returned(
+        "int twice(int n) { return 2 * n; } int main(void) { return twice(twice(3)) - \
+         (int)(double)twice(1); }",
+        10,
+    );
+    returned(
+        "int is_even(int n) { return n % 2 == 0; } int main(void) { int n = 4; int v[2] = \
+         {is_even(n), -is_even(3)}; return is_even(n) && n > 2 ? v[0] + v[1] : 5; }",
+        1,
+    );
+    let states = stepped(
+        "#include <stdio.h>\nint square(int n) { return n * n; }\nint main(void) { \
+         printf(\"%d\\n\", square(3)); return 0; }",
+    );
+    assert_eq!(
+        states.last().map(|state| state.output.clone()),
+        Some(b"9\n".to_vec())
+    );
+}
+
+// C99 §6.5.3.2p3-4: `&` of a pointer object makes a pointer to a pointer,
+// and each `*` follows one pointer.
+#[test]
+fn pointers_to_pointers_follow_one_pointer_per_star() {
+    let source = "int main(void) {\n    int x = 1;\n    int *p = &x;\n    int **pp = &p;\n    \
+                  **pp = 5;\n    return x;\n}\n";
+    returned(source, 5);
+    let states = stepped(source);
+    let declared = step(&states, EventKind::Declare, "Declare `pp`");
+    assert_eq!(declared.event.title, "Declare `pp` (int **)");
+    assert!(
+        declared.event.summary.contains("a pointer to an int *"),
+        "{}",
+        declared.event.summary
+    );
+    let pp = states
+        .last()
+        .and_then(|state| state.objects.iter().find(|object| object.name == "pp"))
+        .expect("pp");
+    assert_eq!((pp.r#type.as_str(), pp.size), ("int **", 8));
+    let outer = step(&states, EventKind::Dereference, "`*pp` designates `p`");
+    assert!(outer.event.summary.contains("follows the pointer `pp`"));
+    let inner = step(&states, EventKind::Dereference, "`**pp` designates `x`");
+    assert_eq!(
+        inner.event.summary,
+        "`**pp` follows the pointer `*pp` to the object it points to: `**pp` now stands for `x` \
+         itself."
+    );
+    // A function given a pointer to a caller's pointer can change it.
+    returned(
+        "int pick(int **out, int *choice) { *out = choice; return 0; }\nint main(void) { int a = \
+         3; int *chosen = 0; pick(&chosen, &a); return *chosen; }",
+        3,
+    );
+    returned(
+        "int main(void) { int x = 7; int *p = &x; int **pp = &p; int ***ppp = &pp; return ***ppp \
+         + (*pp == p) + (pp[0][0] == 7); }",
+        9,
+    );
+    for source in [
+        "int main(void) { int x = 1; int **pp = &x; return 0; }",
+        "int main(void) { int *p = 0; char **pp = &p; return 0; }",
+        "int main(void) { int *****p; return 0; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
+// C99 §6.7.5.2p3: an array may hold pointers; its name decays to a pointer
+// to its first pointer, and `[]` takes its length from a brace-enclosed
+// list (§6.7.8p22).
+#[test]
+fn arrays_hold_pointers_and_take_a_list_s_length() {
+    let source = "int main(void) {\n    int a = 1;\n    int b = 2;\n    int c = 3;\n    int \
+                  *slots[3] = {&a, &b, &c};\n    *slots[1] = 20;\n    return b;\n}\n";
+    returned(source, 20);
+    let states = stepped(source);
+    let declared = step(&states, EventKind::Declare, "Declare `slots`");
+    assert_eq!(declared.event.title, "Declare `slots` (int *[3])");
+    let slots = states
+        .last()
+        .and_then(|state| state.objects.iter().find(|object| object.name == "slots"))
+        .expect("slots");
+    assert_eq!(slots.size, 24);
+    assert!(matches!(&slots.value, Value::Array(elements) if elements.len() == 3));
+    let element = step(&states, EventKind::LvalueConversion, "Read slots[1]");
+    assert_eq!(element.event.title, "Read slots[1] → &b");
+    returned(
+        "#include <stdio.h>\nconst char *days[] = {\"Mon\", \"Tue\", \"Wed\"};\nint main(void) { \
+         char *names[] = {\"Ada\", \"Grace\"}; int v[] = {4, 5, 6,}; printf(\"%s %s\\n\", \
+         days[2], names[1]); char **next = names + 1; return (int)(sizeof v / sizeof v[0]) + \
+         (*next)[0] + (int)sizeof days; }",
+        3 + 71 + 24,
+    );
+    let output = stepped(
+        "#include <stdio.h>\nint main(void) { char *names[3] = {\"Ada\", \"Grace\", \"Linus\"}; \
+         for (int i = 0; i < 3; i++) { printf(\"%s\\n\", names[i]); } return 0; }",
+    );
+    assert_eq!(
+        output.last().map(|state| state.output.clone()),
+        Some(b"Ada\nGrace\nLinus\n".to_vec())
+    );
+    // An element left out of the list is a null pointer (C99 §6.7.8p21).
+    returned(
+        "int main(void) { int x = 1; int *p[2] = {&x}; return p[1] == 0; }",
+        1,
+    );
+    let _diagnostic = compile("int main(void) { int v[]; return 0; }")
+        .expect_err("an array of unknown size needs an initializer");
+}
+
+/// What the site's "Limits of this model" says the machine runs and
+/// refuses: each claim it makes, checked.
+#[test]
+fn the_limits_the_site_states_hold() {
+    for source in [
+        // Decimal, octal and hexadecimal constants; every operator family.
+        "int main(void) { int a = 10 + 010 + 0x10; a = a * 2 / 3 % 7 << 1 >> 1; a = (a & 3) | (a \
+         ^ 5) | ~a; return a < 3 && a != 2 || !a ? -a : +a; }",
+        // `?:` with structures, and the comma operator.
+        "struct s { int x; }; int main(void) { struct s a = {1}; struct s b = {2}; struct s c = \
+         a.x > 1 ? a : b; int n = (c.x, 3); return c.x + n; }",
+        // Pointers to pointers and arrays of pointers.
+        "int main(void) { int x = 1; int *p = &x; int **pp = &p; int *v[2] = {p, *pp}; return \
+         *v[1]; }",
+        // Calls anywhere in an expression.
+        "int f(int n) { return n + 1; } int main(void) { return f(f(1)) * f(0) + (f(1) ? 2 : 3); }",
+        // A statement's commas, and updates in a condition that sequence
+        // points separate from other uses of the variable and from calls.
+        "int main(void) { int i = 0; int j = 3; i++, j--; while (j-- > 0) {} return i; }",
+        "int f(int n) { return n; } int main(void) { int i = 3; int n = 0; while (i-- > 0 && f(i) \
+         && n < 5) n = n + 1; while (f(i++) < 2) {} return i == 3 && n == 2; }",
+    ] {
+        let session = run(source);
+        assert_eq!(session.state().status, "finished", "{source}");
+    }
+    for source in [
+        "int main(void) { switch (0) {} return 0; }",
+        "int main(void) { do {} while (0); return 0; }",
+        "int main(void) { while (1) { break; } return 0; }",
+        "typedef int number; int main(void) { return 0; }",
+        "enum e { A }; int main(void) { return 0; }",
+        "union u { int x; }; int main(void) { return 0; }",
+        "void f(void) {} int main(void) { return 0; }",
+        "static int f(void) { return 0; } int main(void) { return f(); }",
+        "int add(int a, int b) { return a + b; } int main(void) { int (*f)(int, int) = add; \
+         return f(1, 2); }",
+        "struct s { int x; }; int main(void) { struct s v[2]; return 0; }",
+        "int main(void) { int v[2][2]; return 0; }",
+        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return q - p; }",
+        "int main(void) { int v[2] = {1, 2}; int *p = v; int *q = v + 1; return p < q; }",
+        "int main(void) { int a = 0; int b = 1; a = b++; return a; }",
+        "int f(int n) { return n; } int main(void) { int i = 0; return f(i++); }",
+        "int f(int n) { return n; } int main(void) { int i = 3; while (i-- > f(1)) {} return 0; }",
+        "int main(void) { int i = 0; int v[2] = {0, 1}; while (v[i++] < 1) {} return 0; }",
+        "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
+        "int main(void) { int a; int b; a = b = 0; return a; }",
+        "#include <string.h>\nint main(void) { return 0; }",
+    ] {
+        let _diagnostic = compile(source).expect_err(source);
+    }
+}
+
+/// The corpus of small beginner programs under `web/docs/corpus/`, one per
+/// construct, and what the machine makes of each: every program runs to its
+/// end except those that use function pointers.
+#[test]
+fn the_corpus_of_beginner_programs_runs() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/docs/corpus");
+    let mut paths: Vec<_> = std::fs::read_dir(&directory)
+        .expect("the corpus directory")
+        .map(|entry| entry.expect("a corpus entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+        .collect();
+    paths.sort();
+    assert!(paths.len() >= 30, "the corpus has its programs");
+    for path in paths {
+        let source = std::fs::read_to_string(&path).expect("a corpus program");
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let compiled = compile(&source);
+        if name.starts_with('g') {
+            assert!(
+                compiled.is_err(),
+                "{name}: function pointers are outside the subset"
+            );
+            continue;
+        }
+        let program = compiled.unwrap_or_else(|diagnostic| panic!("{name}: {diagnostic:?}"));
+        let mut session = program.session();
+        while !session.state().terminal() {
+            let upcoming = session.state().upcoming.clone();
+            let state = session.step();
+            foretold(upcoming.as_ref(), state);
+        }
+        assert_eq!(
+            session.state().status,
+            "finished",
+            "{name}: {:?}",
+            session.state().diagnostics
+        );
+    }
 }

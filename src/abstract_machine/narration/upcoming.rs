@@ -261,6 +261,7 @@ impl Machine {
                 let operand = operands().pop().unwrap_or_else(code);
                 let (text, clause) = match operator {
                     | "-" => (format!("negate {operand}"), clauses::UNARY_MINUS),
+                    | "~" => (format!("flip the bits of {operand}"), clauses::COMPLEMENT),
                     | "!" => (
                         format!("apply `!` to {operand}: 1 if it is 0, else 0"),
                         clauses::LOGICAL_NOT,
@@ -345,6 +346,77 @@ impl Machine {
                     clauses::COMPOUND_ASSIGNMENT,
                 )
             },
+            | &Op::Test { operator, .. } => {
+                let operands = operands();
+                let first = operands.first().map_or_else(&code, Clone::clone);
+                match operator {
+                    | "?:" => (
+                        EventKind::Conditional,
+                        format!("test {first} to choose an operand of `?:`"),
+                        clauses::CONDITIONAL,
+                    ),
+                    | "&&" => (
+                        EventKind::Logical,
+                        format!("test {first}, the left operand of `&&`"),
+                        clauses::LOGICAL_AND,
+                    ),
+                    | _ => (
+                        EventKind::Logical,
+                        format!("test {first}, the left operand of `||`"),
+                        clauses::LOGICAL_OR,
+                    ),
+                }
+            },
+            | &Op::Yield {
+                operator, target, ..
+            } => {
+                let operands = operands();
+                match operator {
+                    | "&&" | "||" => (
+                        EventKind::Logical,
+                        format!(
+                            "turn {} into `{operator}`'s 0 or 1",
+                            operands.last().map_or_else(&code, Clone::clone)
+                        ),
+                        if operator == "&&" {
+                            clauses::LOGICAL_AND_VALUE
+                        } else {
+                            clauses::LOGICAL_OR_VALUE
+                        },
+                    ),
+                    | "?:" => {
+                        let chosen = if target.is_some() {
+                            operands.get(1)
+                        } else {
+                            operands.last()
+                        };
+                        (
+                            EventKind::Conditional,
+                            format!(
+                                "give `?:` the value of {}",
+                                chosen.map_or_else(&code, Clone::clone)
+                            ),
+                            clauses::CONDITIONAL,
+                        )
+                    },
+                    | _ => (
+                        EventKind::Comma,
+                        format!(
+                            "give the comma operator the value of {}",
+                            operands.last().map_or_else(&code, Clone::clone)
+                        ),
+                        clauses::COMMA,
+                    ),
+                }
+            },
+            | Op::Comma { .. } => (
+                EventKind::Comma,
+                format!(
+                    "finish {}, the left operand of a comma operator",
+                    operands().first().map_or_else(&code, Clone::clone)
+                ),
+                clauses::COMMA,
+            ),
             | Op::Pop => (
                 EventKind::Discard,
                 format!("discard the value of {}", code()),
@@ -555,6 +627,18 @@ impl Machine {
             | ">>" => (
                 format!("shift the bits of {a} right by {b}"),
                 clauses::RIGHT_SHIFT,
+            ),
+            | "&" => (
+                format!("combine the bits of {a} and {b} with `&`"),
+                clauses::BITWISE_AND,
+            ),
+            | "^" => (
+                format!("combine the bits of {a} and {b} with `^`"),
+                clauses::BITWISE_XOR,
+            ),
+            | "|" => (
+                format!("combine the bits of {a} and {b} with `|`"),
+                clauses::BITWISE_OR,
             ),
             | _ => (format!("compute {whole}"), clauses::ADDITION),
         };

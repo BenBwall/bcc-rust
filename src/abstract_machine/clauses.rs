@@ -205,6 +205,84 @@ clauses! {
     INTEGER_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
         "A decimal constant's type is the first of int, long and long long that holds its value; \
          a suffix such as u or l starts the list elsewhere.";
+    /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+    PREFIXED_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
+        "An octal or hexadecimal constant's type is the first of int, unsigned int, long, \
+         unsigned long, long long and unsigned long long that holds its value.";
+    /// C99: §6.4.4.1 paragraph 4, p. 55; PDF p. 67.
+    INTEGER_BASE = "6.4.4.1p4", "p. 55; PDF p. 67", "Integer constants",
+        "A constant is computed in base 10, or in base 8 when it starts with 0, or in base 16 \
+         when it starts with 0x, whose digits a to f stand for 10 to 15.";
+    /// C99: §6.5.3.3 paragraph 4, p. 79; PDF p. 91.
+    COMPLEMENT = "6.5.3.3p4", "p. 79; PDF p. 91", "Unary arithmetic operators",
+        "~ flips every bit of its promoted operand; for an unsigned type, ~E is the type's largest \
+         value minus E.";
+    /// C99: §6.5.3.3 paragraph 1, p. 79; PDF p. 91.
+    COMPLEMENT_CONSTRAINT = "6.5.3.3p1", "p. 79; PDF p. 91", "Unary arithmetic operators",
+        "The operand of ~ must have an integer type; that of + and - an arithmetic type, and that \
+         of ! a scalar type.";
+    /// C99: §6.5.10 paragraph 4, p. 87; PDF p. 99.
+    BITWISE_AND = "6.5.10p4", "p. 87; PDF p. 99", "Bitwise AND operator",
+        "After the usual arithmetic conversions, a bit of a & b is 1 only where the bits of both \
+         operands are 1.";
+    /// C99: §6.5.11 paragraph 4, p. 88; PDF p. 100.
+    BITWISE_XOR = "6.5.11p4", "p. 88; PDF p. 100", "Bitwise exclusive OR operator",
+        "After the usual arithmetic conversions, a bit of a ^ b is 1 where exactly one of the \
+         operands' bits is 1.";
+    /// C99: §6.5.12 paragraph 4, p. 88; PDF p. 100.
+    BITWISE_OR = "6.5.12p4", "p. 88; PDF p. 100", "Bitwise inclusive OR operator",
+        "After the usual arithmetic conversions, a bit of a | b is 1 where at least one of the \
+         operands' bits is 1.";
+    /// C99: §6.5.10 paragraph 2, p. 87; PDF p. 99.
+    BITWISE_CONSTRAINT = "6.5.10p2", "p. 87; PDF p. 99", "Bitwise AND operator",
+        "Each operand of &, and likewise of ^ and |, must have an integer type.";
+    /// C99: §6.5.13 paragraph 4, p. 89; PDF p. 101.
+    LOGICAL_AND = "6.5.13p4", "p. 89; PDF p. 101", "Logical AND operator",
+        "&& evaluates its left operand first, and a sequence point follows; if that operand is 0, \
+         the right one is never evaluated.";
+    /// C99: §6.5.13 paragraph 3, p. 89; PDF p. 101.
+    LOGICAL_AND_VALUE = "6.5.13p3", "p. 89; PDF p. 101", "Logical AND operator",
+        "&& yields the int 1 when both operands compare unequal to 0, and 0 otherwise.";
+    /// C99: §6.5.14 paragraph 4, p. 89; PDF p. 101.
+    LOGICAL_OR = "6.5.14p4", "p. 89; PDF p. 101", "Logical OR operator",
+        "|| evaluates its left operand first, and a sequence point follows; if that operand is \
+         nonzero, the right one is never evaluated.";
+    /// C99: §6.5.14 paragraph 3, p. 89; PDF p. 101.
+    LOGICAL_OR_VALUE = "6.5.14p3", "p. 89; PDF p. 101", "Logical OR operator",
+        "|| yields the int 1 when either operand compares unequal to 0, and 0 otherwise.";
+    /// C99: §6.5.13 paragraph 2, p. 89; PDF p. 101.
+    LOGICAL_CONSTRAINT = "6.5.13p2", "p. 89; PDF p. 101", "Logical AND operator",
+        "Each operand of &&, and likewise of ||, must be a scalar: a number or a pointer.";
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
+    CONDITIONAL = "6.5.15p4", "p. 90; PDF p. 102", "Conditional operator",
+        "?: evaluates its first operand, then a sequence point follows, then only one of the \
+         others: the second when the first is nonzero, the third when it is 0.";
+    /// C99: §6.5.15 paragraph 2, p. 90; PDF p. 102.
+    CONDITIONAL_FIRST = "6.5.15p2", "p. 90; PDF p. 102", "Conditional operator",
+        "The first operand of ?: must be a scalar, a number or a pointer.";
+    /// C99: §6.5.15 paragraph 5, p. 90; PDF p. 102.
+    CONDITIONAL_TYPE = "6.5.15p5", "p. 90; PDF p. 102", "Conditional operator",
+        "When the second and third operands are arithmetic, the result has the type the usual \
+         arithmetic conversions would give the two.";
+    /// C99: §6.5.15 paragraph 3, p. 90; PDF p. 102.
+    CONDITIONAL_CONSTRAINT = "6.5.15p3", "p. 90; PDF p. 102", "Conditional operator",
+        "The second and third operands must both be arithmetic, the same structure type, \
+         pointers to compatible types, or a pointer and a null pointer constant.";
+    /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
+    COMMA = "6.5.17p2", "p. 94; PDF p. 106", "Comma operator",
+        "The comma operator evaluates its left operand and discards the value; a sequence point \
+         follows, and then the right operand gives the result.";
+    /// C99: §C paragraph 1, p. 439; PDF p. 451.
+    SEQUENCE_POINTS = "Cp1", "p. 439; PDF p. 451", "Sequence points (Annex C)",
+        "The sequence points: each call, after its arguments; the end of the first operand of &&, \
+         ||, ?: and the comma operator; the end of each full declarator and of each full \
+         expression; and in the library, just before a function returns, after the actions of \
+         each printf or scanf conversion, and around each call to a qsort or bsearch comparison \
+         function.";
+    /// C99: §6.5.2.1 paragraph 1, p. 70; PDF p. 82.
+    SUBSCRIPT_OPERANDS = "6.5.2.1p1", "p. 70; PDF p. 82", "Array subscripting",
+        "One operand of [] must be a pointer to an object and the other an integer, in either \
+         order.";
     /// C99: §6.5 paragraph 2, p. 67; PDF p. 79.
     UNSEQUENCED = "6.5p2", "p. 67; PDF p. 79", "Expressions",
         "Between two sequence points an object may be modified at most once, and then read only \

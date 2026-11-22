@@ -285,10 +285,10 @@ impl Machine {
             },
             | Op::Decay(place) => {
                 let id = self.named(place)?;
-                let length = match self.object_type(id) {
-                    | Some(Type::Array(_, length)) => i32::try_from(length).unwrap_or(i32::MAX),
-                    | _ => 1,
-                };
+                let length = self
+                    .object_type(id)
+                    .and_then(Type::length)
+                    .map_or(1, |length| i32::try_from(length).unwrap_or(i32::MAX));
                 let value = Value::pointer(id, 0, 0, length);
                 self.push(Operand::Value(value.clone()))?;
                 self.decay(range, id, value)
@@ -507,6 +507,11 @@ impl Machine {
                         Value::Integer(-integer)
                     },
                     | ("!", _, value) => Value::Integer(i128::from(!self.truth(value)?)),
+                    // Every bit flipped: -x - 1 in two's complement, and
+                    // for an unsigned type its largest value minus x (C99
+                    // §6.5.3.3p4).
+                    | ("~", Some(ty), &Value::Integer(integer)) =>
+                        Value::Integer(ty.convert(!integer)),
                     | _ => return Err(self.error("unsupported unary operand")),
                 };
                 self.push(Operand::Value(result.clone()))?;
@@ -570,6 +575,7 @@ impl Machine {
                 delta,
                 prefix,
                 nested,
+                full_expression,
             } => {
                 let (target, offset) = self.pop_address()?;
                 self.check_writable(target, offset)?;
@@ -590,45 +596,32 @@ impl Machine {
                 };
                 let sum = self.binary_value(operator, ty, current.clone(), one)?;
                 let stored = self.store(target, offset, sum.clone())?;
-                if nested {
+                if nested.is_some() {
                     let value = if prefix { &stored } else { &current };
                     self.push(Operand::Value(value.clone()))?;
                 }
                 self.increment(
-                    range, source, delta, prefix, nested, target, offset, current, &sum, stored,
+                    range,
+                    source,
+                    delta,
+                    (prefix, nested, full_expression),
+                    target,
+                    offset,
+                    current,
+                    &sum,
+                    stored,
                 )
             },
-            | &Op::Compound(operator, common, right_type) => {
-                let right = self.pop_value()?;
-                let (target, offset) = self.pop_address()?;
-                self.check_writable(target, offset)?;
-                let current = self.read(target, offset)?;
-                // Both operands convert to the type the operator computes
-                // in, as in `E1 = E1 op (E2)` (C99 §6.5.16.2p3).
-                let shift = matches!(operator, "<<" | ">>");
-                let (left, right_converted) = match common {
-                    | Some(common) if !shift => (
-                        self.converted(&current, common)?,
-                        self.converted(&right, common)?,
-                    ),
-                    | Some(common) => (self.converted(&current, common)?, right.clone()),
-                    | None => (current.clone(), right.clone()),
-                };
-                let result =
-                    self.binary_value(operator, common, left.clone(), right_converted.clone())?;
-                let stored = self.store(target, offset, result.clone())?;
-                self.compound(
+            | &Op::Compound(operator, common, right_type, full_expression) => self
+                .compound_assign(
                     range,
                     source,
                     operator,
                     (common, right_type),
-                    target,
-                    offset,
-                    [current, right, left, right_converted],
-                    &result,
-                    stored,
-                )
-            },
+                    full_expression,
+                )?,
+            | Op::Test { .. } | Op::Yield { .. } | Op::Comma { .. } =>
+                self.sequenced(instruction, program)?,
             | Op::Pop => {
                 let value = self.pop_value()?;
                 self.discard(range, source, value)
@@ -668,6 +661,126 @@ impl Machine {
                          explicit return",
                     ));
                 },
+        })
+    }
+
+    /// `E1 op= E2`: read the object, apply `op` in `common`, store the
+    /// result (C99 §6.5.16.2p3).
+    fn compound_assign(
+        &mut self,
+        range: super::SourceRange,
+        source: &str,
+        operator: &'static str,
+        (common, right_type): (Option<Arithmetic>, Option<Arithmetic>),
+        full_expression: bool,
+    ) -> Result<Event, Diagnostic> {
+        let right = self.pop_value()?;
+        let (target, offset) = self.pop_address()?;
+        self.check_writable(target, offset)?;
+        let current = self.read(target, offset)?;
+        // Both operands convert to the type the operator computes
+        // in, as in `E1 = E1 op (E2)` (C99 §6.5.16.2p3).
+        let shift = matches!(operator, "<<" | ">>");
+        let (left, right_converted) = match common {
+            | Some(common) if !shift => (
+                self.converted(&current, common)?,
+                self.converted(&right, common)?,
+            ),
+            | Some(common) => (self.converted(&current, common)?, right.clone()),
+            | None => (current.clone(), right.clone()),
+        };
+        let result = self.binary_value(operator, common, left.clone(), right_converted.clone())?;
+        let stored = self.store(target, offset, result.clone())?;
+        Ok(self.compound(
+            range,
+            source,
+            operator,
+            (common, right_type),
+            target,
+            offset,
+            [current, right, left, right_converted],
+            &result,
+            stored,
+            full_expression,
+        ))
+    }
+
+    /// The operations around a sequence point inside a full expression:
+    /// the test of the first operand of `&&`, `||` or `?:`, their value,
+    /// and the comma operator's (C99 Annex C).
+    fn sequenced(
+        &mut self,
+        instruction: &Instruction,
+        program: &Program,
+    ) -> Result<Event, Diagnostic> {
+        let top = self.activations.len() - 1;
+        let range = instruction.range;
+        Ok(match &instruction.op {
+            | &Op::Test { operator, target } => {
+                let value = self.pop_value()?;
+                let truth = self.truth(&value)?;
+                let texts = self.operand_texts(program, instruction);
+                // `&&` of 0 is 0 and `||` of a nonzero operand is 1: the
+                // second operand cannot change it, so it is never
+                // evaluated (C99 §6.5.13p4, §6.5.14p4). `?:` evaluates one
+                // of its others (§6.5.15p4).
+                let (settled, skipped) = match operator {
+                    | "&&" if !truth => (Some(0), Some(1)),
+                    | "||" if truth => (Some(1), Some(1)),
+                    | "?:" if truth => (None, Some(2)),
+                    | "?:" => (None, Some(1)),
+                    | _ => (None, None),
+                };
+                if let Some(child) = skipped {
+                    self.skip(program, instruction, child);
+                }
+                if settled.is_some() || (operator == "?:" && !truth) {
+                    self.activations[top].pc = target;
+                }
+                if let Some(settled) = settled {
+                    self.push(Operand::Value(Value::Integer(settled)))?;
+                }
+                if operator == "?:" {
+                    self.conditional_test(range, &texts, value, truth)
+                } else {
+                    self.logical_test(range, operator, &texts, value, truth, settled)
+                }
+            },
+            | &Op::Yield {
+                operator,
+                to,
+                target,
+            } => {
+                let value = self.pop_value()?;
+                let result = match (operator, to) {
+                    | ("&&" | "||", _) => Value::Integer(i128::from(self.truth(&value)?)),
+                    | (_, Some(ty)) if ty.is_pointer() && value == Value::Integer(0) =>
+                        Value::null(),
+                    | (_, Some(ty)) => match ty.arithmetic() {
+                        | Some(arithmetic) => self.converted(&value, arithmetic)?,
+                        | None => value.clone(),
+                    },
+                    | (_, None) => value.clone(),
+                };
+                self.push(Operand::Value(result.clone()))?;
+                if let Some(target) = target {
+                    self.activations[top].pc = target;
+                }
+                let texts = self.operand_texts(program, instruction);
+                // After `?:`'s second operand the yield skips the third.
+                let chosen = if target.is_some() { 1 } else { texts.len() - 1 };
+                self.yielded(range, operator, &texts, chosen, to, value, result)
+            },
+            | &Op::Comma { discard } => {
+                let value = if discard {
+                    Some(self.pop_value()?)
+                } else {
+                    None
+                };
+                let texts = self.operand_texts(program, instruction);
+                self.comma(range, &texts, value)
+            },
+            | _ => return Err(self.error("expected a sequenced operation")),
         })
     }
 
@@ -736,7 +849,8 @@ impl Machine {
             | _ if initializes => Designation::Initialized,
             | Some("&") => Designation::Address,
             | Some("++" | "--") => Designation::Updated,
-            | Some("+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=") => Designation::Compound,
+            | Some("+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | "&=" | "^=" | "|=") =>
+                Designation::Compound,
             | Some(label) if label.starts_with('.') => Designation::Member,
             | _ => Designation::Assigned,
         }
@@ -898,11 +1012,51 @@ impl Machine {
                 root,
                 values: Vec::new(),
                 last: None,
+                skipped: Vec::new(),
                 calling: None,
             });
         }
         if let Some(evaluation) = &mut activation.evaluation {
             evaluation.last = Some(node);
+        }
+    }
+
+    /// The source of each operand of the node `instruction` evaluates, in
+    /// source order: `x > 0` and `x < 10` for `x > 0 && x < 10`.
+    fn operand_texts(&self, program: &Program, instruction: &Instruction) -> Vec<String> {
+        let function = &program.functions[self.activations[self.activations.len() - 1].function];
+        instruction
+            .node
+            .and_then(|node| function.nodes.get(node))
+            .map_or_else(Vec::new, |node| {
+                node.children
+                    .iter()
+                    .filter_map(|&child| function.nodes.get(child))
+                    .map(|child| {
+                        program
+                            .source
+                            .get(child.range.start..child.range.end)
+                            .map_or_else(String::new, String::from)
+                    })
+                    .collect()
+            })
+    }
+
+    /// Record that operand `child` of the node `instruction` evaluates,
+    /// and every node of its subtree, will not be evaluated.
+    fn skip(&mut self, program: &Program, instruction: &Instruction, child: usize) {
+        let top = self.activations.len() - 1;
+        let function = &program.functions[self.activations[top].function];
+        let Some(&root) = instruction
+            .node
+            .and_then(|node| function.nodes.get(node))
+            .and_then(|node| node.children.get(child))
+        else {
+            return;
+        };
+        let first = function.nodes[root].first;
+        if let Some(evaluation) = &mut self.activations[top].evaluation {
+            evaluation.skipped.extend(first..=root);
         }
     }
 

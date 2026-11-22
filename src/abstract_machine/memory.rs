@@ -36,6 +36,7 @@ use super::{
         Object,
         Place,
         Program,
+        Target,
         Type,
         Undefined,
         Value,
@@ -55,8 +56,10 @@ impl Machine {
         parameter: bool,
     ) -> Result<usize, Diagnostic> {
         let value = match (ty, value) {
-            | (Type::Array(..) | Type::Struct(_), Value::Indeterminate) =>
-                ty.indeterminate(&self.structures),
+            | (
+                Type::Array(..) | Type::PointerArray(..) | Type::Struct(_),
+                Value::Indeterminate,
+            ) => ty.indeterminate(&self.structures),
             | (pointer, Value::Integer(0)) if pointer.is_pointer() => Value::null(),
             // A parameter receives its argument converted as if by
             // assignment (C99 §6.5.2.2p7, §6.3.1.3, §6.3.1.4, §6.3.1.5).
@@ -105,7 +108,10 @@ impl Machine {
         metadata.typedef = Some(typedef);
         let named = match metadata.ty {
             | Type::Integer(integer) => integer.spelling(),
-            | Type::Pointer(element, _) | Type::Array(element, _) => element.spelling(),
+            | Type::Pointer(element, _)
+            | Type::Array(element, _)
+            | Type::Indirect(Target::Arithmetic(element, _), _)
+            | Type::PointerArray(Target::Arithmetic(element, _), ..) => element.spelling(),
             | _ => return,
         };
         let object = &mut self.state.objects[id - 1];
@@ -646,6 +652,15 @@ impl Machine {
             | ">" => return truth(left > right),
             | ">=" => return truth(left >= right),
             | "<<" | ">>" => return self.shift_value(operator, ty, left, right),
+            // Each operand holds a value of `ty`, so its bits beyond the
+            // type's width all copy its sign bit, as in two's complement;
+            // so do the result's, which is then a value of `ty` too.
+            // C99: §6.5.10 paragraph 4, p. 87; PDF p. 99.
+            // C99: §6.5.11 paragraph 4, §6.5.12 paragraph 4, p. 88; PDF
+            // p. 100.
+            | "&" => return Ok(Value::Integer(left & right)),
+            | "^" => return Ok(Value::Integer(left ^ right)),
+            | "|" => return Ok(Value::Integer(left | right)),
             | "+" => left.checked_add(right),
             | "-" => left.checked_sub(right),
             | "*" => left.checked_mul(right),

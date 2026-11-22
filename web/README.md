@@ -43,7 +43,9 @@ compiler; each part is captioned with what its lessons share
   playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
-  wired up as a schematic whose wires fill with values (Figure 2), and a
+  wired up as a schematic whose wires fill with values (Figure 2), where
+  an operand that `&&`, `||` or `?:` skips stays faint on a dotted wire
+  labelled "skipped", since it is never evaluated, and a
   datasheet lists the objects (Table 1). Objects with static storage
   duration (file-scope and `static` ones, and the unnamed char array of
   each string literal, named by its spelling) are created one step each
@@ -562,6 +564,24 @@ It takes a `size_t` from `sizeof`, shows `-1 < 1u` converting -1 to
 unsigned before it compares, and shifts `1u` into the top bit and out
 again, printing each result with `%u`, `%zu` and `%d`. Like the printf
 lesson it includes `<stdio.h>`.
+
+The lesson "Short-circuit evaluation: &&, || and ?:" (`demos/logic.c`),
+which ends the first part, searches an array for a 5 with `while (i < 3 &&
+scores[i] != 5)`: on the last test `i < 3` is 0, so `&&` settles the result
+and never reads `scores[3]`, which lies past the end. A `?:` then picks a
+null pointer over `&scores[i]`, a null test keeps `*found` from running, and
+a second `?:` chooses the text printf writes. Each test of a first operand
+is a step of its own, ending at a sequence point, and Figure 2 draws the
+operand it skips faint, on a dotted wire labelled "skipped". It includes
+`<stdio.h>`.
+
+The lesson "Bits and masks" (`demos/bits.c`), after the unsigned lesson,
+keeps three flags in an `unsigned int`, each a `#define` of a hexadecimal
+constant (`0x4`, `0x2`, `0x1`): `|=` sets them, `&= ~WRITE` clears one
+(the complement of the int 2 is -3, converted to 4294967293 before it
+meets the unsigned operand), `^=` flips one and `&` tests one. Every
+bitwise step writes its operands' bits, so `0000 0111 & 1111 … 1101` reads
+as a mask. It prints the result with `%x` and includes `<stdio.h>`.
 
 The lesson "Floating point: close, not exact" (`demos/floating.c`), which
 ends the part on types and conversions, averages two ints into a double, which truncates

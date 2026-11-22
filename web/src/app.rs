@@ -2581,20 +2581,24 @@ fn About() -> impl IntoView {
                     <h3><span class="spec-number">"§3"</span>"Limits of this model"</h3>
                     <p>
                         "The engine runs a bounded subset of C, the part the lessons use: the integer types from char \
-                         to unsigned long long and the three floating types, at their x86-64 sizes; pointers to \
-                         numbers, chars and structures; arrays of numbers or of chars, and string literals; \
-                         structures, nested or reached through pointers; \
+                         to unsigned long long, written in decimal, octal or hexadecimal, and the three floating \
+                         types, at their x86-64 sizes; the arithmetic, shift, bitwise, comparison and logical \
+                         operators, with && and || stopping as soon as they know the result, ?: and the comma \
+                         operator; pointers to numbers, chars, structures or other pointers; arrays of numbers, of \
+                         chars or of pointers, and string literals; structures, nested or reached through pointers; \
                          const, casts and sizeof; file-scope and static objects; functions that return a number or a \
-                         structure; if and else, while and for; printf, puts and putchar after #include <stdio.h>; and \
-                         #define of a name as one number, character or string. Outside it are, among others: switch, \
-                         do, break, continue and goto; the ?: and comma operators; typedef, enum, union and _Bool; \
-                         void and static functions; pointers to pointers or to functions; arrays of pointers, of \
-                         structures or of arrays; hexadecimal and octal constants; a call inside a larger \
-                         expression (store its result first); nested side effects such as a = b++; and the other \
-                         library functions. A program that uses one of them stops before its first step, and its note \
-                         says so. One that needs more of the preprocessor (another header, a function-like macro, \
-                         #if) stops there too, and its note has a button to the compiler's Preprocessor stage, \
-                         which shows what bcc makes of it."
+                         structure, called anywhere in an expression; if and else, while and for; printf, puts and \
+                         putchar after #include <stdio.h>; and #define of a name as one number, character or \
+                         string. Outside it are, among others: switch, do, break, continue and goto; typedef, enum, \
+                         union and _Bool; void and static functions; pointers to functions; arrays of structures or \
+                         of arrays; subtracting or ordering two pointers (p - q, p < q); an assignment or increment \
+                         used as an operand, such as a = b++ or f(i++) (a statement may still join several with \
+                         commas, as in i++, j--, and a condition may update variables, as in i-- > 0 && n < 5, if a \
+                         sequence point separates each update from every other use of its variable, from *, [] \
+                         and ->, and from any call it is not an argument of); and the other library functions. A program that uses one of them stops before its first step, and \
+                         its note says so. One that needs more of the preprocessor (another header, a function-like \
+                         macro, #if) stops there too, and its note has a button to the compiler's Preprocessor \
+                         stage, which shows what bcc makes of it."
                     </p>
                     <p>
                         "The engine evaluates operands left to right, one of the orders C allows: "

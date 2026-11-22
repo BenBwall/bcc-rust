@@ -188,7 +188,9 @@ pub struct Event {
     pub result:         Option<Operand>,
     /// Objects created, read, written or ended by this operation.
     pub objects:        Vec<usize>,
-    /// Whether a full expression ended here (C99 §6.8p4).
+    /// Whether a sequence point follows the operation: a full expression
+    /// ended here (C99 §6.8p4), or the first operand of `&&`, `||`, `?:`
+    /// or a comma operator did (C99 Annex C).
     pub sequence_point: bool,
     /// The type of the value the event started from, when it converted
     /// one: `int` for a promotion, a conversion or a store that converts.
@@ -270,14 +272,24 @@ pub enum EventKind {
     Subscript,
     /// `s.m` or `p->m` designated a structure member.
     Member,
-    /// A unary `+`, `-` or `!` produced its value.
+    /// A unary `+`, `-`, `~` or `!` produced its value.
     Unary,
-    /// An integer `+`, `-`, `*`, `/` or `%` produced its value.
+    /// An arithmetic (`+`, `-`, `*`, `/`, `%`), shift (`<<`, `>>`) or
+    /// bitwise (`&`, `^`, `|`) operator produced its value.
     Arithmetic,
     /// A pointer moved by a number of elements.
     PointerArithmetic,
     /// A relational or equality operator produced 0 or 1.
     Comparison,
+    /// `&&` or `||` tested its first operand, deciding whether the second
+    /// is evaluated, or produced its 0 or 1 from the second.
+    Logical,
+    /// `?:` tested its first operand and chose the operand to evaluate, or
+    /// produced its result from the chosen one.
+    Conditional,
+    /// A comma operator discarded its left operand's value at a sequence
+    /// point, or produced its result from its right operand.
+    Comma,
     /// An initializer stored an object's first value.
     Initialize,
     /// An assignment replaced an object's value.
@@ -332,6 +344,9 @@ impl EventKind {
             | Self::Arithmetic => "arithmetic",
             | Self::PointerArithmetic => "pointer_arithmetic",
             | Self::Comparison => "comparison",
+            | Self::Logical => "logical",
+            | Self::Conditional => "conditional",
+            | Self::Comma => "comma",
             | Self::Initialize => "initialize",
             | Self::Assign => "assign",
             | Self::Increment => "increment",
@@ -376,8 +391,14 @@ impl EventKind {
             | Self::Declare
             | Self::StaticStorage
             | Self::StaticLocal => "lifetime",
-            | Self::Start | Self::Directive | Self::Discard | Self::Jump | Self::Branch =>
-                "control",
+            | Self::Start
+            | Self::Directive
+            | Self::Discard
+            | Self::Jump
+            | Self::Branch
+            | Self::Logical
+            | Self::Conditional
+            | Self::Comma => "control",
             | Self::Call | Self::LibraryCall | Self::Return => "call",
             | Self::Fault => "fault",
         }
@@ -416,6 +437,11 @@ pub struct Evaluation {
     pub values:   Vec<(usize, Operand)>,
     /// The node the last completed operation evaluated.
     pub last:     Option<usize>,
+    /// The nodes `&&`, `||` or `?:` decided not to evaluate: the second
+    /// operand of a `&&` whose first is 0, of a `||` whose first is
+    /// nonzero, and the operand of `?:` that was not chosen (C99
+    /// §6.5.13p4, §6.5.14p4, §6.5.15p4).
+    pub skipped:  Vec<usize>,
     /// A call in progress from this full expression.
     pub calling:  Option<usize>,
 }
@@ -845,18 +871,57 @@ pub(super) enum Op {
         structure:       Option<usize>,
     },
     Increment {
-        delta:  i32,
-        prefix: bool,
-        /// Whether the increment is an operand of a larger expression, a
-        /// condition's, which then uses its value; otherwise it is a whole
-        /// expression statement.
-        nested: bool,
+        delta:           i32,
+        prefix:          bool,
+        /// Set when the increment is an operand of a larger expression, in
+        /// a condition, which then uses its value; `None` when it is a
+        /// whole expression statement, or an operand of a comma operator
+        /// there.
+        nested:          Option<Nested>,
+        /// Whether this ends a full expression (C99 §6.8p4): a statement's
+        /// increment that is not the left operand of a comma operator.
+        full_expression: bool,
     },
     /// `E1 op= E2` as a statement: read the object the address below the
     /// value on the stack designates, apply `op` in `common` (the type the
     /// operator computes in; `None` for pointer arithmetic), store the
     /// result. The last type is `E2`'s, promoted when both are integers.
-    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>),
+    /// The flag says whether it ends a full expression, as it does unless
+    /// it is the left operand of a comma operator.
+    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>, bool),
+    /// The test after the first operand of `&&`, `||` or `?:`, whose
+    /// evaluation a sequence point ends: pop its value. `&&` of a zero
+    /// operand, or `||` of a nonzero one, has its result already: push it
+    /// and skip to `target`, past the second operand, which is never
+    /// evaluated. `?:` of a zero operand skips to `target`, its third
+    /// operand.
+    ///
+    /// C99: §6.5.13 paragraph 4, §6.5.14 paragraph 4, p. 89; PDF p. 101.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
+    Test {
+        operator: &'static str,
+        target:   usize,
+    },
+    /// The value of `&&`, `||`, `?:` or a comma operator, from the operand
+    /// evaluated last: `&&` and `||` yield 1 when it is nonzero and 0
+    /// otherwise, `?:` converts it to `to`, the type of its result; then
+    /// skip to `target`, when set: past the third operand of `?:` after its
+    /// second.
+    ///
+    /// C99: §6.5.13 paragraph 3, §6.5.14 paragraph 3, p. 89; PDF p. 101.
+    /// C99: §6.5.15 paragraph 5, p. 90; PDF p. 102.
+    /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
+    Yield {
+        operator: &'static str,
+        to:       Option<Type>,
+        target:   Option<usize>,
+    },
+    /// The end of a comma operator's left operand: its value, when
+    /// `discard` (an operand that is not a store or an increment), is thrown
+    /// away, and a sequence point follows (C99 §6.5.17p2).
+    Comma {
+        discard: bool,
+    },
     Pop,
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.
@@ -881,6 +946,37 @@ pub(super) enum Op {
     /// function's return type.
     Return(Type),
     Fallthrough,
+}
+
+/// Where a `++` or `--` inside a condition sits: the sequence point that
+/// next follows it, by which C completes its store, and whether anything
+/// else in the condition could reach the object it updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Nested {
+    pub next:   SequencePoint,
+    /// Whether the condition also reads the variable, updates it again, or
+    /// uses `*`, `[]`, `->` or a call that might reach it; `check_update`
+    /// has made sure a sequence point separates each from the update.
+    pub shared: bool,
+}
+
+/// The sequence point that next follows an operand inside a condition.
+///
+/// C99: Annex C paragraph 1, p. 439; PDF p. 451.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SequencePoint {
+    /// The end of the condition, a full expression (C99 §6.8p4).
+    Condition,
+    /// The end of `first`, the first operand of `&&`, `||` or `?:`, or the
+    /// left operand of a comma operator (C99 §6.5.13p4, §6.5.14p4,
+    /// §6.5.15p4, §6.5.17p2).
+    Operand {
+        operator: &'static str,
+        first:    SourceRange,
+    },
+    /// The point just before the call `call`, after its function designator
+    /// and arguments are evaluated (C99 §6.5.2.2p10).
+    Call(SourceRange),
 }
 
 /// A function `<stdio.h>` declares that the machine runs itself.
@@ -965,6 +1061,40 @@ pub(super) enum Type {
     Struct(usize),
     /// A pointer to a structure.
     StructPointer(usize),
+    /// A pointer to a pointer: `depth` pointers (two or more) in a row to
+    /// `target`, so `int **` is `Indirect(int, 2)`.
+    Indirect(Target, u8),
+    /// An array of `length` pointers, each `depth` pointers (one or more)
+    /// in a row to `target`: `char *names[3]` is `PointerArray(char, 1,
+    /// 3)`.
+    PointerArray(Target, u8, usize),
+}
+
+/// What a chain of pointers ends at: an arithmetic type, `const` when set,
+/// or a structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "A small copied type description; a structure's index is the larger variant."
+    )
+)]
+pub(super) enum Target {
+    Arithmetic(Arithmetic, bool),
+    Struct(usize),
+}
+
+impl Target {
+    /// The type `depth` pointers in a row to this target make: `int *` for
+    /// one, `int **` for two.
+    pub(super) const fn pointer(self, depth: u8) -> Type {
+        match (self, depth) {
+            | (Self::Arithmetic(arithmetic, constant), 1) => Type::Pointer(arithmetic, constant),
+            | (Self::Struct(id), 1) => Type::StructPointer(id),
+            | _ => Type::Indirect(self, depth),
+        }
+    }
 }
 
 impl Type {
@@ -975,12 +1105,64 @@ impl Type {
 
     /// Whether values of this type are pointers.
     pub(super) const fn is_pointer(self) -> bool {
-        matches!(self, Self::Pointer(..) | Self::StructPointer(_))
+        matches!(
+            self,
+            Self::Pointer(..) | Self::StructPointer(_) | Self::Indirect(..)
+        )
     }
 
     /// Whether this is an array type, which a name of it decays from.
     pub(super) const fn is_array(self) -> bool {
-        matches!(self, Self::Array(..))
+        matches!(self, Self::Array(..) | Self::PointerArray(..))
+    }
+
+    /// An array type's length.
+    pub(super) const fn length(self) -> Option<usize> {
+        match self {
+            | Self::Array(_, length) | Self::PointerArray(_, _, length) => Some(length),
+            | _ => None,
+        }
+    }
+
+    /// An array type's element type.
+    pub(super) const fn element(self) -> Option<Self> {
+        match self {
+            | Self::Array(element, _) => Some(element.ty()),
+            | Self::PointerArray(target, depth, _) => Some(target.pointer(depth)),
+            | _ => None,
+        }
+    }
+
+    /// A pointer type's chain: what it ends at and how many pointers deep
+    /// it is.
+    pub(super) const fn chain(self) -> Option<(Target, u8)> {
+        match self {
+            | Self::Pointer(arithmetic, constant) =>
+                Some((Target::Arithmetic(arithmetic, constant), 1)),
+            | Self::StructPointer(id) => Some((Target::Struct(id), 1)),
+            | Self::Indirect(target, depth) => Some((target, depth)),
+            | _ => None,
+        }
+    }
+
+    /// The type a pointer of this type points to: `int` for `int *`, `int
+    /// *` for `int **`, `struct point` for `struct point *`.
+    pub(super) const fn pointee(self) -> Option<Self> {
+        match self.chain() {
+            | Some((Target::Arithmetic(arithmetic, _), 1)) => Some(arithmetic.ty()),
+            | Some((Target::Struct(id), 1)) => Some(Self::Struct(id)),
+            | Some((target, depth)) => Some(target.pointer(depth - 1)),
+            | None => None,
+        }
+    }
+
+    /// The type of `&` applied to an object of this pointer type: one
+    /// pointer more.
+    pub(super) const fn pointer_to(self) -> Option<Self> {
+        match self.chain() {
+            | Some((target, depth)) if depth < MAX_INDIRECTION => Some(target.pointer(depth + 1)),
+            | _ => None,
+        }
     }
 
     /// The integer type, when this is one.
@@ -1019,6 +1201,7 @@ impl Type {
     pub(super) const fn decayed_qualified(self, constant: bool) -> Self {
         match self {
             | Self::Array(element, _) => Self::Pointer(element, constant),
+            | Self::PointerArray(target, depth, _) => target.pointer(depth + 1),
             | other => other,
         }
     }
@@ -1129,6 +1312,8 @@ impl Arithmetic {
 }
 
 pub(super) const MAX_SOURCE: usize = 32 * 1024;
+/// The most pointers in a row a type may have: `int ****`.
+pub(super) const MAX_INDIRECTION: u8 = 4;
 pub(super) const MAX_DEPTH: usize = 64;
 pub(super) const MAX_CODE: usize = 8192;
 pub(super) const MAX_STEPS: usize = 2048;
