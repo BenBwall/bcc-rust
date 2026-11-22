@@ -2171,6 +2171,21 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
+    // Microsoft's `void __assume(bool)`, with Microsoft extensions, as
+    // Clang declares it.
+    descriptor(
+        Id::MsAssume,
+        "__assume",
+        B::Assume,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Scalar(S::Bool)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Bool)))],
+        1,
+    ),
     // Microsoft's `void __annotation(const wchar_t *, ...)`: one or more
     // wide string literals, with Microsoft extensions.
     BuiltinDescriptor {
@@ -2422,6 +2437,12 @@ const fn descriptor(
             None,
             SyntaxForm::OrdinaryCall,
         ),
+        | B::Assume => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Query,
+            None,
+            SyntaxForm::OrdinaryCall,
+        ),
         | B::Annotation => (
             TypeRule::WideStrings,
             BuiltinEffectClass::Query,
@@ -2457,7 +2478,8 @@ const fn descriptor(
             feature,
             naming: match id {
                 | Id::PlainAlloca => NamingPolicy::GnuOrdinary,
-                | Id::Debugbreak | Id::Annotation | Id::MsVaStart => NamingPolicy::Microsoft,
+                | Id::Debugbreak | Id::MsAssume | Id::Annotation | Id::MsVaStart =>
+                    NamingPolicy::Microsoft,
                 | _ => NamingPolicy::Reserved,
             },
         },

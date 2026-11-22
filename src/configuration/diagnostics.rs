@@ -1315,6 +1315,9 @@ diagnostic_groups! {
     /// Clang: a floating literal whose implicit conversion to an integer
     /// type is out of range or changes its value; `-Wconversion` holds it.
     LiteralConversion => Some("literal-conversion"), Warning, false;
+    /// Clang: an assumption (`__builtin_assume`, Microsoft `__assume`)
+    /// whose operand has side effects, which Clang ignores.
+    Assume => Some("assume"), ClangWarning, false;
     /// Clang's `-Wconversion`, which reports nothing itself: under Clang's
     /// rules the parent of the conversion groups bcc models
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and

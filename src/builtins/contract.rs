@@ -391,6 +391,12 @@ pub(crate) enum BuiltinOperation {
     /// may continue. MSVC extension: Microsoft Learn, "__debugbreak".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/debugbreak>
     DebugTrap,
+    /// Microsoft `__assume(e)`: a promise that `e` is true where the call
+    /// is reached, which the optimizer may use and code never evaluates; an
+    /// operand with side effects is ignored, and `__assume(0)` marks the
+    /// point unreachable. MSVC extension: Microsoft Learn, "__assume".
+    /// <https://learn.microsoft.com/en-us/cpp/intrinsics/assume>
+    Assume,
     /// Microsoft `__annotation`: wide strings for the debug information,
     /// with no effect on execution. MSVC extension: Microsoft Learn,
     /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>

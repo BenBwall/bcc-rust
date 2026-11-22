@@ -503,8 +503,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Annotation
             | CommonBuiltin::Semantic(_)
             | CommonBuiltin::Family(_) => {},
+            | CommonBuiltin::Assume => self.check_assumption(args[0]),
         }
         Some(info)
+    }
+
+    /// Clang's `-Wassume`: `__assume` or `__builtin_assume` of an operand
+    /// with side effects, which neither Clang nor `cl` evaluates, so the
+    /// promise is ignored (`warn_assume_side_effects`, which
+    /// `Sema::CheckBuiltinFunctionCall` reports when `Expr::HasSideEffects`
+    /// holds). `cl` says nothing. MSVC extension: Microsoft Learn,
+    /// "__assume".
+    fn check_assumption(&mut self, operand: &'tu Expression<'tu>) {
+        use crate::configuration::{
+            CompilerIdentity,
+            DiagnosticGroup as G,
+        };
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
+            || !self.has_side_effects(operand)
+        {
+            return;
+        }
+        let text = self
+            .context
+            .string_cache
+            .intern("assumption is ignored because it contains (potential) side-effects");
+        self.group_diagnostic(
+            G::Assume,
+            SemanticErrorKind::ValueWarning(G::Assume),
+            operand.source_vectors,
+            Some(text),
+            None,
+        );
     }
 
     /// Checks a runtime processor query. Its text must be a string literal

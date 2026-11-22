@@ -1194,15 +1194,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         match self.context.string_cache.at(name.name) {
             | "__builtin_trap" | "__builtin_verbose_trap" | "__builtin_eh_return" => true,
-            | "__builtin_assume" => arguments
+            | "__builtin_assume" | "__assume" => arguments
                 .first()
                 .is_some_and(|&condition| self.known_condition_in(known, condition) == Some(false)),
             | _ => false,
         }
     }
 
-    /// Clang's `FunctionDecl::isNoReturn` and the CFG's `__builtin_assume` of
-    /// a false condition. A call through a function that is `noreturn`
+    /// Clang's `FunctionDecl::isNoReturn` and the CFG's `__builtin_assume` or
+    /// Microsoft `__assume` of a false condition. A call through a function that is `noreturn`
     /// differs from [`Self::call_does_not_return`] in the builtins whose call
     /// Clang emits without ending the block, as `__builtin_trap`.
     /// C11: §6.7.4 paragraph 8, p. 126; PDF p. 144.
@@ -1221,7 +1221,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return false;
         };
         // `cl`'s intrinsic `__assume(0)` says the path never gets there,
-        // whatever bcc made of the name, which it does not declare.
+        // whatever bcc made of the name, which it declares only with
+        // Microsoft extensions.
         // Microsoft Learn: "__assume".
         if self.unused.cl && self.context.string_cache.at(name.name) == "__assume" {
             return arguments
@@ -1245,7 +1246,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 flow.exits.abnormal = true;
                 true
             },
-            | "__builtin_assume" => arguments
+            | "__builtin_assume" | "__assume" => arguments
                 .first()
                 .is_some_and(|&condition| self.known_condition(flow, condition) == Some(false)),
             | _ => false,

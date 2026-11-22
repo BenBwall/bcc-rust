@@ -131,13 +131,13 @@ pub(super) fn generate_code<'tu>(
     // syntax tree and its context outlive it.
     let ir = Bump::new();
     let print_after_all = RefCell::new(StderrText);
-    let optimizer = options.optimizer(&print_after_all);
+    let target = context.configuration.target();
+    let optimizer = options.optimizer(&print_after_all, target);
     let profile = if options.emit == Some(Emit::Ir) {
         Profile::PreAbi
     } else {
         Profile::PostAbi
     };
-    let target = context.configuration.target();
     let copies = if target.is_wasm() {
         InlineCopies::Resolve
     } else {
@@ -633,6 +633,7 @@ impl CodeGeneration {
     fn optimizer<'a>(
         &self,
         print_after_all: &'a RefCell<dyn fmt::Write + 'a>,
+        target: Target,
     ) -> Option<OptimizerOptions<'a>> {
         #[cfg_attr(
             not(test),
@@ -648,6 +649,9 @@ impl CodeGeneration {
             options.print_after_all = self.print_after_all.then_some(print_after_all);
             options.time_passes = self.time_passes.then_some(print_after_all);
             options.bisect_limit = self.opt_bisect_limit;
+            // Only LLVM's back end reads an assumption.
+            options.drop_assumptions =
+                self.backend != BackEnd::Llvm || self.interpret || target.is_wasm();
             options
         })
     }

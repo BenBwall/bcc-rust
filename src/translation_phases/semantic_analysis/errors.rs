@@ -1416,6 +1416,8 @@ impl SemanticErrorKind {
             | Self::ClDivideByZero => "the divisor is zero",
             | Self::ClError(_) => "here",
             | Self::ClReturnFlow { .. } => "control reaches the end of the function",
+            | Self::ValueWarning(crate::configuration::DiagnosticGroup::Assume) =>
+                "this operand is never evaluated",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
@@ -1666,6 +1668,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
+                    | crate::configuration::DiagnosticGroup::Assume
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::SignCompareEquality
@@ -2170,6 +2173,11 @@ impl SemanticErrorKind {
                 "constant rounded by conversion to a floating type",
                 "C99 §6.3.1.4p2: an integer the floating type cannot represent exactly becomes \
                  a nearby value it can",
+            ),
+            | Self::ValueWarning(crate::configuration::DiagnosticGroup::Assume) => (
+                "assumption ignored",
+                "MSVC extension: Microsoft Learn, \"__assume\": an assumption is never \
+                 evaluated, so one with side effects promises nothing",
             ),
             | Self::ValueWarning(_) => (
                 "constant changed by conversion",

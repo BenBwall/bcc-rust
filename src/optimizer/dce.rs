@@ -185,7 +185,8 @@ fn has_side_effects(data: &InstData) -> bool {
                 | Opcode::VaEnd
                 | Opcode::StackRestore
                 | Opcode::SjljSetjmp
-                | Opcode::SjljLongjmp,
+                | Opcode::SjljLongjmp
+                | Opcode::Assume,
             ..
         }
         | InstData::Binary {

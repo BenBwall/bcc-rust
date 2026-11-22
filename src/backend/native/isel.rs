@@ -92,6 +92,7 @@ use crate::{
         Function,
         Inst,
         InstData,
+        InstFlags,
         IntCC,
         Module,
         Opcode,
@@ -175,6 +176,11 @@ pub(crate) fn select<'a>(
     for block in body.blocks() {
         if tree.is_reachable(block) {
             selector.count_uses(block);
+        }
+    }
+    for block in body.blocks() {
+        if tree.is_reachable(block) {
+            selector.drop_assumptions(block);
         }
     }
     for block in body.blocks() {
@@ -649,6 +655,63 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
+    /// Skips the assumptions of `block`, which are the optimizer's alone,
+    /// and the instructions without effects that only compute their
+    /// conditions, so that code is the same as without them.
+    /// MSVC extension: Microsoft Learn, "__assume".
+    fn drop_assumptions(&mut self, block: Block) {
+        for &inst in self.body.block_insts(block) {
+            let InstData::Unary {
+                opcode: Opcode::Assume,
+                arg,
+                ..
+            } = *self.body.inst(inst)
+            else {
+                continue;
+            };
+            self.skipped[inst.index()] = true;
+            let mut released = ArenaVec::new_in(self.arena);
+            released.push(arg);
+            while let Some(value) = released.pop() {
+                self.uses[value.index()] -= 1;
+                let ValueDef::Result(definition) = self.body.value_def(value) else {
+                    continue;
+                };
+                // An instruction its users fold in is skipped already, and
+                // its operands are theirs to release.
+                if self.uses[value.index()] == 0
+                    && Self::without_effects(self.body.inst(definition))
+                {
+                    self.skipped[definition.index()] = true;
+                    self.body
+                        .visit_operands(definition, |operand| released.push(operand));
+                }
+            }
+        }
+    }
+
+    /// Whether skipping `data` changes nothing but the value it defines.
+    fn without_effects(data: &InstData) -> bool {
+        match *data {
+            | InstData::Binary { opcode, .. } => opcode != Opcode::VaCopy,
+            | InstData::Unary { opcode, .. } =>
+                opcode == Opcode::Fneg
+                    || opcode == Opcode::Freeze
+                    || opcode.is_conversion()
+                    || opcode.is_bit_unary(),
+            | InstData::Load { flags, .. } => !flags.contains(InstFlags::VOLATILE),
+            | InstData::IntCompare { .. }
+            | InstData::FloatCompare { .. }
+            | InstData::Select { .. }
+            | InstData::Const { .. }
+            | InstData::WideConst { .. }
+            | InstData::StackAddr { .. }
+            | InstData::GlobalAddr { .. }
+            | InstData::FuncAddr { .. } => true,
+            | _ => false,
+        }
+    }
+
     /// Marks the compares of `block` whose every use is the condition of
     /// a `brif` or `select`; each user emits the comparison itself.
     fn find_fusions(&mut self, block: Block) {
@@ -790,8 +853,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 arg,
                 ..
             } => self.va_start(arg),
+            // `va_end` has nothing to release, and an assumption is the
+            // optimizer's alone.
             | InstData::Unary {
-                opcode: Opcode::VaEnd,
+                opcode: Opcode::VaEnd | Opcode::Assume,
                 ..
             } => {},
             | InstData::FloatCompare { cond, ty, args } => {

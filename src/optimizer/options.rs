@@ -30,6 +30,10 @@ pub(crate) struct OptimizerOptions<'a> {
     /// (`--opt-bisect-limit`). With `Some(n)`, the first `n` rewrites happen
     /// and every later one is skipped, so a miscompile can be bisected on `n`.
     pub(crate) bisect_limit:    Option<u64>,
+    /// Drop the `assume` instructions first, for a back end that does not
+    /// read them (any but LLVM's), so that whatever only their conditions
+    /// needed goes with them.
+    pub(crate) drop_assumptions: bool,
     /// A pass injected after each real pass, to test that verification
     /// catches a broken one.
     #[cfg(test)]
@@ -45,6 +49,7 @@ impl Default for OptimizerOptions<'_> {
             print_after_all:       None,
             time_passes:           None,
             bisect_limit:          None,
+            drop_assumptions:      false,
             #[cfg(test)]
             injected:              None,
         }

@@ -625,6 +625,32 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 );
                 Operand::Void
             },
+            // Microsoft `__assume(0)` marks the point unreachable, and any
+            // other operand is a promise for the optimizer; one with side
+            // effects was left unevaluated, and promises nothing.
+            // MSVC extension: Microsoft Learn, "__assume".
+            | CommonBuiltin::Assume => {
+                if count == 1 {
+                    if instance.operands[0]
+                        .integer
+                        .is_some_and(|value| value.value == 0)
+                    {
+                        self.draft
+                            .terminate_and_continue_dead(Terminator::Unreachable);
+                    } else {
+                        let condition = self.truth(items[0], source)?;
+                        _ = self.draft.push(
+                            Op::Inst(InstData::Unary {
+                                opcode: Opcode::Assume,
+                                ty:     Type::I1,
+                                arg:    condition,
+                            }),
+                            None,
+                        );
+                    }
+                }
+                Operand::Void
+            },
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {
                 if builtin == CommonBuiltin::Unreachable {
                     self.check_unreachable(e);
