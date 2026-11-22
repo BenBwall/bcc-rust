@@ -154,6 +154,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     SpecifierExtensionKind::Attributes(attributes),
                     attributes.source_vectors,
                 );
+                list.type_at_attributes = Some(list.specifiers.type_specifiers);
                 list.consumed = true;
                 continue;
             }
@@ -320,6 +321,8 @@ struct SpecifierList<'tu> {
     complex_integer:       bool,
     /// Provenance accumulated across the complete specifier sequence.
     source_vectors:        Option<SourceVectors>,
+    /// The type specifiers before the last attribute specifier, if any.
+    type_at_attributes:    Option<TypeSpecifiers<'tu>>,
 }
 
 impl<'tu> SpecifierList<'tu> {
@@ -335,6 +338,7 @@ impl<'tu> SpecifierList<'tu> {
             complex_token: None,
             complex_integer: false,
             source_vectors: None,
+            type_at_attributes: None,
         }
     }
 
@@ -343,6 +347,9 @@ impl<'tu> SpecifierList<'tu> {
         if self.complex_integer {
             self.finish_complex_integer(parser);
         }
+        self.specifiers.type_after_attributes = self.type_at_attributes.is_some_and(|before| {
+            !before.selects_basic_type() && self.specifiers.type_specifiers.selects_basic_type()
+        });
         self.specifiers
     }
 

@@ -391,6 +391,8 @@ pub(crate) struct StructDeclaration<'tu> {
     pub(crate) extensions:             Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) type_qualifiers:        TypeQualifiers,
     pub(crate) type_specifiers:        TypeSpecifiers<'tu>,
+    /// As [`DeclarationSpecifiers::type_after_attributes`].
+    pub(crate) type_after_attributes:  bool,
     pub(crate) struct_declarator_list: ArenaList<'tu, StructDeclarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
 }
@@ -485,6 +487,12 @@ pub(crate) struct DeclarationSpecifiers<'tu> {
     pub(crate) type_qualifiers:         TypeQualifiers,
     pub(crate) type_specifiers:         TypeSpecifiers<'tu>,
     pub(crate) function_specifiers:     FunctionSpecifiers,
+    /// Whether a type specifier that selects the basic type follows the
+    /// last attribute specifier among them
+    /// ([`TypeSpecifiers::selects_basic_type`]). TCC applies a `__mode__`
+    /// attribute where it reads it, so such a keyword after it wins
+    /// (`parse_btype` in `tccgen.c`).
+    pub(crate) type_after_attributes:   bool,
     pub(crate) source_vectors:          SourceVectors,
 }
 
@@ -906,6 +914,23 @@ impl<'tu> TypeSpecifiers<'tu> {
         }
     }
 
+    /// Whether these specifiers select a basic type, rather than leaving it
+    /// to `int`: anything but `int`, `signed` and `unsigned`, which TCC
+    /// reads as keeping the basic type it has so far (`parse_btype` in
+    /// `tccgen.c`).
+    /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
+    pub(super) fn selects_basic_type(self) -> bool {
+        !matches!(
+            self,
+            TypeSpecifiers::Empty
+                | TypeSpecifiers::Int
+                | TypeSpecifiers::Signed
+                | TypeSpecifiers::SignedInt
+                | TypeSpecifiers::Unsigned
+                | TypeSpecifiers::UnsignedInt
+        )
+    }
+
     /// Whether these specifiers name an integer type `_Complex` may make
     /// complex: any but `_Bool`, `__int128` and the extended integers.
     /// GNU extension: GCC manual, "Complex Numbers".
@@ -1012,6 +1037,7 @@ impl DeclarationSpecifiers<'_> {
                 is_inline:   false,
                 is_noreturn: false,
             },
+            type_after_attributes:   false,
             source_vectors:          VectorSlice::empty(),
         }
     }

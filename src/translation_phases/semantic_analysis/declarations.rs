@@ -400,8 +400,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.taint(true);
             self.work.push(Work::UnknownType(reason));
         }
-        self.work
-            .push(Work::VectorAttributes(spec.extensions, false));
+        self.work.push(Work::VectorAttributes(
+            spec.extensions,
+            super::vectors::AttributeSite::Specifiers {
+                type_after: spec.type_after_attributes,
+            },
+        ));
         self.work.push(Work::Spec(
             spec.type_specifiers,
             spec.type_qualifiers,

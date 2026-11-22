@@ -333,16 +333,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC mode selects an integer representation, preserving signedness, or
     /// a real or complex floating representation. Vector modes
-    /// belong to the vector subsystem. TCC applies the modes it knows to an
-    /// integer type only among the declaration specifiers, `in_specifiers`
-    /// (`parse_btype` in `tccgen.c`), and refuses no mode
-    /// ([`Self::tcc_mode`]).
+    /// belong to the vector subsystem. TCC applies the modes it knows only
+    /// among the declaration specifiers, where it reads them, so a type
+    /// specifier after the attribute replaces the mode: `tcc_applies` says
+    /// the attribute is among them with none after it (`parse_btype` in
+    /// `tccgen.c`). It refuses no mode ([`Self::tcc_mode`]).
     /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
     pub(in crate::translation_phases::semantic_analysis) fn mode_attribute(
         &mut self,
         mut ty: TypeId,
         a: &AttributeSpecifier<'tu>,
-        in_specifiers: bool,
+        tcc_applies: bool,
     ) -> TypeId {
         let tcc = self.context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         let mut invalid = false;
@@ -353,7 +354,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .map(|(index, _)| index),
         );
         for index in modes {
-            if tcc && (!self.tcc_mode(a, index) || !in_specifiers) {
+            if tcc && (!self.tcc_mode(a, index) || !tcc_applies) {
                 continue;
             }
             let mode = a.tokens.get(index + 2).map(|token| {

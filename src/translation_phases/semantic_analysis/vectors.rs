@@ -30,6 +30,18 @@ use crate::{
     util::bump::ArenaVec,
 };
 
+/// Where a chain of attribute specifiers was written.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum AttributeSite {
+    /// Among declaration specifiers, and whether a type specifier that
+    /// selects the basic type follows the last of them
+    /// (`DeclarationSpecifiers::type_after_attributes`).
+    Specifiers { type_after: bool },
+    /// After a member's declarator, where an alignment applies to the
+    /// member's storage.
+    MemberDeclarator,
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Group vector construction before alignment-only attributes,
     /// independently of which syntax attribute list carries them.
@@ -41,12 +53,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut ty: TypeId,
         chain: Option<&'tu super::SpecifierExtension<'tu>>,
-        storage_alignment: bool,
+        site: AttributeSite,
     ) -> TypeId {
+        let storage_alignment = site == AttributeSite::MemberDeclarator;
+        let tcc_mode = site == AttributeSite::Specifiers { type_after: false };
         let mut current = chain;
         while let Some(item) = current {
             if let super::SpecifierExtensionKind::Attributes(a) = item.kind {
-                ty = self.mode_attribute(ty, a, !storage_alignment);
+                ty = self.mode_attribute(ty, a, tcc_mode);
             }
             current = item.next;
         }

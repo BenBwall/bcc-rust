@@ -204,6 +204,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     extensions:             None,
                     type_qualifiers:        TypeQualifiers::empty(),
                     type_specifiers:        TypeSpecifiers::Empty,
+                    type_after_attributes:  false,
                     struct_declarator_list: ArenaList::empty(),
                     source_vectors:         assertion.source_vectors,
                 });
@@ -642,6 +643,7 @@ impl<'tu, 'p> Record<'tu, 'p> {
             extensions: specifiers.extensions,
             type_qualifiers: specifiers.type_qualifiers,
             type_specifiers: specifiers.type_specifiers,
+            type_after_attributes: specifiers.type_after_attributes,
             struct_declarator_list: start,
             source_vectors,
         });
