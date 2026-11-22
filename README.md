@@ -269,7 +269,13 @@ LLVM submodule pins `0a5579eb649d3634a9c30ac873300cc2944fa070` (LLVM 23.1.5).
 Git pins both source revisions; the native build checks that Clang, libclang,
 and the archiver report the same LLVM version as rustc.
 Upgrading Rust requires updating the Rust submodule to the new compiler's
-commit and checking out the LLVM revision that it pins.
+commit and checking out the LLVM revision that it pins. Then regenerate the
+builtins Clang declares `const` or `pure` (`src/builtins/clang_purity.rs`)
+with `python3 scripts/generate_clang_builtin_purity.py --llvm DIR`, where
+`DIR` is the new toolchain with Clang's generated `include/clang/Basic`
+headers; `--check` reports a stale file instead. No CI job checks it: the
+distribution `build_support/llvm/tools.rs` installs has no Clang
+development headers.
 
 Sparse patterns in [`build_support/rust.sparse`](build_support/rust.sparse)
 retain Rust's LLVM gitlink, submodule metadata, and license files.
