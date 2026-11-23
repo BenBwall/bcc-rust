@@ -6498,3 +6498,135 @@ status` showed only `web/pipeline/loops/` and `web/wasm/loops.wasm`.
   in the conversion's value flow, with Part 17's list (the lessons' opening
   comments, static pointers to objects, hiding a name with a constant or a
   typedef name, the listing's label, and others).
+
+## Part 20: a claims audit of Parts 11 to 19, and the review of Part 19 (2026-11)
+
+Parts 11 to 19 taught the machine a dozen constructs and added five
+lessons, each sentence checked by its own part's review but never against
+the compilers as a whole. This part audits every claim they added, in the
+manner of [the claims audit](claims-audit.md), and fixes the three nits the
+review of Part 19 (#441) left. The work is on `agent/site-part20`; the
+claims audit's new section, [Parts 11 to 19](claims-audit.md#parts-11-to-19-2026-11-23),
+holds the full table.
+
+### The review's three nits
+
+- **The WebAssembly view's provenance.** It said Clang built every
+  lesson's module "without a C library". The nine lessons that include
+  `<stdio.h>` are WASI commands linked with wasi-libc
+  (`web/wasm/generate.sh`), so for them it now reads "The lesson calls
+  `printf`, so Clang linked it with wasi-libc, the C library for WASI,
+  whose `$_start` calls `main`", and the sentence about bcc's `$_start`
+  keeps its "also" only there. The other ten keep "without a C library, so
+  the module starts in `main`".
+- **The `loop` step.** "Its pass ends in a conditional branch back to the
+  top" was a literal `br_if` only in Clang's module. It now reads "a branch
+  back to the top that is taken only while the condition holds: a `br_if`,
+  or a `br` inside an `if`", true of both modules.
+- **The loops' own clauses.** No step cited §6.8.5.1 (`while`) or §6.8.5.3
+  (`for`), though note 176's "goes to `k++`" rests on §6.8.5.3p1. Two new
+  clauses, checked with `search-standard` (both p. 136, PDF p. 148), are
+  now cited beside §6.8.5p4 on each loop's test and jump back, on each
+  `continue` (a `do`'s cites §6.8.5.2p1), on the step before a test
+  ("test the `for` condition"), and on a for statement's block, whose first
+  clause's names §6.8.5.3p1 scopes to the loop. A new engine test pins
+  them for a while, a for and a for without a condition.
+
+### The claims audit
+
+52 claims: 36 hold, 12 over-promised and 4 were wrong. Probes `c29` to
+`c37` in `web/docs/claims/` show what GCC 14, Clang 23.1.5 and bcc do. The
+fixes:
+
+- **Calls through a bad pointer to a function.** The note and the stop
+  said a compiled program "usually crashes". A null call crashes without
+  optimization, but Clang and bcc at `-O2` exit normally (44 and 0), and a
+  call through the wrong type runs on and prints 21. Both now say so.
+- **Static initializers.** "Reading a variable … is refused": GCC and
+  Clang compile `static const int a = 1; int b = a;` silently, even with
+  `-pedantic`, as §6.6p10 lets them. The note and the machine's refusal now
+  say so.
+- **What a function pointer is in compiled code.** Every call through a
+  pointer said the pointer "holds the address where twice's machine code
+  starts", which the WebAssembly view contradicts two tabs away (an index
+  into a table). It now gives both.
+- **Types that differ on Windows.** ptrdiff_t and size_t are long types on
+  x86-64 Linux, but long long ones for `x86_64-pc-windows-msvc`; both now
+  say "on x86-64 Linux" (size_t's was older text).
+- **Glosses.** Three of the 74 new clause glosses left out cases of their
+  paragraphs (`?:` with void, `==` with a pointer to void, two pointers
+  equal across adjacent arrays), and the glossary's "no current machine
+  uses" the other representations was not checkable; it now says C23
+  requires two's complement.
+- **Smaller ones.** The loop note now says a for's `continue` runs its
+  step first; an enumeration without a name was "The type  itself" and is
+  now "The enumeration's type"; the switch and hiding notes name Clang's
+  options beside GCC's; and a refusal still said "nested
+  assignments/increments … are rejected", which Parts 13 and 14 ended.
+
+What holds includes every C rule the 17 new notes state, the "Limits of
+this model" paragraph (36 programs through the engine, each run or refused
+as it says), the landing, the five lesson cards, the WebAssembly view's
+`call_indirect` step, the enumeration types (GCC, Clang and bcc agree on
+`c29`), and the open-order stop (GCC prints 11 where Clang and bcc print
+1). All five new lessons print what the machine prints under the three
+compilers at `-O0` and `-O2`, with no warning under `-std=c99 -pedantic
+-Wall -Wextra`.
+
+### Checks
+
+- **The lesson walk.** The engine's narration of every lesson was written
+  out before (`main` at `40c2e52bd`) and after the changes: title, lead,
+  explanation, "why it matters" note, clauses and next step for each of
+  the 18 lessons the machine runs (the preprocessor lesson stops before its
+  first step on both). Every lesson keeps its step count. The text changed
+  only where intended: Loops three ways, notes 47, 80, 110 and 176 (the
+  note on loops); Callbacks, notes 15 and 98 (the note on pointers to
+  functions) and 43, 71, 126 and 155 (a call through `f`); Walking a
+  string, note 145 (ptrdiff_t); Unsigned, note 146 (size_t). Clauses
+  changed on the loop steps of the 11 lessons with a while or a for. This
+  walk reads the engine directly, not the page, so it does not compare the
+  value flow, which no change touches.
+- **The scenes.** CI's Pages build of `07036a217`, at 1440x900 and 390x844
+  in both themes: loops note 176
+  ([`machine-loops-176-1440-light`](screenshots/part20/machine-loops-176-1440-light.png))
+  cites §6.8.6.2p2, §6.8.5.3p1 and §6.8.5p5; callbacks note 43 reads "In
+  x86-64 code … ; in WebAssembly it holds an index into a table of
+  functions"
+  ([`machine-callbacks-43-390-dark`](screenshots/part20/machine-callbacks-43-390-dark.png));
+  and the WebAssembly view's provenance and "Enter loop" step read as
+  above with each compiler for the loops lesson
+  ([`provenance-loops-clang-390-dark`](screenshots/part20/provenance-loops-clang-390-dark.png),
+  [`provenance-loops-bcc-1440-light`](screenshots/part20/provenance-loops-bcc-1440-light.png),
+  [`wasm-loops-bcc-390-light`](screenshots/part20/wasm-loops-bcc-390-light.png),
+  [`wasm-loops-clang-1440-dark`](screenshots/part20/wasm-loops-clang-1440-dark.png))
+  and for the objects lesson, which has no C library
+  ([`provenance-objects-clang-1440-dark`](screenshots/part20/provenance-objects-clang-1440-dark.png)).
+  The first build showed bcc's module of the loops lesson without the
+  sentence's "also": the provenance read the C library from the shown
+  module's command line, not from the lesson. It now reads the lesson. No
+  sideways scroll, no console error or warning. The changed text keeps its
+  elements and colors, so the contrast was not measured again.
+- **Agreement.** The five new lessons under the machine, GCC 14, Clang
+  23.1.5 and bcc at `-O0` and `-O2`, as in the claims audit.
+- **Tests,** as `pages.yml` runs them: the engine's 175 (two new: the
+  loops' clauses and an enumeration without a name; the `continue` test now
+  checks each loop's own clause) and its clippy; the site's 177 and the
+  prerender's 2; the WebAssembly stepper's 79; the site's four clippy runs,
+  all clean. Both generators' `--check` pass with a dev bcc and wasi-sdk
+  34. `cargo +nightly fmt --check` passes for the engine, rustfmt reports
+  nothing on the site's changed lines, and `git diff --check` is clean.
+
+### Left for later
+
+- **bcc and `-Wimplicit-fallthrough`.** bcc does not know the option, so
+  the switch note names GCC's and Clang's only.
+- **`x & 1` for a negative x** assumes two's complement; the note leaves
+  that unsaid, as every machine the site describes uses it.
+- **A Playwright walk of this change.** The walk above reads the engine's
+  steps; Part 9's walk of the page was not run, since the page shows those
+  same strings and nothing in its layout changed.
+- Part 19's list stands: the assembly's copied loop tests, the `loop` step
+  at `-O2`, a `switch` in LLVM IR, `continue`'s "fresh ones", a dispatch
+  table lesson and the function's type in the conversion's value flow,
+  with Part 17's list behind them.
