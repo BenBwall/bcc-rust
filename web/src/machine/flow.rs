@@ -54,6 +54,7 @@ pub(super) fn flow(
             operand(result).map(|chip| typed(chip, "size_t")),
         ],
         | EventKind::ArrayDecay => chips.decay(event),
+        | EventKind::FunctionDesignator => chips.designator(event),
         | EventKind::AddressOf => vec![
             result.and_then(|result| chips.pointee(result)),
             Some(arrow("address")),
@@ -472,6 +473,21 @@ impl Chips<'_, '_> {
                 .result
                 .as_ref()
                 .map(|result| typed(self.operand(result), &pointer)),
+        ]
+    }
+
+    /// A function's name and the pointer to the function it becomes as an
+    /// operand.
+    ///
+    /// C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58.
+    fn designator(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        vec![
+            self.program
+                .source()
+                .get(event.range.start..event.range.end)
+                .map(|text| part("label", text)),
+            Some(arrow("becomes")),
+            event.result.as_ref().map(|result| self.operand(result)),
         ]
     }
 

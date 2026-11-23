@@ -63,7 +63,7 @@ impl Part {
 
 /// The lessons, in reading order: each part's lessons together, the parts in
 /// the order of [`Part::ALL`].
-pub static DEMOS: [Demo; 17] = [
+pub static DEMOS: [Demo; 18] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -221,6 +221,20 @@ pub static DEMOS: [Demo; 17] = [
         path:    &[],
         name:    "strings.c",
         source:  include_str!("../demos/strings.c"),
+    },
+    Demo {
+        key:     "callbacks",
+        title:   "Callbacks: passing a function to a function",
+        summary: "A function's name becomes a pointer to it, sum_of takes that pointer as a \
+                  parameter, and one call through it runs twice in one call of sum_of and square \
+                  in the next.",
+        topics:  &["pointers to functions", "callbacks", "indirect calls"],
+        part:    Part::Memory,
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "callbacks.c",
+        source:  include_str!("../demos/callbacks.c"),
     },
     Demo {
         key:     "structs",

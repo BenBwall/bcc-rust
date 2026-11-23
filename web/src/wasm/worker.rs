@@ -830,6 +830,47 @@ mod tests {
     }
 
     #[test]
+    fn the_callbacks_lesson_calls_through_the_table() {
+        let callbacks = DEMOS
+            .iter()
+            .find(|demo| demo.name == "callbacks.c")
+            .unwrap();
+        let (_, snapshots) = trace(callbacks.source);
+        // One `call_indirect` in sum_of runs twice for one call of sum_of
+        // and square for the other, each once per element.
+        for name in ["twice", "square"] {
+            let calls: Vec<_> = snapshots
+                .iter()
+                .filter(|s| {
+                    s.narration
+                        .title
+                        .starts_with(&format!("Call `${name}` through the table with"))
+                })
+                .collect();
+            assert_eq!(calls.len(), 2, "{name}");
+            for call in calls {
+                assert!(
+                    call.narration
+                        .explanation
+                        .starts_with("`call_indirect` pops a table index, `")
+                        && call
+                            .narration
+                            .explanation
+                            .contains("A C function pointer compiles to such an index"),
+                    "{}",
+                    call.narration.explanation
+                );
+                assert!(
+                    call.narration
+                        .concepts
+                        .iter()
+                        .any(|concept| concept.title == "Tables")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn overflow_wraps_where_c_is_undefined() {
         let overflow = DEMOS.iter().find(|demo| demo.name == "overflow.c").unwrap();
         let (_, snapshots) = trace(overflow.source);
