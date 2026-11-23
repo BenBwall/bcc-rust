@@ -97,7 +97,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         } else {
             "msvc-classic"
         },
-        clang_cl,
         ..State::default()
     };
     // clang-cl reads its `/clang:` options after the others, wherever they
@@ -433,13 +432,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
         common.push("-D_DEBUG".into());
     }
-    common.append(&mut state.system_directories(false));
+    common.append(&mut state.system_directories());
     // Intel's defaults come before the command line's own options.
     if let Some(intel) = &intel {
         intel.apply(&invocation.name, &mut common, target);
     }
     common.append(&mut state.bcc);
-    common.append(&mut state.system_directories(true));
     if X86Features::from_options(&x86_options.iter().copied(), true).unknown_vector_abi()
         == Some(32)
     {
@@ -1019,12 +1017,8 @@ struct State {
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
     ignore_include_variable: bool,
-    /// The personality is clang-cl's (or `icx-cl`'s), not `cl`'s.
-    clang_cl:                bool,
     /// clang-cl's `/imsvc` directories, in order.
     imsvc:                   Vec<OsString>,
-    /// The directories of clang-cl's `/external:env:` variables, in order.
-    external_env:            Vec<OsString>,
     standard:                &'static str,
     /// `/std:` named the standard, as `/std:c11` does, rather than `cl`'s
     /// default dialect.
@@ -1080,9 +1074,7 @@ impl Default for State {
             nologo:                  false,
             verbose:                 false,
             ignore_include_variable: false,
-            clang_cl:                false,
             imsvc:                   Vec::new(),
-            external_env:            Vec::new(),
             standard:                "c17",
             standard_given:          false,
             diagnostics:             "msvc-caret",
@@ -1120,42 +1112,29 @@ impl Runtime {
 }
 
 impl State {
-    /// The directories of `%INCLUDE%`, unless `/X` leaves them out.
-    fn include_variable(&self) -> Vec<OsString> {
-        if self.ignore_include_variable {
-            return Vec::new();
-        }
-        std::env::var_os("INCLUDE")
-            .map_or_default(|include| std::env::split_paths(&include).collect::<Vec<_>>())
-            .into_iter()
-            .filter(|directory| !directory.as_os_str().is_empty())
-            .map(PathBuf::into_os_string)
-            .collect()
-    }
-
     /// The options for the system directories the driver adds before the
-    /// command line's options or, for `after_options`, after them. `cl`
-    /// searches `%INCLUDE%` first. clang-cl's driver adds its own after its
-    /// resource headers, in its order: the `/imsvc` directories, those of
-    /// the `/external:env:` variables, and `%INCLUDE%`'s unless `/X` is
-    /// given, which leaves the others
-    /// (`MSVCToolChain::AddClangSystemIncludeArgs`). The command line's
-    /// `/I` and `/external:I` directories come before them all, so a header
-    /// found here is a system header, whose warnings clang-cl does not show.
-    fn system_directories(&mut self, after_options: bool) -> Vec<OsString> {
-        let (option, directories) = match (self.clang_cl, after_options) {
-            | (false, false) => ("--isystem", self.include_variable()),
-            | (true, true) => {
-                let mut directories = std::mem::take(&mut self.imsvc);
-                directories.append(&mut self.external_env);
-                directories.extend(self.include_variable());
-                ("--idirafter", directories)
-            },
-            | _ => return Vec::new(),
-        };
+    /// command line's options: clang-cl's `/imsvc` directories, then those
+    /// of `%INCLUDE%` unless `/X` leaves them out, both ahead of bcc's
+    /// built-in headers. clang-cl's driver adds them after its resource
+    /// headers instead (`MSVCToolChain::AddClangSystemIncludeArgs`), but
+    /// bcc's intrinsic headers do not yet coexist with the MSVC headers,
+    /// which include `<intrin.h>` (driver-modes.md, "clang-cl"). The command
+    /// line's `/I` directories are still searched first, so a header found
+    /// here is a system header, whose warnings are not shown.
+    fn system_directories(&mut self) -> Vec<OsString> {
+        let mut directories = std::mem::take(&mut self.imsvc);
+        if !self.ignore_include_variable
+            && let Some(include) = std::env::var_os("INCLUDE")
+        {
+            directories.extend(
+                std::env::split_paths(&include)
+                    .filter(|directory| !directory.as_os_str().is_empty())
+                    .map(PathBuf::into_os_string),
+            );
+        }
         directories
             .into_iter()
-            .flat_map(|directory| [option.into(), directory])
+            .flat_map(|directory| ["--isystem".into(), directory])
             .collect()
     }
 
@@ -1493,21 +1472,13 @@ impl State {
                         format_args!("invalid numeric argument '/{option}'"),
                     );
                 } else if let Some(variable) = option.strip_prefix("external:env:") {
-                    // The directories in VARIABLE are system directories,
-                    // which clang-cl searches after its `/imsvc` ones
-                    // ([`Self::system_directories`]).
+                    // The directories in VARIABLE are system directories.
                     for directory in std::env::var_os(variable)
                         .map_or_default(|value| std::env::split_paths(&value).collect::<Vec<_>>())
                     {
-                        if directory.as_os_str().is_empty() {
-                            continue;
-                        }
-                        let directory = directory.into_os_string();
-                        if self.clang_cl {
-                            self.external_env.push(directory);
-                        } else {
+                        if !directory.as_os_str().is_empty() {
                             self.bcc.push("-isystem".into());
-                            self.bcc.push(directory);
+                            self.bcc.push(directory.into_os_string());
                         }
                     }
                 } else if option.starts_with("RTC") && option != "RTC-" {

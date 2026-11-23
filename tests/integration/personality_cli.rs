@@ -11492,13 +11492,14 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
     }
 
     /// clang-cl's `/imsvc DIR` (also `-imsvc` and joined), which `CMake` gives
-    /// it for a `SYSTEM` include directory, is a system directory its
-    /// driver adds after the resource headers: after `/I` and `/external:I`,
-    /// before the `/external:env:` variables' directories and `%INCLUDE%`,
-    /// which clang-cl searches there too, and kept under `/X`. A header
-    /// found there draws no warnings and is listed by `/showIncludes`.
+    /// it for a `SYSTEM` include directory, is a system directory searched
+    /// after `/I` and just before `%INCLUDE%`, ahead of the `/external:I`
+    /// and `/external:env:` directories, and kept under `/X`. bcc keeps
+    /// `%INCLUDE%` ahead of its built-in headers, unlike clang-cl's driver,
+    /// whose order its intrinsic headers do not yet support. A header found
+    /// there draws no warnings and is listed by `/showIncludes`.
     #[test]
-    fn clang_cl_imsvc_directories_follow_its_driver() {
+    fn clang_cl_imsvc_directories_precede_the_include_variable() {
         let directory = Directory::new();
         for name in ["i", "ext", "m1", "m2", "env", "ev"] {
             std::fs::create_dir(directory.path(name)).unwrap();
@@ -11537,7 +11538,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
                         "/external:I",
                         "ext",
                     ][..],
-                    "i ext m1 m2 ev env",
+                    "i m1 m2 env ev ext",
                 ),
                 (&["/imsvc", "m1", "-imsvcm2"], "m1 m2 env"),
                 (&["/X", "-imsvc", "m1", "/external:env:FOO"], "m1 ev"),
