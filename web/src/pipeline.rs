@@ -742,13 +742,21 @@ impl Stage {
             | Self::Asm =>
                 "Decided here: which instruction carries out each operation, which register holds \
                  each value, and how the stack frame is laid out. bcc's own native back end does \
-                 this. Arguments arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
+                 this. The syntax is AT&T's, which GCC and Clang print by default: % marks a \
+                 register, $ a constant, and a register in parentheses the memory at the address \
+                 it holds, and the destination comes last, so addl $1, %eax adds 1 to eax. The \
+                 instruction's last letter gives the size: b, w, l and q for 8, 16, 32 and 64 \
+                 bits. Arguments arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
                  starting with a dot are directives for the assembler, not instructions.",
             | Self::MachineCode =>
-                "Decided here: each instruction's exact encoding and length. The left column is \
-                 the instruction's offset from the start of its function, then its encoding, both \
-                 in hexadecimal. x86-64 instructions vary from 1 to 15 bytes long. Calls to other \
-                 functions show zero bytes where the linker will later fill in the address.",
+                "Decided here: each instruction's exact encoding and length. Each line is the \
+                 instruction's offset from the start of its function, then its encoding, both in \
+                 hexadecimal, then the assembly it encodes. x86-64 instructions vary from 1 to 15 \
+                 bytes long. A jump to a label in the same function is complete: its last bytes \
+                 are the distance to the label, counted from the end of the jump. A call to \
+                 another function, and the address of data such as a string literal (.str) or a \
+                 floating constant (.LCPI0_0), show zero bytes where the linker will later fill in \
+                 the address. Where the offsets skip, the assembler padded to align the next label.",
         }
     }
 
