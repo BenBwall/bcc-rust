@@ -832,6 +832,29 @@ warning option is passed to bcc, which warns as Clang does. `-Xclang OPTION`
 is refused: bcc has no Clang frontend options, and Clang's can change the
 program.
 
+Clang also takes options `--autocomplete` does not list, frozen from the
+pinned Clang's `Options.td` in `options/clang-ignored.list` and classified
+by asking that Clang. The GCC optimization flags of its
+`clang_ignored_gcc_optimization_f_Group` (`-fno-ipa-cp`,
+`-fexpensive-optimizations`, `-fno-vect-cost-model`, `-finline-limit=N`)
+draw `clang: warning: optimization flag '-fgcse' is not supported
+[-Wignored-optimization-argument]`, and its retired flags (`-mmpx`,
+`-fslp-vectorize-aggressive`) `clang: warning: the flag '-mmpx' has been
+deprecated and will be ignored [-Wunused-command-line-argument]`; both are
+ignored. Clang gives these warnings as it builds the job for each source its
+compiler takes, so once per C source or `.S` file, and none for a link or a
+`.s` file; they come after the errors about unknown options and missing
+inputs. They follow the warning options as Clang's driver warnings do: `-w`
+or `-Wno-GROUP` silences them, and `-Werror` makes them errors (exit status
+1) unless `-Wno-error=GROUP` exempts them. The options of its ignored `-f`
+and `-m` groups (`-finline`, `-fno-var-tracking`, `-frandom-seed=`,
+`-mieee-fp`, `-Wlarger-than=`) are ignored without a word, and an alias
+`Options.td` defines without a name of its own (`-ftree-vectorize` for
+`-fvectorize`, `-fno-tree-slp-vectorize`) is read as the option it stands
+for. The zig and Intel personalities inherit this, and clang-cl's driver
+ignores all of them as unknown arguments (`unknown argument ignored in
+clang-cl`).
+
 **Inputs and stages.** Clang's driver checks every input file before it
 runs anything: each missing one is `clang: error: no such file or
 directory: 'missing.c'`, followed by `clang: error: no input files` when
