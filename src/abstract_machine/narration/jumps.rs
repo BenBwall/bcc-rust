@@ -425,15 +425,20 @@ impl Machine {
     /// Reaching the declaration of `name` again, after a goto jumped back
     /// over it while its block went on: the same object, which now holds
     /// `before`, gets its initializer's value again or an indeterminate
-    /// value (C99 §6.2.4p5).
+    /// value (C99 §6.2.4p5). `lost` says an earlier pass over the
+    /// declaration already made a value stored in it indeterminate.
     pub(in crate::abstract_machine) fn declared_again(
         &self,
         mut event: Event,
         name: &str,
         before: &Value,
-        initialized: bool,
+        (initialized, lost): (bool, bool),
     ) -> Event {
         let held = match before {
+            | Value::Indeterminate if lost => String::from(
+                "it held no value: the value stored in it earlier became indeterminate when \
+                 execution last reached this declaration",
+            ),
             | Value::Indeterminate => String::from("it held no value yet"),
             | Value::Array(_) | Value::Struct { .. } =>
                 String::from("it held what was stored in it"),
@@ -443,6 +448,12 @@ impl Machine {
             (
                 "its initializer stores a value again",
                 "so its initializer runs again and replaces what it held",
+            )
+        } else if lost && *before == Value::Indeterminate {
+            (
+                "with no initializer its value becomes indeterminate again",
+                "and without one it stores an indeterminate value each time, so it still holds \
+                 none",
             )
         } else {
             (

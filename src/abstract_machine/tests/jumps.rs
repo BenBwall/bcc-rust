@@ -472,6 +472,99 @@ fn a_goto_back_over_a_declaration_reaches_it_again() {
     }
 }
 
+// C99 §6.8p3: each pass over a declaration without an initializer makes
+// its object's value indeterminate again, so a value stored on any earlier
+// pass stays lost, over further passes, until something is stored there.
+// A copy's indeterminate member is the copy's (C99 §6.2.6.1p6).
+#[test]
+fn a_value_a_declaration_made_indeterminate_stays_lost_until_a_store() {
+    // A store, then two jumps back.
+    let states = stepped(
+        "int main(void) {\n    int n = 0;\nagain:;\n    int k;\n    if (n == 2) return k;\n    if \
+         (n == 0) k = 4;\n    n++;\n    goto again;\n}\n",
+    );
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "error");
+    assert!(
+        last.diagnostics[0].message.starts_with(
+            "a value was stored in `k` earlier, but execution then reached the declaration of `k` \
+             on line 4 again"
+        ),
+        "{}",
+        last.diagnostics[0].message
+    );
+    assert!(
+        !last.event.summary.contains("never set"),
+        "{}",
+        last.event.summary
+    );
+    assert_eq!(last.event.clauses[0].id, "6.8p3");
+    let passes: Vec<&State> = states
+        .iter()
+        .filter(|state| {
+            state.event.kind == EventKind::Declare
+                && state
+                    .event
+                    .summary
+                    .starts_with("A goto went back over this declaration")
+        })
+        .collect();
+    assert_eq!(passes.len(), 2);
+    assert!(passes[0].event.explanation.contains("it held 4"));
+    let third = &passes[1].event.explanation;
+    assert!(
+        third.contains(
+            "it held no value: the value stored in it earlier became indeterminate when execution \
+             last reached this declaration"
+        ),
+        "{third}"
+    );
+    assert!(third.contains("so it still holds none"), "{third}");
+    assert!(!third.contains("no value yet"), "{third}");
+    // A store, a jump back, a new store, a jump back: the second store is
+    // lost too, and a store after the last pass is read back.
+    let last = stopped(
+        "int main(void) {\n    int n = 0;\nagain:;\n    int k;\n    if (n == 2) return k;\n    k \
+         = n + 4;\n    n++;\n    goto again;\n}\n",
+        "error",
+    );
+    assert!(
+        last.diagnostics[0]
+            .message
+            .starts_with("a value was stored in `k` earlier"),
+        "{}",
+        last.diagnostics[0].message
+    );
+    assert_eq!(last.event.clauses[0].id, "6.8p3");
+    finished(
+        "int main(void) {\n    int n = 0;\nagain:;\n    int k;\n    if (n == 0) k = 4;\n    if (n \
+         == 2) {\n        k = 9;\n        return k;\n    }\n    n++;\n    goto again;\n}\n",
+        9,
+    );
+    // A structure reached again, then assigned a copy whose member was
+    // never set: the read of that member is of a value never set, since the
+    // copy stored it after the declaration.
+    let last = stopped(
+        "struct S { int a; int b; };\nint main(void) {\n    int n = 0;\nagain:;\n    struct S \
+         s;\n    struct S t;\n    if (n == 1) {\n        t.b = 1;\n        s = t;\n        return \
+         s.a;\n    }\n    s.a = 3;\n    n++;\n    goto again;\n}\n",
+        "error",
+    );
+    assert!(
+        last.diagnostics[0]
+            .message
+            .starts_with("nothing has been stored in `s.a` yet"),
+        "{}",
+        last.diagnostics[0].message
+    );
+    assert!(
+        last.event.summary.contains("never set"),
+        "{}",
+        last.event.summary
+    );
+    assert_ne!(last.event.clauses[0].id, "6.8p3");
+}
+
 // C99 §6.8.1p1, §6.8.6.3p1: a label must label a statement. `break;` is
 // suggested only after a case label, inside a switch; elsewhere it could be
 // a constraint violation itself.

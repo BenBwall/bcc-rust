@@ -328,8 +328,7 @@ impl Machine {
     /// declaration again: without an initializer, that declaration stored
     /// an indeterminate value once more (C99 §6.8p3).
     fn forgotten_read(&self, target: usize, offset: i32, index: usize) -> Option<Diagnostic> {
-        let (_, before) = self.forgotten.iter().find(|&&(id, _)| id == target)?;
-        if layout::leaf(before, index)? == &Value::Indeterminate {
+        if !self.forgotten.contains(&(target, index)) {
             return None;
         }
         let at = match self.metadata[target - 1].line {
@@ -399,12 +398,17 @@ impl Machine {
         if let Value::Struct { .. } = value {
             let mut leaves = Vec::new();
             layout::flatten(&value, &mut leaves);
+            let stored = index..index + leaves.len();
             let object = &mut self.state.objects[target - 1].value;
             for (at, leaf) in leaves.into_iter().enumerate() {
                 if let Some(slot) = layout::leaf_mut(object, index + at) {
                     *slot = leaf;
                 }
             }
+            // An indeterminate member the copy stored is the copy's, not
+            // the declaration's (C99 §6.2.6.1p6).
+            self.forgotten
+                .retain(|&(id, leaf)| id != target || !stored.contains(&leaf));
             return Ok(value);
         }
         let ty = self.leaf_type(target, offset);
@@ -430,6 +434,7 @@ impl Machine {
         if let Some(slot) = layout::leaf_mut(&mut self.state.objects[target - 1].value, index) {
             *slot = value.clone();
         }
+        self.forgotten.retain(|&entry| entry != (target, index));
         Ok(value)
     }
 

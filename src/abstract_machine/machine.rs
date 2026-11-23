@@ -17,6 +17,7 @@ use super::{
         Floating,
         Real,
     },
+    layout,
     model::{
         Alias,
         Arithmetic,
@@ -59,11 +60,13 @@ pub(super) struct Machine {
     pub next_frame:   usize,
     pub cells:        usize,
     pub metadata:     Vec<ObjectMetadata>,
-    /// The objects whose declarations, reached again without an
-    /// initializer, made their values indeterminate once more (C99
-    /// §6.8p3), each with what it held before: kept apart from the
-    /// metadata, which every retained step copies for every object.
-    pub forgotten:    Vec<(usize, Value)>,
+    /// The leaves, as (object, leaf index), that held a stored value
+    /// until a declaration of their object without an initializer, reached
+    /// again, made them indeterminate once more (C99 §6.8p3). An entry
+    /// outlasts further passes over the declaration, and a store into its
+    /// leaf drops it. Kept apart from the metadata, which every retained
+    /// step copies for every object.
+    pub forgotten:    Vec<(usize, usize)>,
     /// The program's structure types, for layouts and member names.
     pub structures:   Arc<[Structure]>,
     /// The program's function types, for spelling pointers to functions.
@@ -729,17 +732,30 @@ impl Machine {
         // initializer (C99 §6.2.4p5, §6.8p3).
         let again = std::mem::replace(&mut self.metadata[id - 1].reached, true);
         let before = self.state.objects[id - 1].value.clone();
-        if !initialized {
+        // Whether an earlier pass already made a stored value indeterminate.
+        let lost = self.forgotten.iter().any(|&(object, _)| object == id);
+        if initialized {
+            // The initializer stores every leaf (C99 §6.7.8p10, p21).
+            self.forgotten.retain(|&(object, _)| object != id);
+        } else {
             self.state.objects[id - 1].value = ty.indeterminate(&self.structures);
-        }
-        self.forgotten.retain(|&(object, _)| object != id);
-        if again && !initialized {
-            self.forgotten.push((id, before.clone()));
+            if again {
+                // Every leaf that holds a value now loses it; a leaf that
+                // is indeterminate already keeps the entry an earlier pass
+                // gave it, since no store has dropped it since.
+                let mut leaves = Vec::new();
+                layout::flatten(&before, &mut leaves);
+                for (leaf, value) in leaves.iter().enumerate() {
+                    if *value != Value::Indeterminate {
+                        self.forgotten.push((id, leaf));
+                    }
+                }
+            }
         }
         let event = self.declare(range, id, ty, (initialized, named));
         Ok(if again {
             let name = self.state.objects[id - 1].name.clone();
-            self.declared_again(event, &name, &before, initialized)
+            self.declared_again(event, &name, &before, (initialized, lost))
         } else {
             event
         })
@@ -1908,10 +1924,7 @@ impl Machine {
             + self.state.objects.capacity() * size_of::<super::Object>()
             + self.activations.capacity() * size_of::<Activation>()
             + self.state.frames.capacity() * size_of::<Frame>()
-            + self.forgotten.capacity() * size_of::<(usize, Value)>();
-        for (_, value) in &self.forgotten {
-            bytes += value_bytes(value);
-        }
+            + self.forgotten.capacity() * size_of::<(usize, usize)>();
         for object in &self.state.objects {
             bytes += object.name.capacity()
                 + object.r#type.capacity()
