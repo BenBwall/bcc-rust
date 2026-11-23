@@ -24,7 +24,9 @@
 //!
 //! The options Clang's own driver takes besides its `-W`, `-f` and `-m`
 //! flags, and those whose bare name takes the next arguments as values,
-//! are frozen from the pinned Clang in `options/clang-driver.list`.
+//! are frozen from the pinned Clang in `options/clang-driver.list`, with
+//! the ones clang-cl shows bare and the ones it calls unused in a step that
+//! only compiles.
 
 /// Which compiler's names to look in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -267,8 +269,8 @@ pub(super) fn cl_unknown_option(argument: &str, intel: bool) -> Option<ClUnknown
 }
 
 /// How Clang's own driver reads an argument that starts with `-`, as its
-/// option table (LLVM's `OptTable`) matches it with every Clang option
-/// visible, which is how clang-cl reads its `/clang:` options.
+/// option table (LLVM's `OptTable`) matches it, which is how clang-cl reads
+/// its `/clang:` options and the Clang options its mode shows bare.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ClangOption {
     /// The argument is the whole option: a flag, or an option with its
@@ -279,35 +281,134 @@ pub(super) enum ClangOption {
     TakesNext(usize),
 }
 
+/// Which of Clang's options clang-cl's driver sees: every one after
+/// `/clang:`, and bare only those its mode shows (`Options.td`'s
+/// `CLOption` and `CoreOption`), ignoring the rest as unknown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClangVisibility {
+    All,
+    ClangCl,
+}
+
 /// How the pinned Clang's driver reads `argument`, one that starts with
-/// `-`, or `None` if it takes no such option and so ignores it with
-/// clang-cl's warning `unknown argument ignored in clang-cl`. Its front end
-/// reads every `-W` option, warning about those it does not know; the `-f`
-/// and `-m` flags are the ones [`knows`] names. The bare name of an option
-/// with separate values takes them even where the option also joins one
-/// (`-o`, `-D`); an entry that joins a value matches any argument it
-/// begins.
-pub(super) fn clang_option(argument: &str) -> Option<ClangOption> {
+/// `-`, among the options `visibility` shows, or `None` if it takes no such
+/// option and so ignores it with clang-cl's warning `unknown argument
+/// ignored in clang-cl`. Its front end reads every `-W` option, warning
+/// about those it does not know; the `-f` and `-m` flags are the ones
+/// [`knows`] names. The bare name of an option with separate values takes
+/// them even where the option also joins one (`-o`, `-D`); an entry that
+/// joins a value matches any argument it begins.
+pub(super) fn clang_option(argument: &str, visibility: ClangVisibility) -> Option<ClangOption> {
     let mut known = argument.starts_with("-W") || knows(Compiler::Clang, argument);
-    for line in include_str!("options/clang-driver.list")
-        .lines()
-        .filter(|line| !line.starts_with('#'))
+    for entry in
+        clang_driver_entries().filter(|entry| visibility == ClangVisibility::All || entry.clang_cl)
     {
-        let mut words = line.split(' ');
-        let (Some(kind), Some(name)) = (words.next(), words.next()) else {
-            continue;
-        };
-        match kind {
-            | "separate" if name == argument => {
-                let count = words.next().and_then(|count| count.parse().ok());
-                return Some(ClangOption::TakesNext(count.unwrap_or(1)));
-            },
-            | "flag" => known |= name == argument,
-            | "joined" => known |= argument.starts_with(name),
-            | _ => {},
+        match entry.kind {
+            | ClangKind::Separate(count) if entry.name == argument =>
+                return Some(ClangOption::TakesNext(count)),
+            | ClangKind::Flag => known |= entry.name == argument,
+            | ClangKind::Joined => known |= argument.starts_with(entry.name),
+            | ClangKind::Separate(_) => {},
         }
     }
     known.then_some(ClangOption::Whole)
+}
+
+/// The option of the pinned Clang's table that `argument` spells, and the
+/// value it joins, as its option table matches it: the longest name that
+/// is the argument (a flag) or begins it (an option that joins its value,
+/// `-include` in `-includeinc.h`, `-std=` in `-std=c11`). `None` for an
+/// argument the table names in no such entry, as the `-W`, `-f` and `-m`
+/// flags, which it does not list. A listed name that goes on after its `=`
+/// (GCC's `-std=c11`) is a value of the shorter option (`-std=`).
+pub(super) fn clang_spelling(argument: &str) -> Option<(&'static str, Option<&str>)> {
+    clang_driver_entries()
+        .filter(|entry| match entry.kind {
+            | ClangKind::Flag => entry.name == argument,
+            | ClangKind::Joined =>
+                argument.starts_with(entry.name)
+                    && entry
+                        .name
+                        .find('=')
+                        .is_none_or(|equals| equals + 1 == entry.name.len()),
+            | ClangKind::Separate(_) => false,
+        })
+        .max_by_key(|entry| (entry.name.len(), entry.kind == ClangKind::Flag))
+        .map(|entry| match entry.kind {
+            | ClangKind::Joined => (entry.name, Some(&argument[entry.name.len()..])),
+            | _ => (entry.name, None),
+        })
+}
+
+/// Whether clang-cl warns `argument unused during compilation` about
+/// `words`, a Clang option and the values its bare name takes, given after
+/// `/clang:` to a step that only compiles (`-shared`, `-sectcreate a b c`),
+/// as the pinned Clang's table records.
+pub(super) fn clang_unused(words: &[&str]) -> bool {
+    let [argument, values @ ..] = words else {
+        return false;
+    };
+    if values.is_empty() {
+        return clang_spelling(argument).is_some_and(|(name, joined)| {
+            clang_driver_entries().any(|entry| {
+                entry.name == name
+                    && entry.unused
+                    && (entry.kind == ClangKind::Joined) == joined.is_some()
+            })
+        });
+    }
+    clang_driver_entries().any(|entry| {
+        entry.name == *argument && entry.kind == ClangKind::Separate(values.len()) && entry.unused
+    })
+}
+
+/// How an entry of `options/clang-driver.list` takes its value.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ClangKind {
+    Flag,
+    Joined,
+    Separate(usize),
+}
+
+/// An entry of `options/clang-driver.list`: `KIND NAME [COUNT] [cl]
+/// [unused]`, the last two the tags `scripts/update_driver_options.py`
+/// gives an option clang-cl shows bare and one it calls unused in a step
+/// that only compiles.
+struct ClangEntry {
+    kind:     ClangKind,
+    name:     &'static str,
+    clang_cl: bool,
+    unused:   bool,
+}
+
+fn clang_driver_entries() -> impl Iterator<Item = ClangEntry> {
+    include_str!("options/clang-driver.list")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut words = line.split(' ');
+            let kind = words.next()?;
+            let name = words.next()?;
+            let mut entry = ClangEntry {
+                kind: match kind {
+                    | "flag" => ClangKind::Flag,
+                    | "joined" => ClangKind::Joined,
+                    | "separate" => ClangKind::Separate(1),
+                    | _ => return None,
+                },
+                name,
+                clang_cl: false,
+                unused: false,
+            };
+            for word in words {
+                match word {
+                    | "cl" => entry.clang_cl = true,
+                    | "unused" => entry.unused = true,
+                    | count => entry.kind = ClangKind::Separate(count.parse().ok()?),
+                }
+            }
+            Some(entry)
+        })
 }
 
 /// The Levenshtein distance between `a` and `b`, in bytes, as LLVM's
@@ -460,7 +561,67 @@ mod tests {
             ("-cfoo", None),
             ("-Xclangx", None),
         ] {
-            assert_eq!(clang_option(argument), read, "{argument}");
+            assert_eq!(
+                clang_option(argument, ClangVisibility::All),
+                read,
+                "{argument}"
+            );
+        }
+    }
+
+    /// Bare, clang-cl sees only the Clang options its mode shows: it takes
+    /// `-Xclang`'s value from the next argument, and ignores `-specs`,
+    /// `-sectcreate` and `--config` as unknown, which then take none.
+    #[test]
+    fn clang_cl_sees_only_its_modes_options_bare() {
+        for (argument, read) in [
+            ("-Xclang", Some(ClangOption::TakesNext(1))),
+            ("-mllvm", Some(ClangOption::TakesNext(1))),
+            ("-o", Some(ClangOption::TakesNext(1))),
+            ("-specs", None),
+            ("-sectcreate", None),
+            ("--config", None),
+            ("-include", None),
+            ("-H", Some(ClangOption::Whole)),
+            ("-ffreestanding", Some(ClangOption::Whole)),
+        ] {
+            assert_eq!(
+                clang_option(argument, ClangVisibility::ClangCl),
+                read,
+                "{argument}"
+            );
+        }
+    }
+
+    #[test]
+    fn clang_spells_an_option_and_its_joined_value_as_its_table_does() {
+        for (argument, spelling) in [
+            ("-includeinc.h", Some(("-include", Some("inc.h")))),
+            ("-include-pchx", Some(("-include-pch", Some("x")))),
+            ("-std=c11", Some(("-std=", Some("c11")))),
+            ("-O2", Some(("-O", Some("2")))),
+            ("-static-libgcc", Some(("-static-libgcc", None))),
+            ("-shared", Some(("-shared", None))),
+            ("-ffreestanding", None),
+        ] {
+            assert_eq!(clang_spelling(argument), spelling, "{argument}");
+        }
+    }
+
+    /// clang-cl calls a linker option unused in a step that only compiles.
+    #[test]
+    fn clang_cl_calls_linker_options_unused_beside_c() {
+        for (words, unused) in [
+            (&["-sectcreate", "a", "b", "c"][..], true),
+            (&["-whatsloaded"], true),
+            (&["-specs=x"], true),
+            (&["-shared"], true),
+            (&["-D", "X"], false),
+            (&["-imacros", "x"], false),
+            (&["-isysroot", "x"], false),
+            (&["-ffreestanding"], false),
+        ] {
+            assert_eq!(clang_unused(words), unused, "{words:?}");
         }
     }
 

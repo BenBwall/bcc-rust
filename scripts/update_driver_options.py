@@ -349,9 +349,13 @@ def clang_driver_options(gcc, options_td):
     name: a `flag` is the name alone, a `joined` option takes text after its
     name, and `separate N` names one whose bare name takes the next N
     arguments as its values, which the `-f` and `-m` options among them are
-    listed for too. An option that is both is listed twice. The candidates
-    are `--autocomplete=-`, which leaves out the aliases (`-target`), the
-    spellings in `Options.td` and GCC's options."""
+    listed for too. An option that is both is listed twice. A line ends in
+    `cl` where clang-cl's driver also takes the option bare, outside
+    `/clang:`, as its mode shows it, and does not ignore it as unknown, and
+    in `unused` where clang-cl warns that the option, given after `/clang:`
+    to a step that only compiles (`/c`), is unused during compilation. The
+    candidates are `--autocomplete=-`, which leaves out the aliases
+    (`-target`), the spellings in `Options.td` and GCC's options."""
     import concurrent.futures
     import tempfile
 
@@ -386,22 +390,40 @@ def clang_driver_options(gcc, options_td):
             refused = (f"unknown argument: '{argument}'", f"unknown argument '{argument}';")
             return any(text in result.stderr for text in refused), result.stderr
 
+        def cl_tags(line):
+            kind, name, *count = line.split(" ")
+            argument = f"{name}Zq" if kind == "joined" else name
+            ignored, _ = unknown_to_cl([str(CLANG), "--driver-mode=cl"], directory, argument)
+            if not ignored:
+                line += " cl"
+            words = [argument] + ["x"] * int(count[0] if count else 0)
+            result = subprocess.run(
+                [str(CLANG), "--driver-mode=cl", "-###", "/c", str(directory / "a.c")]
+                + [f"/clang:{word}" for word in words],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                timeout=60,
+            )
+            if f"argument unused during compilation: '{' '.join(words)}'" in result.stderr:
+                line += " unused"
+            return line
+
         def survey(name):
             refused, stderr = unknown(name)
             lines = []
             for match in MISSING_VALUE.finditer(stderr):
                 if match.group("name") == name:
                     lines.append(f"separate {name} {match.group('count')}")
-            if name.startswith(("-f", "-m")):
-                return lines
-            if not lines and not refused:
-                lines.append(f"flag {name}")
-            if not refused or lines:
-                joined, _ = unknown(f"{name}Zq")
-                if not joined:
-                    lines = [line for line in lines if not line.startswith("flag ")]
-                    lines.append(f"joined {name}")
-            return lines
+            if not name.startswith(("-f", "-m")):
+                if not lines and not refused:
+                    lines.append(f"flag {name}")
+                if not refused or lines:
+                    joined, _ = unknown(f"{name}Zq")
+                    if not joined:
+                        lines = [line for line in lines if not line.startswith("flag ")]
+                        lines.append(f"joined {name}")
+            return [cl_tags(line) for line in lines]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(survey, names))

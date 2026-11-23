@@ -63,6 +63,7 @@ use super::{
         ClOption,
         ClangIgnored,
         ClangOption,
+        ClangVisibility,
     },
     unimplemented::{
         Treatment,
@@ -73,9 +74,7 @@ use super::{
 use crate::{
     backend::llvm::operand,
     cli::{
-        OptionReading,
         arguments::implements_language_option,
-        read_options,
         warning_options,
     },
     target::{
@@ -1735,7 +1734,7 @@ impl State {
         let mut options = Vec::new();
         let mut rest = arguments;
         while let Some((&argument, after)) = rest.split_first() {
-            let count = match known::clang_option(argument) {
+            let count = match known::clang_option(argument, ClangVisibility::All) {
                 | Some(ClangOption::TakesNext(count)) => count,
                 | _ => 0,
             };
@@ -1769,7 +1768,7 @@ impl State {
                 }
                 continue;
             }
-            if known::clang_option(text).is_none() {
+            if known::clang_option(text, ClangVisibility::All).is_none() {
                 // Clang's option table suggests a near option as clang-cl's
                 // does (`-fbuiltin-`; did you mean `-fbuiltin`?).
                 let unknown = known::cl_unknown_option(text, false)
@@ -1787,8 +1786,9 @@ impl State {
     /// Reads `text`, a Clang option clang-cl takes bare, with the values its
     /// bare name takes from the next `arguments`, into bcc's options
     /// ([`State::clang_option`]); refuses one left without them, and ignores
-    /// one neither clang-cl nor bcc knows with its warning at `severity`.
-    /// Returns whether a fatal error stopped the command line.
+    /// one clang-cl's mode does not show (`-specs`, `--config`), which takes
+    /// no values then, with its warning at `severity`. Returns whether a
+    /// fatal error stopped the command line.
     fn bare_clang_option<'a>(
         &mut self,
         invocation: &Invocation,
@@ -1798,17 +1798,19 @@ impl State {
         x86_options: &mut Vec<&'a str>,
     ) -> bool {
         let mut words = vec![text];
-        if let Some(ClangOption::TakesNext(count)) = known::clang_option(text) {
-            words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
-            if words.len() <= count {
-                self.missing_values(invocation, text, count);
-                return false;
-            }
-        } else if known::clang_option(text).is_none()
-            && read_options(&[text], "-c") == OptionReading::Refused
-        {
-            let unknown = known::ClUnknown { nearest: None };
-            return self.unknown_argument(invocation, severity, text, &unknown);
+        match known::clang_option(text, ClangVisibility::ClangCl) {
+            | Some(ClangOption::TakesNext(count)) => {
+                words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
+                if words.len() <= count {
+                    self.missing_values(invocation, text, count);
+                    return false;
+                }
+            },
+            | Some(ClangOption::Whole) => {},
+            | None => {
+                let unknown = known::ClUnknown { nearest: None };
+                return self.unknown_argument(invocation, severity, text, &unknown);
+            },
         }
         let mut bcc = std::mem::take(&mut self.bcc);
         self.clang_option(invocation, &words, false, x86_options, &mut bcc);
@@ -1820,12 +1822,12 @@ impl State {
     /// (`given`) after `/clang:`, into `out`. `-fsyntax-only` is `/Zs`,
     /// `-c` and `-E` are `/c` and `/E`, `-###` prints the version, and the
     /// warning options go to bcc's front end ([`front_end_option`]).
-    /// bcc reads any other option its own command line takes beside the
-    /// step's stage ([`read_options`]), except a bare `-f` or `-m` option
-    /// it does not implement; it drops one the stage leaves unused, and
-    /// treats the rest as its Clang personality treats an option it does
-    /// not implement, so none reaches bcc's command line, which would
-    /// refuse it.
+    /// bcc reads any other option it implements as Clang does
+    /// ([`bcc_reading`]), except a bare `-f` or `-m` option it does not
+    /// implement; it drops one the step leaves unused, with clang-cl's
+    /// warning where clang-cl gives one, and treats the rest as its Clang
+    /// personality treats an option it does not implement, so none reaches
+    /// bcc's command line unread.
     fn clang_option<'a>(
         &mut self,
         invocation: &Invocation,
@@ -1871,38 +1873,38 @@ impl State {
             }
         }
         let flag = words.len() == 1 && (text.starts_with("-f") || text.starts_with("-m"));
-        let stage = if self.preprocess.is_some() {
-            "-E"
-        } else {
-            "-c"
-        };
         let reading = if flag && !given {
             if implements_language_option(text) {
-                OptionReading::Read
+                BccReading::Read
             } else {
-                OptionReading::Refused
+                BccReading::Refused
             }
         } else {
-            read_options(words, stage)
+            bcc_reading(words, self.preprocess.is_some())
         };
         let shown = words.join(" ");
         match reading {
-            | OptionReading::Read => {
-                out.extend(words.iter().copied().map(OsString::from));
+            | BccReading::Read => {
+                // bcc's command line takes `-include`'s value apart.
+                match known::clang_spelling(text) {
+                    | Some(("-include", Some(file))) if words.len() == 1 && !file.is_empty() =>
+                        out.extend(["-include", file].map(OsString::from)),
+                    | _ => out.extend(words.iter().copied().map(OsString::from)),
+                }
                 return;
             },
             // Clang's driver warns about an option no job it runs reads
             // (`-shared` without a link), and says nothing of one its
             // compiler takes and ignores (`-dM` without `-E`).
-            | OptionReading::Conflicts => {
+            | BccReading::Unused => {
                 invocation.warning(format_args!(
                     "argument unused during compilation: '{shown}' \
                      [-Wunused-command-line-argument]"
                 ));
                 return;
             },
-            | OptionReading::Inert => return,
-            | OptionReading::Refused => {},
+            | BccReading::Inert => return,
+            | BccReading::Refused => {},
         }
         match treatment(text, crate::target::Target::WindowsMsvc) {
             // This target is x86-64, so an x86 option is never for the
@@ -1929,6 +1931,167 @@ impl State {
             format_args!("argument to '{option}' is missing (expected {count} value{plural})"),
         );
     }
+}
+
+/// How bcc's own command line takes a Clang option clang-cl hands it
+/// ([`bcc_reading`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BccReading {
+    /// bcc reads it, as Clang does.
+    Read,
+    /// clang-cl's driver warns that it is unused in the step (`-shared`
+    /// beside `/c`); bcc warns as it does and drops it.
+    Unused,
+    /// It does nothing in the step, and clang-cl says nothing of it (`-dM`
+    /// without `-E`, `-save-temps`).
+    Inert,
+    /// bcc does not implement it.
+    Refused,
+}
+
+/// How bcc's own command line takes `words`, a Clang option and the values
+/// its bare name takes, in a step that preprocesses (`preprocess`) or
+/// compiles, by the name Clang's option table gives it, so that its value
+/// is the same joined (`-includeinc.h`, `-isysrootdir`) or separate. bcc
+/// reads the options it implements as Clang does: the preprocessor's
+/// (`-D`, `-I`, `-include`, `-isystem`, the dependency options), the
+/// language, output, debug and optimization options, and its linker
+/// options. `-dM` and `-P` do nothing without `-E`, `-MG` without `-M`, and
+/// `-iprefix` without the `-iwithprefix` that uses it, which bcc refuses;
+/// `-save-temps` and `-save-stats` change no program. clang-cl calls the
+/// linker options it does not use unused (`-sectcreate a b c`, as the
+/// pinned Clang's table records), and bcc refuses the rest as its Clang
+/// personality refuses an option it does not implement (`-imacros`,
+/// `-isysroot`, `-working-directory`), never reading them as anything else.
+fn bcc_reading(words: &[&str], preprocess: bool) -> BccReading {
+    use BccReading::{
+        Inert,
+        Read,
+        Refused,
+        Unused,
+    };
+    let Some((&text, values)) = words.split_first() else {
+        return Refused;
+    };
+    // The options whose value bcc's command line checks.
+    let valid = |valid: bool| if valid { Read } else { Refused };
+    if values.is_empty() {
+        if let Some(level) = text.strip_prefix("-O") {
+            let digits = level.strip_prefix('-').unwrap_or(level);
+            return valid(
+                matches!(level, "" | "s" | "z" | "g")
+                    || (!digits.is_empty()
+                        && digits.bytes().all(|byte| byte.is_ascii_digit())
+                        && level.parse::<i32>().is_ok()),
+            );
+        }
+        if let Some(model) = text.strip_prefix("-ftls-model=") {
+            return valid(crate::target::TlsModel::parse(model).is_some());
+        }
+        if let Some(format) = text.strip_prefix("-fdiagnostics-format=") {
+            return valid(
+                <crate::cli::arguments::Format as clap::ValueEnum>::from_str(format, false).is_ok(),
+            );
+        }
+        if text.starts_with("-f") || text.starts_with("-m") {
+            return valid(
+                implements_language_option(text)
+                    || matches!(text, "-fintegrated-as" | "-fno-integrated-as"),
+            );
+        }
+    }
+    // Clang's name for the option, and its value; a joined name given alone
+    // has none.
+    let (name, value) = match values.first() {
+        | Some(&value) => (text, Some(value)),
+        | None => match known::clang_spelling(text) {
+            | Some((name, Some(""))) => (name, None),
+            | Some(spelling) => spelling,
+            | None => (text, None),
+        },
+    };
+    let separate = !values.is_empty();
+    match (name, value) {
+        | (
+            "-D"
+            | "-U"
+            | "-I"
+            | "-include"
+            | "-isystem"
+            | "-iquote"
+            | "-idirafter"
+            | "-MF"
+            | "-MT"
+            | "-MQ"
+            | "-x"
+            | "-o"
+            | "-B"
+            | "-l"
+            | "-L"
+            | "-Xlinker"
+            | "-Xassembler"
+            | "--include-directory="
+            | "--language="
+            | "--output="
+            | "--sysroot=",
+            Some(_),
+        )
+        | (
+            "-H" | "-M" | "-MM" | "-MD" | "-MMD" | "-MP" | "-S" | "-help" | "--help" | "-v"
+            | "--verbose" | "--version" | "-w" | "-pedantic" | "-pedantic-errors" | "-pg"
+            | "-trigraphs" | "-nostdinc" | "-nostdlibinc" | "-nobuiltininc" | "-nostdlib"
+            | "-nodefaultlibs" | "-nostartfiles" | "-pthread" | "-r" | "-rdynamic" | "-static"
+            | "-static-libgcc" | "-shared-libgcc",
+            None,
+        ) => Read,
+        // bcc's command line joins these long options' values with `=`.
+        | ("--include-directory" | "--language" | "--output" | "--sysroot", Some(_)) if separate =>
+            Read,
+        | ("-std=", Some(standard)) =>
+            valid(crate::configuration::LanguageMode::parse(standard).is_some()),
+        | ("--target=", Some(target)) => valid(crate::target::Target::parse(target).is_some()),
+        | (_, None) if bcc_debug_option(text) => Read,
+        | ("-dM" | "-P", None) =>
+            if preprocess {
+                Read
+            } else {
+                Inert
+            },
+        | ("-shared" | "--shared", None) =>
+            if preprocess {
+                Inert
+            } else {
+                Unused
+            },
+        | ("-MG" | "-pie" | "-no-pie" | "-save-temps" | "-save-stats", None)
+        | ("-iprefix" | "-save-temps=" | "-save-stats=", Some(_)) => Inert,
+        | _ if known::clang_unused(words) => Unused,
+        | _ => Refused,
+    }
+}
+
+/// Whether bcc's command line reads `text` as the debug option Clang
+/// spells so: `-g` and `-ggdb` with a level up to 3 or none, a DWARF
+/// version, and the column and line-table options.
+fn bcc_debug_option(text: &str) -> bool {
+    let level = text
+        .strip_prefix("-ggdb")
+        .or_else(|| text.strip_prefix("-g"));
+    matches!(level, Some("" | "0" | "1" | "2" | "3"))
+        || matches!(
+            text,
+            "-gdwarf"
+                | "-gdwarf-2"
+                | "-gdwarf-3"
+                | "-gdwarf-4"
+                | "-gdwarf-5"
+                | "-gdwarf-6"
+                | "-gcolumn-info"
+                | "-gno-column-info"
+                | "-gline-tables-only"
+                | "-gmlt"
+                | "-gtoggle"
+        )
 }
 
 impl State {
@@ -2330,5 +2493,75 @@ mod tests {
         assert_eq!(cl_slash_argument("/bogus-flag"), SlashArgument::Option);
         assert_eq!(cl_slash_argument("/nologo"), SlashArgument::Option);
         drop(std::fs::remove_dir_all(&directory));
+    }
+
+    /// bcc reads a Clang option it implements by Clang's name for it, with
+    /// its value joined or separate, and never by how its own short options
+    /// would split it (`-imacros` is no `-i macros`, `-sectcreate` no `-s
+    /// ectcreate`).
+    #[test]
+    fn bcc_reads_clang_options_by_clangs_names() {
+        use BccReading::{
+            Inert,
+            Read,
+            Refused,
+            Unused,
+        };
+        for (words, preprocess, reading) in [
+            (&["-O2"][..], false, Read),
+            (&["-O"], false, Read),
+            (&["-O9"], false, Read),
+            (&["-Ofoo"], false, Refused),
+            (&["-o", "x.obj"], false, Read),
+            (&["-ox.obj"], false, Read),
+            (&["-D", "X"], false, Read),
+            (&["-DX=1"], false, Read),
+            (&["-include", "inc.h"], false, Read),
+            (&["-includeinc.h"], false, Read),
+            (&["-isysteminc"], false, Read),
+            (&["-std=c11"], false, Read),
+            (&["-xc"], false, Read),
+            (&["-g2"], false, Read),
+            (&["-gsplit-dwarf"], false, Refused),
+            (&["-funsigned-char"], false, Read),
+            (&["-ffoo"], false, Refused),
+            (&["-dM"], true, Read),
+            (&["-dM"], false, Inert),
+            (&["-shared"], false, Unused),
+            (&["-sectcreate", "a", "b", "c"], false, Unused),
+            (&["-sectcreate"], false, Refused),
+            (&["-specs=x"], false, Unused),
+            (&["-save-temps"], false, Inert),
+            (&["-iprefix", "x"], false, Inert),
+            (&["-iprefixx"], false, Inert),
+            (&["-imacros", "x"], false, Refused),
+            (&["-imacrosx"], false, Refused),
+            (&["-isysroot", "x"], false, Refused),
+            (&["-isysrootx"], false, Refused),
+            (&["-iwithsysroot", "x"], false, Refused),
+            (&["-iwithprefix", "x"], false, Refused),
+            (&["-ivfsoverlay", "x"], false, Refused),
+            (&["-working-directory", "x"], false, Refused),
+            (&["-working-directory=x"], false, Refused),
+            // Clang's table reads it as `-o bjcmt-migrate-all`, as bcc does.
+            (&["-objcmt-migrate-all"], false, Read),
+            (&["-O0"], false, Read),
+            (&["-Os"], false, Read),
+            (&["-Ofast"], false, Refused),
+            (&["-std=bogus"], false, Refused),
+            (&["--target=x86_64-pc-windows-msvc"], false, Read),
+            (&["--target=x"], false, Refused),
+            (&["-ftls-model=local-exec"], false, Read),
+            (&["-ftls-model=bogus"], false, Refused),
+            (&["--output", "x.obj"], false, Read),
+            (&["--outputx.obj"], false, Refused),
+            (&["-Xclang", "-O2"], false, Refused),
+        ] {
+            assert_eq!(
+                bcc_reading(words, preprocess),
+                reading,
+                "{words:?} {preprocess}"
+            );
+        }
     }
 }

@@ -1535,7 +1535,9 @@ command line of their own, with every Clang option visible
 (`Driver::BuildCompilation`), and the personality reads them the same way,
 with the options the pinned Clang's driver takes frozen in
 `personality/options/clang-driver.list` by
-`scripts/update_driver_options.py --clang-driver --options-td`:
+`scripts/update_driver_options.py --clang-driver --options-td`, each with
+whether clang-cl shows it bare (`cl`) and whether clang-cl calls it unused
+in a step that only compiles (`unused`):
 
 - An empty one is nothing, and one that does not start with `-` (or is
   `-`) is an input (`/clang:b.c`).
@@ -1547,20 +1549,31 @@ with the options the pinned Clang's driver takes frozen in
   ignored with `unknown argument ignored in clang-cl` and the option
   clang-cl suggests, after those of the main command line, whose warning
   options decide its severity as above.
-- bcc reads an option its own command line takes beside the step's `-c`
-  or `-E`; `-fsyntax-only`, `-c` and `-E` are `/Zs`, `/c` and `/E`, and
-  `-###` prints the version and runs nothing. An option the step leaves
-  unused is dropped, with Clang's `argument unused during compilation:
-  '-shared'` where bcc's command line refuses it beside the step, and
-  silently where it only needs another stage (`-dM` without `-E`). Any
-  other Clang option bcc does not implement is treated as the Clang
-  personality treats it (`'-Xclang -O2' is not supported`), so no `/clang:`
-  option reaches bcc's command line unread.
+- bcc reads the options it implements as Clang does, by the name Clang's
+  option table gives them, so that a value is the same joined or separate
+  (`-includeinc.h` and `-include inc.h`, `-isystemdir`, `-ox.obj`): the
+  preprocessor's options (`-D`, `-U`, `-I`, `-include`, `-isystem`,
+  `-iquote`, `-idirafter`, the dependency options), `-x`, `-std=`, `-o`,
+  `-B`, `--target=`, the debug, optimization and warning options, the `-f`
+  and `-m` flags it implements, and its linker options. `-fsyntax-only`,
+  `-c` and `-E` are `/Zs`, `/c` and `/E`, and `-###` prints the version and
+  runs nothing. `-dM` and `-P` do nothing without `-E`, and `-iprefix` does
+  nothing without the `-iwithprefix` that uses it; `-save-temps` and
+  `-save-stats` change no program. A linker option clang-cl does not use
+  in a step that only compiles is dropped with its `argument unused during
+  compilation: '-sectcreate a b c'`, as the list records (`unused`). Any
+  other Clang option bcc does not implement is refused as the Clang
+  personality refuses it (`'-imacros m.h' is not supported`, joined
+  `-imacrosm.h` too; `-isysroot`, `-iwithprefix`, `-ivfsoverlay`,
+  `-working-directory`), so no `/clang:` option is dropped silently or read
+  as anything but itself.
 
-A bare `-` option that neither clang-cl's lists nor bcc's command line
-knows is ignored the same way (`--bogus`), and a bare Clang option takes
-its values from the next arguments (`-Xclang` alone is the missing-value
-error). The options Clang takes and ignores (`personality/options/clang-ignored.list`)
+Bare, clang-cl's driver sees only the Clang options its mode shows
+(`Options.td`'s `CLOption` and `CoreOption`), which the list marks `cl`.
+A bare `-` option neither its mode nor clang-cl's lists show is ignored
+the same way (`--bogus`, `-specs`, `--config`), and takes no values; one
+its mode shows takes its values from the next arguments (`-Xclang` alone
+is the missing-value error). The options Clang takes and ignores (`personality/options/clang-ignored.list`)
 are Clang's after `/clang:` too: `/clang:-fgcse` draws `optimization flag
 '-fgcse' is not supported` and `/clang:-mmpx` the deprecation warning, for
 each C source compiled, after the input checks, at the severity the warning

@@ -8504,6 +8504,7 @@ mod tests {
     fn clang_cl_reads_its_clang_options_as_clang_cl_does() {
         let directory = Directory::new();
         directory.write("a.c", "int main(void) { return 0; }\n");
+        directory.write("inc.h", "\n");
         let warning = |argument: &str| {
             format!(
                 "clang-cl: warning: unknown argument ignored in clang-cl: '{argument}' \
@@ -8513,8 +8514,13 @@ mod tests {
         let missing = |option: &str, count: &str| {
             format!("clang-cl: error: argument to '{option}' is missing (expected {count})\n")
         };
-        let unused = "clang-cl: warning: argument unused during compilation: '-shared' \
-                      [-Wunused-command-line-argument]\n";
+        let unused_argument = |argument: &str| {
+            format!(
+                "clang-cl: warning: argument unused during compilation: '{argument}' \
+                 [-Wunused-command-line-argument]\n"
+            )
+        };
+        let unused = unused_argument("-shared");
         let rows: &[(&[&str], String, i32)] = &[
             (&["/clang:-ffoo"], warning("-ffoo"), 0),
             (&["/clang:-mfoo=1"], warning("-mfoo=1"), 0),
@@ -8560,7 +8566,7 @@ mod tests {
             ),
             (&["/clang:-D", "/clang:X", "/clang:-O2"], String::new(), 0),
             (&["/clang:-dM"], String::new(), 0),
-            (&["/clang:-shared"], unused.into(), 0),
+            (&["/clang:-shared"], unused, 0),
             // Clang's ignored options, warned about after the input checks.
             (
                 &["/clang:-fgcse", "/clang:-ffoo", "/clang:-mmpx"],
@@ -8591,6 +8597,26 @@ mod tests {
             (&["--bogus"], warning("--bogus"), 0),
             (&["-ffoo"], warning("-ffoo"), 0),
             (&["-Xclang"], missing("-Xclang", "1 value"), 1),
+            // An option bcc implements takes its value joined as separate,
+            // by Clang's name for it, not as bcc's short options would
+            // split it (`-i ncludeinc.h`, status 2).
+            (&["/clang:-includeinc.h"], String::new(), 0),
+            // `-iprefix` alone changes nothing; clang-cl calls a linker
+            // option unused in a step that only compiles.
+            (&["/clang:-iprefixx"], String::new(), 0),
+            (&["/clang:-iprefix", "/clang:x"], String::new(), 0),
+            (
+                &["/clang:-sectcreate", "/clang:a", "/clang:b", "/clang:c"],
+                unused_argument("-sectcreate a b c"),
+                0,
+            ),
+            (&["/clang:-s"], unused_argument("-s"), 0),
+            (&["/clang:-specs=x"], unused_argument("-specs=x"), 0),
+            // Bare, clang-cl's mode shows none of these, which take no
+            // values then (`-specs` at the end used to be refused).
+            (&["-specs"], warning("-specs"), 0),
+            (&["-sectcreate"], warning("-sectcreate"), 0),
+            (&["--config"], warning("--config"), 0),
         ];
         let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/llvm/bin/clang");
         for (options, expected, status) in rows {
@@ -8614,6 +8640,66 @@ mod tests {
                     "clang-cl {options:?}"
                 );
             }
+        }
+    }
+
+    /// bcc refuses a `/clang:` option it does not implement and that would
+    /// change the program, joined or separate, rather than drop it or read
+    /// its value as an input (`/clang:-imacros /clang:m.h` used to compile
+    /// without the macros, with only clang-cl's "argument unused" warning).
+    /// It applies `-include` joined and separate, and the `-O` level
+    /// warning prints once.
+    #[test]
+    fn clang_cl_applies_or_refuses_each_clang_option() {
+        let directory = Directory::new();
+        directory.write("m.h", "#define VALUE 7\n");
+        directory.write("a.c", "int v = VALUE;\n");
+        let refused = |shown: &str| {
+            format!(
+                "clang-cl: error: '{shown}' is not supported: bcc does not implement it, and \
+                 ignoring it could change the program\n"
+            )
+        };
+        for (options, shown) in [
+            (&["/clang:-imacros", "/clang:m.h"][..], "-imacros m.h"),
+            (&["/clang:-imacrosm.h"], "-imacrosm.h"),
+            (&["/clang:-isysroot", "/clang:x"], "-isysroot x"),
+            (&["/clang:-isysrootx"], "-isysrootx"),
+            (&["/clang:-iwithsysroot", "/clang:x"], "-iwithsysroot x"),
+            (&["/clang:-iwithprefix", "/clang:x"], "-iwithprefix x"),
+            (&["/clang:-ivfsoverlay", "/clang:x"], "-ivfsoverlay x"),
+            (
+                &["/clang:-working-directory", "/clang:x"],
+                "-working-directory x",
+            ),
+        ] {
+            let mut args = vec!["/E", "a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(stderr(&output), refused(shown), "{options:?}");
+            assert_eq!(output.status.code(), Some(1), "{options:?}");
+        }
+        for options in [
+            &["/clang:-include", "/clang:m.h"][..],
+            &["/clang:-includem.h"],
+        ] {
+            let mut args = vec!["/E", "a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(stderr(&output), "", "{options:?}");
+            assert!(stdout(&output).contains("int v = 7;"), "{options:?}");
+        }
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        for options in [&["/clang:-O9"][..], &["-O9"]] {
+            let mut args = vec!["/c", "/Fo:a.obj", "a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                "warning: optimization level '-O9' is not supported; using '-O3' instead\n",
+                "{options:?}"
+            );
         }
     }
 

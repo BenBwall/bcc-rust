@@ -1,87 +1,87 @@
 # pinned Clang's driver: its options besides the -W, -f and -m flags, and those taking separate values; regenerate with scripts/update_driver_options.py --clang-driver --options-td
-flag -###
-separate --CLASSPATH 1
-joined --CLASSPATH=
+flag -### cl
+separate --CLASSPATH 1 unused
+joined --CLASSPATH= unused
 flag --all-warnings
-joined --amdgpu-arch-tool=
-flag --analyze
-flag --analyzer-no-default-checks
+joined --amdgpu-arch-tool= cl unused
+flag --analyze cl
+flag --analyzer-no-default-checks unused
 joined --analyzer-output
-separate --analyzer-output 1
+separate --analyzer-output 1 unused
 flag --ansi
 flag --assemble
-separate --assert 1
-joined --assert=
+separate --assert 1 unused
+joined --assert= unused
 joined --autocomplete=
-separate --bootclasspath 1
-joined --bootclasspath=
-separate --classpath 1
-joined --classpath=
+separate --bootclasspath 1 unused
+joined --bootclasspath= unused
+separate --classpath 1 unused
+joined --classpath= unused
 flag --combine
 flag --comments
 flag --comments-in-macros
 flag --compile
-separate --config 1
-joined --config-system-dir=
-joined --config-user-dir=
-joined --config=
-flag --constant-cfstrings
-flag --coverage
-separate --cstdlib 1
-joined --cstdlib=
-flag --cuda-compile-host-device
-flag --cuda-device-only
-joined --cuda-feature=
-joined --cuda-gpu-arch=
-flag --cuda-host-only
-joined --cuda-include-ptx=
-flag --cuda-noopt-device-debug
-flag --cuda-path-ignore-env
-joined --cuda-path=
+separate --config 1 unused
+joined --config-system-dir= cl unused
+joined --config-user-dir= cl unused
+joined --config= cl unused
+flag --constant-cfstrings unused
+flag --coverage cl
+separate --cstdlib 1 unused
+joined --cstdlib= unused
+flag --cuda-compile-host-device cl
+flag --cuda-device-only cl
+joined --cuda-feature= cl unused
+joined --cuda-gpu-arch= cl unused
+flag --cuda-host-only cl
+joined --cuda-include-ptx= cl unused
+flag --cuda-noopt-device-debug cl unused
+flag --cuda-path-ignore-env cl unused
+joined --cuda-path= cl unused
 flag --debug
 joined --debug=
 separate --define-macro 1
 joined --define-macro=
 flag --dependencies
-joined --dxv-path=
+joined --dxv-path= unused
 separate --dyld-prefix 1
 joined --dyld-prefix=
 joined --embed-dir=
-flag --emit-extension-symbol-graphs
-flag --emit-static-lib
-separate --encoding 1
-joined --encoding=
-flag --end-no-unused-arguments
+flag --emit-extension-symbol-graphs unused
+flag --emit-static-lib unused
+separate --encoding 1 unused
+joined --encoding= unused
+flag --end-no-unused-arguments cl
 flag --entry
-separate --extdirs 1
-joined --extdirs=
+separate --extdirs 1 unused
+joined --extdirs= unused
 flag --extra-warnings
-joined --extract-api-ignores=
-joined --fmultilib-flag=
+joined --extract-api-ignores= unused
+joined --fmultilib-flag= unused
 separate --for-linker 1
 joined --for-linker=
-separate --force-link 1
-joined --force-link=
-joined --gcc-install-dir=
-joined --gcc-toolchain=
-joined --gcc-triple=
-flag --gpu-bundle-output
-joined --gpu-instrument-lib=
-joined --gpu-max-threads-per-block=
-flag --gpu-use-aux-triple-only
+separate --force-link 1 unused
+joined --force-link= unused
+joined --gcc-install-dir= unused
+joined --gcc-toolchain= unused
+joined --gcc-triple= unused
+flag --gpu-bundle-output cl
+joined --gpu-instrument-lib= cl unused
+joined --gpu-max-threads-per-block= cl unused
+flag --gpu-use-aux-triple-only cl unused
 flag --help
 flag --help-hidden
-joined --hip-device-lib-path=
-joined --hip-device-lib=
-flag --hip-link
-joined --hip-path=
-joined --hip-version=
-joined --hipspv-pass-plugin=
-flag --hipstdpar
-flag --hipstdpar-interpose-alloc
-joined --hipstdpar-path=
-joined --hipstdpar-prim-path=
-joined --hipstdpar-thrust-path=
+joined --hip-device-lib-path= cl unused
+joined --hip-device-lib= cl unused
+flag --hip-link cl
+joined --hip-path= cl unused
+joined --hip-version= cl unused
+joined --hipspv-pass-plugin= cl unused
+flag --hipstdpar cl
+flag --hipstdpar-interpose-alloc cl unused
+joined --hipstdpar-path= cl unused
+joined --hipstdpar-prim-path= cl unused
+joined --hipstdpar-thrust-path= cl unused
 joined --imacros
 separate --imacros 1
 joined --imacros=
@@ -109,82 +109,82 @@ joined --include-with-prefix=
 joined --include=
 separate --language 1
 joined --language=
-joined --ld-path=
-joined --libclc-lib=
-joined --libomptarget-amdgcn-bc-path=
-joined --libomptarget-amdgpu-bc-path=
-joined --libomptarget-nvptx-bc-path=
-joined --libomptarget-spirv-bc-path=
-separate --library-directory 1
-joined --library-directory=
+joined --ld-path= unused
+joined --libclc-lib= unused
+joined --libomptarget-amdgcn-bc-path= unused
+joined --libomptarget-amdgpu-bc-path= unused
+joined --libomptarget-nvptx-bc-path= unused
+joined --libomptarget-spirv-bc-path= unused
+separate --library-directory 1 unused
+joined --library-directory= unused
 separate --mhwdiv 1
 joined --mhwdiv=
 joined --multi-lib-config=
-joined --no-cuda-gpu-arch=
-joined --no-cuda-include-ptx=
-flag --no-cuda-noopt-device-debug
-flag --no-cuda-version-check
-flag --no-default-config
-flag --no-gpu-bundle-output
+joined --no-cuda-gpu-arch= cl unused
+joined --no-cuda-include-ptx= cl unused
+flag --no-cuda-noopt-device-debug cl unused
+flag --no-cuda-version-check cl unused
+flag --no-default-config cl unused
+flag --no-gpu-bundle-output cl
 flag --no-integrated-cpp
 flag --no-line-commands
 flag --no-offload-add-rpath
-joined --no-offload-arch=
-flag --no-offload-compress
+joined --no-offload-arch= cl unused
+flag --no-offload-compress cl unused
 flag --no-offload-inc
-flag --no-offload-new-driver
-flag --no-offloadlib
+flag --no-offload-new-driver cl
+flag --no-offloadlib cl
 flag --no-pedantic
 flag --no-standard-includes
 flag --no-standard-libraries
 separate --no-system-header-prefix 1
 joined --no-system-header-prefix=
 flag --no-undefined
-flag --no-warnings
-flag --no-wasm-opt
-flag --no-xcselect
-joined --nvptx-arch-tool=
+flag --no-warnings cl
+flag --no-wasm-opt cl unused
+flag --no-xcselect unused
+joined --nvptx-arch-tool= cl unused
 flag --offload-add-rpath
-joined --offload-arch-tool=
-joined --offload-arch=
-flag --offload-compress
-joined --offload-compression-level=
-flag --offload-device-only
-flag --offload-host-device
-flag --offload-host-only
+joined --offload-arch-tool= cl unused
+joined --offload-arch= cl unused
+flag --offload-compress cl unused
+joined --offload-compression-level= cl unused
+flag --offload-device-only cl
+flag --offload-host-device cl
+flag --offload-host-only cl
 flag --offload-inc
-joined --offload-jobs=
-flag --offload-link
-flag --offload-new-driver
-joined --offload-targets=
+joined --offload-jobs= cl unused
+flag --offload-link unused
+flag --offload-new-driver cl
+joined --offload-targets= cl
 joined --offload=
-flag --offloadlib
+flag --offloadlib cl
 flag --optimize
 joined --optimize=
 separate --output 1
-separate --output-class-directory 1
-joined --output-class-directory=
+separate --output-class-directory 1 unused
+joined --output-class-directory= unused
 joined --output=
-separate --param 1
-joined --param=
+separate --param 1 unused
+joined --param= unused
 flag --pass-exit-codes
 flag --pedantic
 flag --pedantic-errors
 flag --pipe
-flag --precompile
-flag --precompile-reduced-bmi
+flag --precompile cl
+flag --precompile-reduced-bmi cl
 separate --prefix 1
 joined --prefix=
 flag --preprocess
-flag --pretty-sgf
+flag --pretty-sgf unused
 flag --print-diagnostic-categories
-flag --print-diagnostic-options
-flag --print-effective-triple
-flag --print-enabled-extensions
+flag --print-diagnostic-options cl
+flag --print-effective-triple cl
+flag --print-enabled-extensions cl
 separate --print-file-name 1
-joined --print-file-name=
-flag --print-libgcc-file-name
-flag --print-library-module-manifest-path
+joined --print-file-name= cl
+flag --print-libgcc-file-name cl
+flag --print-library-module-manifest-path cl
 flag --print-missing-file-dependencies
 flag --print-multi-directory
 flag --print-multi-flags-experimental
@@ -192,56 +192,56 @@ flag --print-multi-lib
 flag --print-multi-os-directory
 flag --print-multiarch
 separate --print-prog-name 1
-joined --print-prog-name=
-flag --print-resource-dir
-flag --print-rocm-search-dirs
-flag --print-runtime-dir
-flag --print-search-dirs
-flag --print-supported-cpus
-flag --print-supported-extensions
-flag --print-target-triple
-flag --print-targets
-joined --product-name=
+joined --print-prog-name= cl
+flag --print-resource-dir cl
+flag --print-rocm-search-dirs cl unused
+flag --print-runtime-dir cl
+flag --print-search-dirs cl
+flag --print-supported-cpus cl
+flag --print-supported-extensions cl
+flag --print-target-triple cl
+flag --print-targets cl
+joined --product-name= unused
 flag --profile
-joined --ptxas-path=
+joined --ptxas-path= cl unused
 flag --relocatable-pch
-separate --resource 1
-joined --resource=
-joined --rocm-device-lib-path=
-joined --rocm-path=
-joined --rsp-quoting=
-separate --rtlib 1
-joined --rtlib=
+separate --resource 1 unused
+joined --resource= unused
+joined --rocm-device-lib-path= cl unused
+joined --rocm-path= cl unused
+joined --rsp-quoting= cl
+separate --rtlib 1 unused
+joined --rtlib= cl unused
 flag --save-stats
 joined --save-stats=
 flag --save-temps
 joined --save-temps=
 separate --serialize-diagnostics 1
-flag --shared
+flag --shared unused
 flag --signed-char
 separate --specs 1
-joined --specs=
-joined --spirv-val-path=
+joined --specs= unused
+joined --spirv-val-path= unused
 joined --ssaf-compilation-unit-id=
 joined --ssaf-extract-summaries=
 flag --ssaf-include-local-entities
 flag --ssaf-list-extractors
 flag --ssaf-list-formats
 joined --ssaf-tu-summary-file=
-flag --start-no-unused-arguments
+flag --start-no-unused-arguments cl
 flag --static
 separate --std 1
 joined --std=
-separate --stdlib 1
-joined --stdlib=
-flag --sycl-link
-joined --symbol-graph-dir=
+separate --stdlib 1 unused
+joined --stdlib= unused
+flag --sycl-link cl
+joined --symbol-graph-dir= unused
 separate --sysroot 1
 joined --sysroot=
 separate --system-header-prefix 1
 joined --system-header-prefix=
-flag --target-help
-joined --target=
+flag --target-help unused
+joined --target= cl
 flag --trace-includes
 flag --traditional
 flag --traditional-cpp
@@ -249,73 +249,73 @@ flag --trigraphs
 separate --undefine-macro 1
 joined --undefine-macro=
 flag --unsigned-char
-joined --unwindlib=
+joined --unwindlib= unused
 flag --user-dependencies
 flag --verbose
-flag --verify-debug-info
-flag --version
-joined --vfsoverlay
-separate --vfsoverlay 1
-flag --via-file-asm
+flag --verify-debug-info unused
+flag --version cl
+joined --vfsoverlay cl
+separate --vfsoverlay 1 cl
+flag --via-file-asm cl
 joined --warn-
 joined --warn-=
-joined --warning-suppression-mappings=
-flag --wasm-opt
+joined --warning-suppression-mappings= cl
+flag --wasm-opt cl unused
 flag --write-dependencies
 flag --write-user-dependencies
-joined -A
+joined -A unused
 separate -A 1
-joined -A-
+joined -A- unused
 joined -B
 separate -B 1
-flag -C
+flag -C cl
 flag -CC
-joined -D
-separate -D 1
-flag -E
+joined -D cl
+separate -D 1 cl
+flag -E cl
 flag -EB
 flag -EL
-joined -F
-separate -F 1
-joined -G
-separate -G 1
-joined -G=
-flag -H
-joined -I
-separate -I 1
-joined -I-
+joined -F cl
+separate -F 1 cl
+joined -G cl
+separate -G 1 cl
+joined -G= cl
+flag -H cl
+joined -I cl
+separate -I 1 cl
+joined -I- cl
 flag -K
-joined -L
+joined -L unused
 separate -L 1
 flag -M
-flag -MD
+flag -MD cl
 joined -MF
-separate -MF 1
+separate -MF 1 unused
 flag -MG
 joined -MJ
 separate -MJ 1
 flag -MM
 flag -MMD
-flag -MP
+flag -MP cl
 joined -MQ
-separate -MQ 1
+separate -MQ 1 unused
 joined -MT
-separate -MT 1
+separate -MT 1 cl unused
 flag -MV
-flag -Mach
-joined -O
-joined -O0
-joined -O4
-joined -ObjC
-joined -ObjC++
-joined -Ofast
-joined -Og
-joined -Os
-joined -Oz
-flag -P
-flag -Q
+flag -Mach unused
+joined -O cl
+joined -O0 cl
+joined -O4 cl
+joined -ObjC cl
+joined -ObjC++ cl
+joined -Ofast cl
+joined -Og cl
+joined -Os cl
+joined -Oz cl
+flag -P cl
+flag -Q unused
 flag -Qn
-flag -Qunused-arguments
+flag -Qunused-arguments cl
 flag -Qy
 joined -R
 joined -Rpass-analysis=
@@ -323,72 +323,72 @@ joined -Rpass-missed=
 joined -Rpass=
 flag -S
 joined -T
-separate -T 1
-joined -U
-separate -U 1
+separate -T 1 unused
+joined -U cl
+separate -U 1 cl
 joined -V
-separate -V 1
-flag -X
-separate -Xanalyzer 1
+separate -V 1 cl
+flag -X cl unused
+separate -Xanalyzer 1 unused
 joined -Xarch_
-separate -Xarch_ 1
+separate -Xarch_ 1 unused
 joined -Xarch_device
-separate -Xarch_device 1
+separate -Xarch_device 1 unused
 joined -Xarch_host
 separate -Xarch_host 1
 separate -Xassembler 1
-separate -Xclang 1
-joined -Xclang=
-separate -Xclangas 1
-joined -Xclangas=
-flag -Xcompiler
-separate -Xcuda-fatbinary 1
-separate -Xcuda-ptxas 1
-separate -Xlinker 1
+separate -Xclang 1 cl
+joined -Xclang= cl
+separate -Xclangas 1 cl unused
+joined -Xclangas= cl unused
+flag -Xcompiler unused
+separate -Xcuda-fatbinary 1 unused
+separate -Xcuda-ptxas 1 cl unused
+separate -Xlinker 1 cl
 separate -Xmicrosoft-visualc-tools-root 1
 separate -Xmicrosoft-visualc-tools-version 1
 separate -Xmicrosoft-windows-sdk-root 1
 separate -Xmicrosoft-windows-sdk-version 1
 separate -Xmicrosoft-windows-sys-root 1
 joined -Xoffload-compiler
-separate -Xoffload-compiler 1
+separate -Xoffload-compiler 1 unused
 joined -Xoffload-linker
-separate -Xoffload-linker 1
-separate -Xopenmp-target 1
+separate -Xoffload-linker 1 unused
+separate -Xopenmp-target 1 unused
 joined -Xopenmp-target=
-separate -Xopenmp-target= 1
-flag -Xparser
+separate -Xopenmp-target= 1 unused
+flag -Xparser unused
 separate -Xpreprocessor 1
-joined -Xthinlto-distributor=
-flag -Z
+joined -Xthinlto-distributor= cl unused
+flag -Z unused
 flag -Z-Xlinker-no-demangle
 flag -Z-reserved-lib-cckext
 flag -Z-reserved-lib-stdc++
 separate -Zlinker-input 1
 separate -alias_list 1
-flag -all_load
-separate -allowable_client 1
+flag -all_load unused
+separate -allowable_client 1 unused
 flag -ansi
 separate -arch 1
-flag -arch_errors_fatal
-separate -arch_only 1
+flag -arch_errors_fatal unused
+separate -arch_only 1 unused
 joined -b
 separate -b 1
 joined -bind_at_load
 joined -building-pch-with-obj
 joined -bundle
 joined -bundle_loader
-separate -bundle_loader 1
-flag -c
-flag -canonical-prefixes
+separate -bundle_loader 1 unused
+flag -c cl
+flag -canonical-prefixes cl
 joined -ccc-
 joined -ccc-gcc-name
 separate -ccc-gcc-name 1
 joined -ccc-install-dir
-separate -ccc-install-dir 1
+separate -ccc-install-dir 1 cl
 joined -ccc-print-bindings
 joined -ccc-print-phases
-flag -cl-denorms-are-zero
+flag -cl-denorms-are-zero unused
 joined -cl-ext=
 flag -cl-fast-relaxed-math
 flag -cl-finite-math-only
@@ -396,123 +396,123 @@ flag -cl-fp32-correctly-rounded-divide-sqrt
 flag -cl-kernel-arg-info
 flag -cl-mad-enable
 flag -cl-no-signed-zeros
-flag -cl-no-stdinc
+flag -cl-no-stdinc unused
 flag -cl-opt-disable
 flag -cl-single-precision-constant
 joined -cl-std=
 flag -cl-strict-aliasing
 flag -cl-uniform-work-group-size
 flag -cl-unsafe-math-optimizations
-flag -clangir-disable-passes
-flag -clangir-disable-verifier
-flag -clangir-enable-idiom-recognizer
-flag -clangir-lib-opt
-joined -clangir-lib-opt=
+flag -clangir-disable-passes unused
+flag -clangir-disable-verifier unused
+flag -clangir-enable-idiom-recognizer unused
+flag -clangir-lib-opt unused
+joined -clangir-lib-opt= unused
 joined -client_name
-separate -client_name 1
+separate -client_name 1 unused
 flag -combine
 joined -compatibility_version
-separate -compatibility_version 1
-flag -coverage
+separate -compatibility_version 1 unused
+flag -coverage cl
 flag -cpp-precomp
-joined -cuid=
+joined -cuid= cl unused
 joined -current_version
-separate -current_version 1
+separate -current_version 1 unused
 joined -cxx-isystem
 separate -cxx-isystem 1
-joined -d
-joined -dA
-joined -dD
-joined -dE
-joined -dI
-joined -dM
-joined -darwin-target-variant
-separate -darwin-target-variant 1
-joined -darwin-target-variant-sdk-version=
-joined -darwin-target-variant-triple
-separate -darwin-target-variant-triple 1
-joined -dead_strip
-joined -debug-forward-template-params
-joined -debug-info-kind=
-joined -debug-info-macro
-joined -debug-info-macro-expansion-loc
-joined -debugger-tuning=
-joined -default-function-attr
-joined -dependency-dot
-separate -dependency-dot 1
-joined -dependency-file
-separate -dependency-file 1
-joined -detailed-preprocessing-record
-joined -diagnostic-log-file
-joined -disable-O0-optnone
-joined -disable-lifetime-markers
-joined -disable-llvm-optzns
-joined -disable-llvm-passes
-joined -disable-llvm-verifier
-joined -disable-objc-default-synthesize-properties
-joined -disable-pragma-debug-crash
-joined -disable-red-zone
-joined -discard-value-names
+joined -d unused
+joined -dA unused
+joined -dD unused
+joined -dE unused
+joined -dI unused
+joined -dM unused
+joined -darwin-target-variant unused
+separate -darwin-target-variant 1 cl unused
+joined -darwin-target-variant-sdk-version= unused
+joined -darwin-target-variant-triple unused
+separate -darwin-target-variant-triple 1 unused
+joined -dead_strip unused
+joined -debug-forward-template-params unused
+joined -debug-info-kind= unused
+joined -debug-info-macro unused
+joined -debug-info-macro-expansion-loc unused
+joined -debugger-tuning= unused
+joined -default-function-attr unused
+joined -dependency-dot unused
+separate -dependency-dot 1 unused
+joined -dependency-file unused
+separate -dependency-file 1 unused
+joined -detailed-preprocessing-record unused
+joined -diagnostic-log-file unused
+joined -disable-O0-optnone unused
+joined -disable-lifetime-markers unused
+joined -disable-llvm-optzns unused
+joined -disable-llvm-passes unused
+joined -disable-llvm-verifier unused
+joined -disable-objc-default-synthesize-properties unused
+joined -disable-pragma-debug-crash unused
+joined -disable-red-zone unused
+joined -discard-value-names unused
 joined -dsym-dir
-separate -dsym-dir 1
-joined -dump-coverage-mapping
-joined -dump-deserialized-decls
-joined -dump-minimization-hints=
-joined -dump-raw-tokens
-joined -dump-tokens
-joined -dumpbase
-joined -dumpbase-ext
-joined -dumpdir
+separate -dsym-dir 1 unused
+joined -dump-coverage-mapping unused
+joined -dump-deserialized-decls unused
+joined -dump-minimization-hints= unused
+joined -dump-raw-tokens unused
+joined -dump-tokens unused
+joined -dumpbase unused
+joined -dumpbase-ext unused
+joined -dumpdir unused
 separate -dumpdir 1
-joined -dumpmachine
-joined -dumpspecs
-joined -dumpversion
-joined -dwarf-debug-flags
-joined -dwarf-debug-producer
-joined -dwarf-explicit-import
-joined -dwarf-ext-refs
-joined -dwarf-version=
-joined -dylib_file
-separate -dylib_file 1
-joined -dylinker
+joined -dumpmachine unused
+joined -dumpspecs unused
+joined -dumpversion unused
+joined -dwarf-debug-flags unused
+joined -dwarf-debug-producer unused
+joined -dwarf-explicit-import unused
+joined -dwarf-ext-refs unused
+joined -dwarf-version= unused
+joined -dylib_file unused
+separate -dylib_file 1 unused
+joined -dylinker unused
 joined -dylinker_install_name
-separate -dylinker_install_name 1
-joined -dynamic
-joined -dynamiclib
+separate -dylinker_install_name 1 unused
+joined -dynamic unused
+joined -dynamiclib unused
 separate -e 1
-flag -emit-ast
+flag -emit-ast cl
 flag -emit-cir
 flag -emit-interface-stubs
 flag -emit-llvm
-flag -emit-merged-ifs
-flag -emit-symbol-graph
-separate -exported_symbols_list 1
+flag -emit-merged-ifs unused
+flag -emit-symbol-graph unused
+separate -exported_symbols_list 1 unused
 flag -extract-api
-separate -fdebug-compilation-dir 1
-separate -fexperimental-openacc-macro-override 1
+separate -fdebug-compilation-dir 1 cl
+separate -fexperimental-openacc-macro-override 1 unused
 separate -filelist 1
-separate -fmodule-implementation-of 1
-separate -fmodules-user-build-path 1
+separate -fmodule-implementation-of 1 cl
+separate -fmodules-user-build-path 1 unused
 separate -fnew-alignment 1
-separate -force_load 1
+separate -force_load 1 unused
 separate -framework 1
-separate -ftrapv-handler 1
-flag -g
+separate -ftrapv-handler 1 unused
+flag -g cl
 flag -g0
 flag -g1
 flag -g2
 flag -g3
 flag -gcall-site-info
-flag -gcodeview
-flag -gcodeview-command-line
-flag -gcodeview-ghash
+flag -gcodeview cl
+flag -gcodeview-command-line cl
+flag -gcodeview-ghash cl
 joined -gcoff
 joined -gcoff1
 joined -gcoff2
 joined -gcoff3
-flag -gcolumn-info
+flag -gcolumn-info cl
 flag -gdbx
-flag -gdwarf
+flag -gdwarf cl
 flag -gdwarf-2
 flag -gdwarf-3
 flag -gdwarf-4
@@ -522,9 +522,9 @@ flag -gdwarf-aranges
 flag -gdwarf32
 flag -gdwarf64
 flag -gembed-source
-separate -gen-cdb-fragment-path 1
-flag -gen-reproducer
-joined -gen-reproducer=
+separate -gen-cdb-fragment-path 1 cl
+flag -gen-reproducer cl
+joined -gen-reproducer= cl
 flag -gfull
 flag -ggdb
 flag -ggdb0
@@ -532,44 +532,44 @@ flag -ggdb1
 flag -ggdb2
 flag -ggdb3
 flag -ggnu-pubnames
-flag -ginline-line-tables
-flag -gkey-instructions
-flag -gline-directives-only
-flag -gline-tables-only
+flag -ginline-line-tables cl
+flag -gkey-instructions cl
+flag -gline-directives-only cl
+flag -gline-tables-only cl
 flag -glldb
 flag -gmlt
 flag -gmodules
 flag -gno-call-site-info
-flag -gno-codeview-command-line
-flag -gno-codeview-ghash
-flag -gno-column-info
+flag -gno-codeview-command-line cl
+flag -gno-codeview-ghash cl
+flag -gno-column-info cl
 flag -gno-embed-source
 flag -gno-gnu-pubnames
-flag -gno-inline-line-tables
-flag -gno-key-instructions
+flag -gno-inline-line-tables cl
+flag -gno-key-instructions cl
 flag -gno-modules
-flag -gno-omit-unreferenced-methods
+flag -gno-omit-unreferenced-methods cl
 flag -gno-pubnames
 flag -gno-record-command-line
 flag -gno-record-gcc-switches
 flag -gno-simple-template-names
-flag -gno-split-dwarf
-flag -gno-strict-dwarf
-flag -gno-structor-decl-linkage-names
+flag -gno-split-dwarf cl
+flag -gno-strict-dwarf cl
+flag -gno-structor-decl-linkage-names cl
 flag -gno-template-alias
-flag -gomit-unreferenced-methods
+flag -gomit-unreferenced-methods cl
 flag -gpubnames
-flag -gpulibc
+flag -gpulibc unused
 flag -grecord-command-line
 flag -grecord-gcc-switches
 flag -gsce
 flag -gsimple-template-names
-flag -gsplit-dwarf
-joined -gsplit-dwarf=
+flag -gsplit-dwarf cl
+joined -gsplit-dwarf= cl
 joined -gstabs
 joined -gstabs+
-flag -gstrict-dwarf
-flag -gstructor-decl-linkage-names
+flag -gstrict-dwarf cl
+flag -gstructor-decl-linkage-names cl
 flag -gtemplate-alias
 flag -gtoggle
 flag -gused
@@ -578,34 +578,34 @@ joined -gxcoff
 joined -gxcoff+
 flag -gz
 joined -gz=
-joined -headerpad_max_install_names
-flag -help
-flag -hlsl-all-resources-bound
-separate -hlsl-entry 1
+joined -headerpad_max_install_names unused
+flag -help cl
+flag -hlsl-all-resources-bound unused
+separate -hlsl-entry 1 unused
 joined -iapinotes-modules
 separate -iapinotes-modules 1
-flag -ibuiltininc
+flag -ibuiltininc unused
 joined -idirafter
 separate -idirafter 1
 joined -iframework
 separate -iframework 1
 joined -iframeworkwithsysroot
 separate -iframeworkwithsysroot 1
-flag -ignore-pch
+flag -ignore-pch unused
 joined -imacros
 separate -imacros 1
-separate -image_base 1
-separate -imultilib 1
+separate -image_base 1 unused
+separate -imultilib 1 unused
 joined -include
 separate -include 1
 joined -include-pch
 separate -include-pch 1
-separate -init 1
-joined -inline-asm=
-separate -install_name 1
+separate -init 1 unused
+joined -inline-asm= cl unused
+separate -install_name 1 unused
 flag -integrated-as
 joined -interface-stub-version=
-separate -interface-stub-version= 1
+separate -interface-stub-version= 1 unused
 joined -iprefix
 separate -iprefix 1
 joined -iquote
@@ -615,7 +615,7 @@ separate -isysroot 1
 joined -isystem
 separate -isystem 1
 joined -isystem-after
-separate -isystem-after 1
+separate -isystem-after 1 unused
 joined -ivfsoverlay
 separate -ivfsoverlay 1
 joined -iwithprefix
@@ -624,7 +624,7 @@ joined -iwithprefixbefore
 separate -iwithprefixbefore 1
 joined -iwithsysroot
 separate -iwithsysroot 1
-flag -keep_private_externs
+flag -keep_private_externs unused
 joined -l
 separate -l 1
 joined -lang-asm
@@ -632,156 +632,156 @@ joined -lazy_framework
 separate -lazy_framework 1
 joined -lazy_library
 separate -lazy_library 1
-joined -lifetime-safety-lifetimebound-macro=
-joined -lifetime-safety-max-cfg-blocks=
+joined -lifetime-safety-lifetimebound-macro= cl unused
+joined -lifetime-safety-max-cfg-blocks= cl unused
 joined -llvm-verify-each
 joined -load
 joined -load-bool-from-mem=
 joined -loader-replaceable-function=
-separate -meabi 1
-separate -mllvm 1
-separate -mmlir 1
-separate -module-dependency-dir 1
-separate -mthread-model 1
-separate -multiply_defined 1
-separate -multiply_defined_unused 1
-flag -no-canonical-prefixes
+separate -meabi 1 cl
+separate -mllvm 1 cl
+separate -mmlir 1 unused
+separate -module-dependency-dir 1 unused
+separate -mthread-model 1 cl
+separate -multiply_defined 1 unused
+separate -multiply_defined_unused 1 unused
+flag -no-canonical-prefixes cl
 flag -no-cpp-precomp
-flag -no-hip-rt
+flag -no-hip-rt cl unused
 flag -no-integrated-as
 flag -no-integrated-cpp
 flag -no-pedantic
-flag -no-pie
-flag -no-pthread
-flag -no-use-spirv-backend
-flag -no_dead_strip_inits_and_terms
-flag -nobuiltininc
+flag -no-pie unused
+flag -no-pthread unused
+flag -no-use-spirv-backend cl unused
+flag -no_dead_strip_inits_and_terms unused
+flag -nobuiltininc cl
 flag -nocudainc
 flag -nocudalib
 flag -nodefaultlibs
-flag -nodriverkitlib
-flag -nofixprebinding
+flag -nodriverkitlib unused
+flag -nofixprebinding unused
 flag -nogpuinc
 flag -nogpulib
-flag -nogpulibc
-flag -nohipwrapperinc
-flag -nolibc
-flag -nolibsycl
-flag -nomultidefs
+flag -nogpulibc unused
+flag -nohipwrapperinc unused
+flag -nolibc unused
+flag -nolibsycl cl unused
+flag -nomultidefs unused
 flag -nopie
-flag -noprebind
-flag -noprofilelib
-flag -noseglinkedit
-flag -nostartfiles
-flag -nostdinc
+flag -noprebind unused
+flag -noprofilelib unused
+flag -noseglinkedit unused
+flag -nostartfiles unused
+flag -nostdinc cl
 flag -nostdinc++
 flag -nostdlib
 flag -nostdlib++
 flag -nostdlibinc
-joined -o
-separate -o 1
-joined -objc-isystem
-joined -objcxx-isystem
-joined -object
-joined -object-file-name
-separate -object-file-name 1
-joined -object-file-name=
-joined -opt-record-file
-joined -opt-record-format
-joined -opt-record-passes
+joined -o cl
+separate -o 1 cl
+joined -objc-isystem cl
+joined -objcxx-isystem cl
+joined -object cl
+joined -object-file-name cl
+separate -object-file-name 1 cl unused
+joined -object-file-name= cl unused
+joined -opt-record-file cl
+joined -opt-record-format cl
+joined -opt-record-passes cl
 flag -p
 joined -pagezero_size
-separate -pagezero_size 1
+separate -pagezero_size 1 unused
 flag -pass-exit-codes
 flag -pedantic
 flag -pedantic-errors
 flag -pg
-flag -pie
+flag -pie unused
 flag -pipe
-flag -prebind
-flag -prebind_all_twolevel_modules
-flag -preload
-flag -print-diagnostic-options
-flag -print-effective-triple
-flag -print-enabled-extensions
-joined -print-file-name=
+flag -prebind unused
+flag -prebind_all_twolevel_modules unused
+flag -preload unused
+flag -print-diagnostic-options cl
+flag -print-effective-triple cl
+flag -print-enabled-extensions cl
+joined -print-file-name= cl
 flag -print-ivar-layout
-flag -print-libgcc-file-name
-flag -print-library-module-manifest-path
+flag -print-libgcc-file-name cl
+flag -print-library-module-manifest-path cl
 flag -print-multi-directory
 flag -print-multi-flags-experimental
 flag -print-multi-lib
 flag -print-multi-os-directory
 flag -print-multiarch
-joined -print-prog-name=
-flag -print-resource-dir
-flag -print-rocm-search-dirs
-flag -print-runtime-dir
-flag -print-search-dirs
-flag -print-supported-cpus
-flag -print-supported-extensions
-flag -print-target-triple
-flag -print-targets
-flag -private_bundle
+joined -print-prog-name= cl
+flag -print-resource-dir cl
+flag -print-rocm-search-dirs cl unused
+flag -print-runtime-dir cl
+flag -print-search-dirs cl
+flag -print-supported-cpus cl
+flag -print-supported-extensions cl
+flag -print-target-triple cl
+flag -print-targets cl
+flag -private_bundle unused
 flag -pthread
-flag -pthreads
+flag -pthreads unused
 flag -r
-flag -rdynamic
-separate -read_only_relocs 1
+flag -rdynamic unused
+separate -read_only_relocs 1 unused
 joined -reexport-l
 separate -reexport_framework 1
 joined -reexport_library
 separate -reexport_library 1
-flag -regcall4
+flag -regcall4 cl
 flag -relocatable-pch
-flag -remap
-flag -res-may-alias
-separate -resource-dir 1
-joined -resource-dir=
+flag -remap unused
+flag -res-may-alias unused
+separate -resource-dir 1 cl
+joined -resource-dir= cl
 flag -rewrite-legacy-objc
 flag -rewrite-objc
 separate -rpath 1
-joined -rtlib=
-flag -s
+joined -rtlib= cl unused
+flag -s unused
 flag -save-stats
 joined -save-stats=
 flag -save-temps
 joined -save-temps=
-separate -sectalign 3
-separate -sectcreate 3
-separate -sectobjectsymbols 2
-separate -sectorder 3
+separate -sectalign 3 unused
+separate -sectcreate 3 unused
+separate -sectobjectsymbols 2 unused
+separate -sectorder 3 unused
 joined -seg1addr
-separate -seg1addr 1
-separate -seg_addr_table 1
-separate -seg_addr_table_filename 1
-separate -segaddr 2
-separate -segcreate 3
-flag -seglinkedit
-separate -segprot 3
-joined -segs_read_
-joined -segs_read_only_addr
-separate -segs_read_only_addr 1
-joined -segs_read_write_addr
-separate -segs_read_write_addr 1
+separate -seg1addr 1 unused
+separate -seg_addr_table 1 unused
+separate -seg_addr_table_filename 1 unused
+separate -segaddr 2 unused
+separate -segcreate 3 unused
+flag -seglinkedit unused
+separate -segprot 3 unused
+joined -segs_read_ unused
+joined -segs_read_only_addr unused
+separate -segs_read_only_addr 1 unused
+joined -segs_read_write_addr unused
+separate -segs_read_write_addr 1 unused
 separate -serialize-diagnostics 1
-flag -shared
+flag -shared unused
 flag -shared-libasan
-flag -shared-libgcc
+flag -shared-libgcc unused
 flag -shared-libsan
-flag -single_module
+flag -single_module unused
 separate -specs 1
-joined -specs=
-flag -startfiles
+joined -specs= unused
+flag -startfiles unused
 flag -static
 flag -static-libasan
 flag -static-libclosure
-flag -static-libgcc
-flag -static-libgfortran
+flag -static-libgcc unused
+flag -static-libgfortran unused
 flag -static-libsan
-flag -static-libstdc++
-flag -static-openmp
-flag -static-pie
+flag -static-libstdc++ unused
+flag -static-openmp unused
+flag -static-pie unused
 joined -std-default=
 joined -std=
 joined -std=c++0x
@@ -819,52 +819,52 @@ joined -std=iso9899:199x
 joined -std=iso9899:2011
 joined -std=iso9899:2017
 joined -std=iso9899:2018
-flag -stdlib
+flag -stdlib unused
 joined -stdlib++-isystem
-separate -stdlib++-isystem 1
-joined -stdlib=
+separate -stdlib++-isystem 1 unused
+joined -stdlib= unused
 joined -sub_library
-separate -sub_library 1
+separate -sub_library 1 unused
 joined -sub_umbrella
-separate -sub_umbrella 1
-joined -sycl-std=
-flag -t
-separate -target 1
-flag -time
+separate -sub_umbrella 1 unused
+joined -sycl-std= cl
+flag -t unused
+separate -target 1 cl
+flag -time unused
 flag -traditional
 flag -traditional-cpp
 flag -trigraphs
-flag -twolevel_namespace
-flag -twolevel_namespace_hints
+flag -twolevel_namespace unused
+flag -twolevel_namespace_hints unused
 joined -u
-separate -u 1
+separate -u 1 cl unused
 joined -umbrella
-separate -umbrella 1
+separate -umbrella 1 unused
 joined -undef
 joined -undefined
-separate -undefined 1
+separate -undefined 1 unused
 joined -unexported_symbols_list
-separate -unexported_symbols_list 1
+separate -unexported_symbols_list 1 unused
 joined -unoptimized-cfg
-joined -unwindlib=
+joined -unwindlib= unused
 joined -use-spirv-backend
-flag -v
-separate -validator-version 1
+flag -v cl
+separate -validator-version 1 unused
 flag -verify-pch
-joined -vfsoverlay
-separate -vfsoverlay 1
-flag -via-file-asm
-flag -w
-joined -weak-l
-separate -weak_framework 1
-separate -weak_library 1
-separate -weak_reference_mismatches 1
-flag -whatsloaded
-flag -why_load
-flag -whyload
-separate -working-directory 1
-joined -working-directory=
-joined -x
-separate -x 1
-joined -y
+joined -vfsoverlay cl
+separate -vfsoverlay 1 cl
+flag -via-file-asm cl
+flag -w cl
+joined -weak-l cl
+separate -weak_framework 1 cl
+separate -weak_library 1 cl
+separate -weak_reference_mismatches 1 cl unused
+flag -whatsloaded cl unused
+flag -why_load cl unused
+flag -whyload cl unused
+separate -working-directory 1 cl
+joined -working-directory= cl
+joined -x cl
+separate -x 1 cl
+joined -y unused
 separate -z 1
