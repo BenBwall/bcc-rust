@@ -2597,11 +2597,14 @@ mod tests {
             let mut args = vec!["-fsyntax-only", "-fno-diagnostics-show-caret", "c.c"];
             args.extend(options);
             let output = directory.bcc("--gcc-mode", &args);
-            let text: String = stderr(&output)
+            let mut text = String::new();
+            for line in stderr(&output)
                 .lines()
                 .filter(|line| line.contains("warning:") || line.contains("error:"))
-                .map(|line| format!("{line}\n"))
-                .collect();
+            {
+                text.push_str(line);
+                text.push('\n');
+            }
             assert_eq!(text, expected, "{options:?} {pragma:?}");
             assert_eq!(output.status.code(), Some(status), "{options:?} {pragma:?}");
         }
