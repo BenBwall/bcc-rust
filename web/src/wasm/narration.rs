@@ -1041,17 +1041,29 @@ impl Context<'_> {
                 )
                 .with(concepts::host())
             },
+            | Effect::Call { callee } if matches!(instr, Instr::CallIndirect { .. }) => {
+                let name = program.module.func_name(*callee);
+                let index = popped.last().map_or_else(String::new, ToString::to_string);
+                Step::new(
+                    "call",
+                    "Call",
+                    &format!("Call `${name}` through the table{with}"),
+                    &format!(
+                        "`call_indirect` pops a table index, `{index}`, and calls the function \
+                         stored at that index of the table, here `${name}`. A C function pointer \
+                         compiles to such an index, so this one instruction runs whichever \
+                         function the pointer names. It first checks that `${name}` has the type \
+                         the instruction names, and traps if not; then it pops the arguments, \
+                         which become the callee's first locals, its parameters, and starts a new \
+                         frame: execution continues at `${name}`'s first instruction, and resumes \
+                         here when it returns."
+                    ),
+                )
+                .with(concepts::calls())
+                .with(concepts::tables())
+            },
             | Effect::Call { callee } => {
                 let name = program.module.func_name(*callee);
-                let indirect = if matches!(instr, Instr::CallIndirect { .. }) {
-                    format!(
-                        " `call_indirect` found it at index {} of the table: a C function pointer \
-                         is such an index.",
-                        popped.last().map_or_else(String::new, ToString::to_string)
-                    )
-                } else {
-                    String::new()
-                };
                 Step::new(
                     "call",
                     "Call",
@@ -1059,7 +1071,7 @@ impl Context<'_> {
                     &format!(
                         "`call` pops the arguments, which become the callee's first locals, its \
                          parameters, and starts a new frame: execution continues at `${name}`'s \
-                         first instruction, and resumes here when it returns.{indirect}"
+                         first instruction, and resumes here when it returns."
                     ),
                 )
                 .with(concepts::calls())

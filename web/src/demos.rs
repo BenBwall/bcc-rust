@@ -226,8 +226,8 @@ pub static DEMOS: [Demo; 18] = [
         key:     "callbacks",
         title:   "Callbacks: passing a function to a function",
         summary: "A function's name becomes a pointer to it, sum_of takes that pointer as a \
-                  parameter, and one call through it runs twice in one call of sum_of and \
-                  square in the next.",
+                  parameter, and one call through it runs twice in one call of sum_of and square \
+                  in the next.",
         topics:  &["pointers to functions", "callbacks", "indirect calls"],
         part:    Part::Memory,
         faults:  false,
