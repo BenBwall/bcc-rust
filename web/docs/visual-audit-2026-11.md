@@ -5720,8 +5720,8 @@ return type is refused as the constraint violation it is (§6.7.5.3p1).
   behavior: use of a dangling pointer", "The pointer pointed to an object of
   a call that has returned. When that object's lifetime ended, the pointer's
   value became indeterminate, and C gives no meaning to using it", citing
-  §6.2.4p2 and J.2. A statement that only discards the result, `make();`, runs on,
-  since it does not use the value.
+  §6.2.4p2 and J.2. A statement that only discards the result, `make();`,
+  runs on, since it does not use the value.
 
 [`dangling-1366-light`](screenshots/part17/dangling-1366-light-after.png)
 ([before](screenshots/part17/dangling-1366-light-before.png)),
@@ -6007,3 +6007,96 @@ WebAssembly stepper's 79; and the site's four clippy runs, all clean.
 changed line in the site's files is formatted, and `git diff --check` is
 clean. This round took no screenshots: its visible changes are notes'
 text and one hover's word, which the dumps and the site test cover.
+
+### Review, round 2
+
+The re-check of the branch at `2450a4d54` found one blocker: round 1's fix
+for item 2 held for one jump back but not for two.
+
+#### 1. A value stored two passes back was said never to have been stored
+
+In
+
+```c
+int n = 0;
+again:;
+int k;
+if (n == 2) return k;
+if (n == 0) k = 4;
+n++;
+goto again;
+```
+
+the read of `k` on the third pass stopped with "nothing has been stored in
+`k` yet" and "The read would use a value the program never set", though the
+first pass stored 4 in it (GCC 14's build returns that 4). The machine kept,
+for each object, only what it held just before the latest pass over its
+declaration, and on the third pass that was already indeterminate. The
+third pass's declaration step said "it held no value yet" for the same
+reason. The opposite mistake came from the same record: no store ever
+dropped it, so a structure that was reached again and then assigned a copy
+whose member `a` was never set stopped at `s.a` with "a value was stored in
+`s.a` earlier, but execution then reached the declaration of `s` on line 5
+again", though the copy two steps before had stored that indeterminate
+member.
+
+**Fixed.** The machine now keeps a list of leaves, each an object and a
+member or element of it, that held a stored value until a pass over their
+object's declaration without an initializer made them indeterminate
+(§6.8p3). A leaf stays on the list over further passes and leaves it when
+something is stored there, by an assignment, an initializer or a copy of a
+whole structure. So the first program stops with "a value was stored in `k`
+earlier, but execution then reached the declaration of `k` on line 4
+again…", citing §6.8p3, and its third declaration step says "it held no
+value: the value stored in it earlier became indeterminate when execution
+last reached this declaration… so it still holds none". The copy's member
+gets the usual "nothing has been stored in `s.a` yet", and the copy's own
+step already says "Indeterminate members are copied as they are"
+(§6.2.6.1p6). A new engine test runs a store and then two jumps back; a
+store, a jump back, a new store and a jump back, and a store after the last
+pass, which reads back; and the structure copy.
+
+The list holds two numbers per leaf in place of a copy of each object's
+old value. When no goto has gone back over a declaration it is empty, so
+each retained step still carries 24 bytes for it, and the two recursions
+that end at the trace limit end at the same step as after round 1 (`b17`
+at 419, `d03` at 476).
+
+#### 2. J.2 at a block's dangling pointer
+
+Round 1 left a pointer to an object of a block that has ended citing only
+§6.2.4p2 at its stop. That stop now cites J.2 beside it, as the stop for a
+call's dangling pointer does.
+
+The minor finding on order (a jump's note lists the objects declared after
+its label in the order they were created, not in source order) is left as
+it was.
+
+#### What changed in the dumps
+
+The same 1,142 programs, the re-check's 28 new probes, and 13 new probes of
+this round's (repeated passes over scalars, structure members, arrays,
+pointers and recursion) were dumped before and after the fix. Of the 1,142,
+1,140 dump byte for byte as before, the 17 lessons among them. The others
+change only where intended:
+
+- **2 reads after repeated gotos back** (the re-check's
+  `b2_twice_store_once`, its declaration step too, and
+  `b2_struct_copy_indet`) stop with item 1's text.
+- **2 dangling pointers to a block's object** (the review's `g12`, which
+  the re-check's probes repeat, and this part's `a16`) cite J.2 at the
+  stop.
+- **7 of this round's 13 probes** change from "nothing has been stored" to
+  item 1's text; the other 6 dump as before.
+
+No program's result or step count changed. Of the 324 programs compiled
+with GCC 14, the 235 that finish in the engine give GCC's exit status, and
+the 15 of them that print give its output.
+
+#### Checks
+
+As `pages.yml` runs them: the engine's tests (172, one new) and its clippy
+pass; the site's tests (174) and the prerender's 2; the WebAssembly
+stepper's 79; and the site's four clippy runs, all clean. `cargo +nightly
+fmt --check` passes for every changed engine file, and `git diff --check`
+is clean.
