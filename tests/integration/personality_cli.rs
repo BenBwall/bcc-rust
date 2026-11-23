@@ -8561,6 +8561,31 @@ mod tests {
             (&["/clang:-D", "/clang:X", "/clang:-O2"], String::new(), 0),
             (&["/clang:-dM"], String::new(), 0),
             (&["/clang:-shared"], unused.into(), 0),
+            // Clang's ignored options, warned about after the input checks.
+            (
+                &["/clang:-fgcse", "/clang:-ffoo", "/clang:-mmpx"],
+                [
+                    warning("-ffoo").as_str(),
+                    "clang-cl: warning: optimization flag '-fgcse' is not supported \
+                     [-Wignored-optimization-argument]\n",
+                    "clang-cl: warning: the flag '-mmpx' has been deprecated and will be ignored \
+                     [-Wunused-command-line-argument]\n",
+                ]
+                .concat(),
+                0,
+            ),
+            (
+                &["/WX", "/clang:-fgcse"],
+                "clang-cl: error: optimization flag '-fgcse' is not supported \
+                 [-Werror,-Wignored-optimization-argument]\n"
+                    .into(),
+                1,
+            ),
+            (
+                &["/clang:-ftree-vectorize", "/clang:-finline"],
+                String::new(),
+                0,
+            ),
             // Bare, an option neither clang-cl nor bcc knows is ignored,
             // and one of Clang's takes its value from the next argument.
             (&["--bogus"], warning("--bogus"), 0),

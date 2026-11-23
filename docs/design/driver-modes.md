@@ -1560,12 +1560,14 @@ with the options the pinned Clang's driver takes frozen in
 A bare `-` option that neither clang-cl's lists nor bcc's command line
 knows is ignored the same way (`--bogus`), and a bare Clang option takes
 its values from the next arguments (`-Xclang` alone is the missing-value
-error). Until the ignored GCC optimization flags are listed
-(`-fgcse`), clang-cl's `optimization flag '-fgcse' is not supported` for
-`/clang:-fgcse` comes out as the unknown-argument warning; other
-remaining differences are `/clang:-Wl,`, which Clang hands the linker and
-bcc's front end calls an unknown warning option, and `/clang:-E`, `-v` and
-`-help`, which print bcc's text.
+error). The options Clang takes and ignores (`personality/options/clang-ignored.list`)
+are Clang's after `/clang:` too: `/clang:-fgcse` draws `optimization flag
+'-fgcse' is not supported` and `/clang:-mmpx` the deprecation warning, for
+each C source compiled, after the input checks, at the severity the warning
+options give their groups, and an alias is the option it names
+(`/clang:-ftree-vectorize`). Remaining differences are `/clang:-Wl,`, which
+Clang hands the linker and bcc's front end calls an unknown warning option,
+and `/clang:-E`, `-v` and `-help`, which print bcc's text.
 
 The warning is clang-cl's, byte for byte: `clang-cl: warning: unknown
 argument ignored in clang-cl: '-fsigned-char' [-Wunknown-argument]`, or

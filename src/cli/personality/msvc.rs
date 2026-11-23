@@ -61,6 +61,7 @@ use super::{
     known::{
         self,
         ClOption,
+        ClangIgnored,
         ClangOption,
     },
     unimplemented::{
@@ -288,32 +289,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 return Err(MainError::Reported(1));
             }
         } else if clang_cl && text.starts_with('-') {
-            // clang-cl also takes Clang's options, with the values an
-            // option's bare name takes from the next arguments; it ignores
-            // an option neither it nor bcc knows.
-            let mut words = vec![text];
-            if let Some(ClangOption::TakesNext(count)) = known::clang_option(text) {
-                words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
-                if words.len() <= count {
-                    state.missing_values(invocation, text, count);
-                    continue;
-                }
-            } else if known::clang_option(text).is_none()
-                && read_options(&[text], "-c") == OptionReading::Refused
-            {
-                if state.unknown_argument(
-                    invocation,
-                    unknown_argument,
-                    text,
-                    &known::ClUnknown { nearest: None },
-                ) {
-                    return Err(MainError::Reported(1));
-                }
-                continue;
+            // clang-cl also takes Clang's options.
+            if state.bare_clang_option(
+                invocation,
+                text,
+                &mut arguments,
+                unknown_argument,
+                &mut x86_options,
+            ) {
+                return Err(MainError::Reported(1));
             }
-            let mut bcc = std::mem::take(&mut state.bcc);
-            state.clang_option(invocation, &words, false, &mut x86_options, &mut bcc);
-            state.bcc = bcc;
         } else {
             // An option clang-cl knows takes its value from the next
             // argument after its bare name (`/vctoolsdir /opt/vc`), which
@@ -370,6 +355,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.object = Some(object);
     }
     state.check_inputs(invocation);
+    if state.warn_ignored(invocation, &expanded) {
+        return Err(MainError::Reported(1));
+    }
     let c_count = state.sources.iter().filter(|source| source.is_c()).count();
     state.check_output_names(invocation, c_count);
     if state.errors != 0 {
@@ -474,7 +462,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         keep_going: !clang_cl,
         ..Plan::default()
     };
-    if clang_cl && state.dry_run {
+    // clang-cl's `-v` and `-###` print its version without inputs, and
+    // `-###` runs nothing with them either.
+    if clang_cl && state.verbose && (state.sources.is_empty() || state.dry_run) {
         plan.steps.push(Step::Print {
             text:   version::verbose(invocation.personality, target),
             stderr: true,
@@ -485,13 +475,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // clang-cl refuses a command line without inputs, as Clang does.
         // `cl` alone prints its usage to stdout after its banner; with
         // options and no file it stops with error D8003.
-        if clang_cl && state.verbose {
-            plan.steps.push(Step::Print {
-                text:   version::verbose(invocation.personality, target),
-                stderr: true,
-            });
-            return Ok(plan);
-        }
         if clang_cl {
             invocation.error(format_args!("no input files"));
             return Err(MainError::Reported(error_status(invocation.personality)));
@@ -770,7 +753,12 @@ enum DriverSeverity {
 /// for. clang-cl hands a `/clang:` option to its front end alone, so none
 /// counts here.
 fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
-    const GROUP: &str = "unknown-argument";
+    driver_warning_severity(arguments, "unknown-argument")
+}
+
+/// How clang-cl reports a warning of its driver's in `group` that is on by
+/// default, as [`unknown_argument_severity`] says for `-Wunknown-argument`.
+fn driver_warning_severity(arguments: &[OsString], group: &str) -> DriverSeverity {
     let (mut ignore_all, mut all_errors, mut all_fatal) = (false, false, false);
     let mut mapping = DriverSeverity::Warning;
     let (mut no_error, mut no_fatal) = (false, false);
@@ -792,7 +780,7 @@ fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
         let group = |prefix: &str| {
             argument
                 .strip_prefix(prefix)
-                .is_some_and(|name| name == GROUP)
+                .is_some_and(|name| name == group)
         };
         // `cl`'s options start with `/` or `-`, Clang's with `-`.
         match (option, argument.starts_with('-')) {
@@ -1037,6 +1025,9 @@ struct State {
     /// clang-cl's `-###`, which prints its version, and the commands it
     /// would run, even with inputs, and runs none.
     dry_run:                 bool,
+    /// The `/clang:` options Clang ignores with a warning for each source it
+    /// compiles: GCC optimization flags and retired flags, in order.
+    ignored:                 Vec<(ClangIgnored, String)>,
     ignore_include_variable: bool,
     /// clang-cl's `/imsvc` directories, in order.
     imsvc:                   Vec<OsString>,
@@ -1095,6 +1086,7 @@ impl Default for State {
             nologo:                  false,
             verbose:                 false,
             dry_run:                 false,
+            ignored:                 Vec::new(),
             ignore_include_variable: false,
             imsvc:                   Vec::new(),
             standard:                "c17",
@@ -1763,6 +1755,20 @@ impl State {
                 self.sources.push(Source::new(OsStr::new(text), false));
                 continue;
             }
+            // The options Clang takes and ignores, and the aliases it
+            // defines without a name of their own.
+            if words.len() == 1
+                && let Some(ignored) = known::clang_ignored(text)
+            {
+                match ignored {
+                    | ClangIgnored::Optimization | ClangIgnored::Deprecated =>
+                        self.ignored.push((ignored, text.to_owned())),
+                    | ClangIgnored::Silent => {},
+                    | ClangIgnored::Alias(option) =>
+                        self.clang_option(invocation, &[option], true, x86_options, out),
+                }
+                continue;
+            }
             if known::clang_option(text).is_none() {
                 // Clang's option table suggests a near option as clang-cl's
                 // does (`-fbuiltin-`; did you mean `-fbuiltin`?).
@@ -1775,6 +1781,38 @@ impl State {
             }
             self.clang_option(invocation, words, true, x86_options, out);
         }
+        false
+    }
+
+    /// Reads `text`, a Clang option clang-cl takes bare, with the values its
+    /// bare name takes from the next `arguments`, into bcc's options
+    /// ([`State::clang_option`]); refuses one left without them, and ignores
+    /// one neither clang-cl nor bcc knows with its warning at `severity`.
+    /// Returns whether a fatal error stopped the command line.
+    fn bare_clang_option<'a>(
+        &mut self,
+        invocation: &Invocation,
+        text: &'a str,
+        arguments: &mut impl Iterator<Item = &'a OsStr>,
+        severity: DriverSeverity,
+        x86_options: &mut Vec<&'a str>,
+    ) -> bool {
+        let mut words = vec![text];
+        if let Some(ClangOption::TakesNext(count)) = known::clang_option(text) {
+            words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
+            if words.len() <= count {
+                self.missing_values(invocation, text, count);
+                return false;
+            }
+        } else if known::clang_option(text).is_none()
+            && read_options(&[text], "-c") == OptionReading::Refused
+        {
+            let unknown = known::ClUnknown { nearest: None };
+            return self.unknown_argument(invocation, severity, text, &unknown);
+        }
+        let mut bcc = std::mem::take(&mut self.bcc);
+        self.clang_option(invocation, &words, false, x86_options, &mut bcc);
+        self.bcc = bcc;
         false
     }
 
@@ -1913,24 +1951,73 @@ impl State {
             ),
             | None => format!("unknown argument ignored in clang-cl: '{argument}'"),
         };
+        self.driver_warning(invocation, severity, "unknown-argument", &message)
+    }
+
+    /// Reports `message`, a warning of clang-cl's driver in `group`, at
+    /// `severity`: as a warning, an error that fails the command line, or a
+    /// fatal error that stops it, which returns true.
+    fn driver_warning(
+        &mut self,
+        invocation: &Invocation,
+        severity: DriverSeverity,
+        group: &str,
+        message: &str,
+    ) -> bool {
         match severity {
             | DriverSeverity::Ignored => {},
-            | DriverSeverity::Warning =>
-                invocation.warning(format_args!("{message} [-Wunknown-argument]")),
+            | DriverSeverity::Warning => invocation.warning(format_args!("{message} [-W{group}]")),
             | DriverSeverity::Error => {
                 self.errors += 1;
-                invocation.error(format_args!("{message} [-Werror,-Wunknown-argument]"));
+                invocation.error(format_args!("{message} [-Werror,-W{group}]"));
             },
             | DriverSeverity::Fatal => {
                 super::print(
-                    &format!(
-                        "{}: fatal error: {message} [-Wunknown-argument]\n",
-                        invocation.name
-                    ),
+                    &format!("{}: fatal error: {message} [-W{group}]\n", invocation.name),
                     true,
                 );
                 return true;
             },
+        }
+        false
+    }
+
+    /// Warns as clang-cl's driver does about the `/clang:` options Clang
+    /// takes and ignores, for each C source it compiles
+    /// (`Clang::ConstructJob`): first the GCC optimization flags
+    /// (`optimization flag '-fgcse' is not supported`), then the retired
+    /// flags (`the flag '-mmpx' has been deprecated and will be ignored`),
+    /// each in order, at the severity the warning options give their
+    /// groups. Returns whether a fatal error stopped the command line.
+    fn warn_ignored(&mut self, invocation: &Invocation, arguments: &[OsString]) -> bool {
+        let ignored = std::mem::take(&mut self.ignored);
+        if ignored.is_empty() {
+            return false;
+        }
+        let sources = self
+            .sources
+            .iter()
+            .filter(|source| {
+                source.is_c() && (source.path == "-" || Path::new(&source.path).exists())
+            })
+            .count();
+        for _ in 0..sources {
+            for (kind, group) in [
+                (ClangIgnored::Optimization, "ignored-optimization-argument"),
+                (ClangIgnored::Deprecated, "unused-command-line-argument"),
+            ] {
+                let severity = driver_warning_severity(arguments, group);
+                for (_, option) in ignored.iter().filter(|(other, _)| *other == kind) {
+                    let message = if kind == ClangIgnored::Optimization {
+                        format!("optimization flag '{option}' is not supported")
+                    } else {
+                        format!("the flag '{option}' has been deprecated and will be ignored")
+                    };
+                    if self.driver_warning(invocation, severity, group, &message) {
+                        return true;
+                    }
+                }
+            }
         }
         false
     }
