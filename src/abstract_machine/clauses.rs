@@ -62,8 +62,12 @@ clauses! {
          cannot be used, even where its object already exists.";
     /// C99: §6.2.4 paragraph 2, p. 32; PDF p. 44.
     LIFETIME = "6.2.4p2", "p. 32; PDF p. 44", "Storage durations of objects",
-        "An object exists only during its lifetime; using it, or a pointer to it, after the \
-         lifetime ends is undefined.";
+        "An object exists only during its lifetime: referring to it after the lifetime ends is \
+         undefined, and every pointer to it becomes indeterminate.";
+    /// C99: §J.2 paragraph 1, p. 492; PDF p. 504.
+    DANGLING_USE = "J.2p1", "p. 492; PDF p. 504", "Undefined behavior",
+        "Using the value of a pointer to an object whose lifetime has ended is undefined: even \
+         storing, comparing or passing it, not only following it.";
     /// C99: §6.2.4 paragraph 3, p. 32; PDF p. 44.
     STATIC_STORAGE = "6.2.4p3", "p. 32; PDF p. 44", "Storage durations of objects",
         "An object declared outside every function, or with static, lives for the whole run of \

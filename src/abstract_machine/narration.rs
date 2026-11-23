@@ -975,6 +975,7 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             .clauses
             .extend([clauses::CONVERSIONS, clauses::VARIADIC_TYPES]),
         | Some(Undefined::StringLiteralWrite) => event.clauses.push(clauses::STRING_LITERAL),
+        | Some(Undefined::DanglingPointer) => event.clauses.push(clauses::DANGLING_USE),
         | _ => {},
     }
     match topic {

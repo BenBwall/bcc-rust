@@ -542,8 +542,8 @@ impl Machine {
     }
 
     /// A value about to be used: a pointer whose object has ended, as one a
-    /// call returned to an object of its own, is indeterminate, and using
-    /// it is undefined (C99 §6.2.4p2).
+    /// call returned to an object of its own, is indeterminate (C99
+    /// §6.2.4p2), and using it is undefined (C99 §J.2).
     pub fn check_dangling(&self, value: &Value) -> Result<(), Diagnostic> {
         if let Value::Pointer {
             target: Some(target),

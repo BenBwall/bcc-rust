@@ -602,7 +602,8 @@ impl Machine {
 
     /// `event`, the return of `function`, when the pointer it returns
     /// points to `target`, one of the call's own automatic objects, which
-    /// ended with it: the caller receives an indeterminate value.
+    /// ended with it: the caller receives an indeterminate value (C99
+    /// §6.2.4p2), and any use of it is undefined (C99 §J.2).
     pub(in crate::abstract_machine) fn returned_dangling(
         &self,
         mut event: Event,
@@ -623,7 +624,10 @@ impl Machine {
             "`{function}` returns a pointer to its own `{name}`, which ends with the call, so the \
              caller receives a dangling pointer."
         );
-        event.clauses.push(clauses::LIFETIME);
+        if !event.clauses.contains(&clauses::LIFETIME) {
+            event.clauses.push(clauses::LIFETIME);
+        }
+        event.clauses.push(clauses::DANGLING_USE);
         event.objects.push(target);
         noted(event, Topic::Lifetime)
     }
