@@ -427,14 +427,30 @@ dev build of bcc, in C99.
 | `==` allows "a pointer to an object with a pointer to void" | clause gloss, §6.5.9p2 | §6.5.9p2: "a pointer to an object or incomplete type"; `fp == v` draws GCC's and Clang's `-pedantic` warning, `&x == v` none | **Over-promised** (an incomplete type was left out) | "a pointer to an object or incomplete type with a pointer to void" |
 | Two pointers are equal when "one points one past an array and the other to an object that happens to follow it" | clause gloss, §6.5.9p6 | §6.5.9p6: "a pointer to the start of a different array object that happens to immediately follow the first array object", and a pointer to an object equals one to "a subobject at its beginning" | **Over-promised** | Both cases in the paragraph's own terms |
 | A wrong-type call runs on "with the caller and the function disagreeing about where the arguments and the result are" | note on pointers to functions; the stop at such a call | §6.5.2.2p9: undefined whatever the types; `c38`: `int (*)(int)` called as `unsigned (*)(unsigned)` passes and returns in the same registers and prints 42 under all three compilers at `-O0` and `-O2` ([`results-part21.txt`](claims/results-part21.txt)) | **Over-promised**: a cause stated as a fact | Undefined "even when it seems to work"; a disagreement about where the values are is one possible consequence |
-| A long is "8 bytes on x86-64", and other sizes stated "on x86-64" | every object's declaration, `sizeof`, the size and range notes, the glossary, the datasheet, the rank panel | `clang --target=x86_64-pc-windows-msvc -dM -E`: `__SIZEOF_LONG__` 4 and `__SIZEOF_LONG_DOUBLE__` 8 (LLP64), against 8 and 16 for x86_64-linux-gnu (LP64) | **Over-promised** | Every stated size, range, alignment and format says "on x86-64 Linux" |
+| A long is "8 bytes on x86-64", and other sizes stated "on x86-64" | every object's declaration, `sizeof`, the size and range notes, the glossary, the datasheet, the rank panel | `clang --target=x86_64-pc-windows-msvc -dM -E`: `__SIZEOF_LONG__` 4 and `__SIZEOF_LONG_DOUBLE__` 8 (LLP64), against 8 and 16 for x86_64-linux-gnu (LP64) | **Over-promised** | Every stated size, range, alignment, format and type that differs between x86-64 Linux and Windows says "on x86-64 Linux" |
 | `-Wshadow` and `-Wimplicit-fallthrough` in the `c35` and `c34` rows | rows above | `run.sh` passed neither option | Unbacked | `EXTRA` passes them; [`results-part21.txt`](claims/results-part21.txt) records both runs |
 
 [`claims/run.sh`](claims/run.sh) now takes `STD` (the language standard,
 `c17` by default, so [`results.txt`](claims/results.txt) stays
 reproducible), `EXTRA` (options after `-Wall -Wextra`) and the names of the
-probes or lessons to run. A run with no names and no `STD` gives
-`results.txt` again: Clang 23.1.5's lines differ only in the values printed
-by the probes whose behavior is undefined (`c03b`, `c04b`, `c07`).
+probes or lessons to run. A run with no names and no `STD` uses
+`results.txt`'s options but does not give that file back. Clang 23.1.5's
+lines differ in three ways:
+
+- the values that the undefined probes `c03b`, `c04b` and `c07` print;
+- the `indeterminate` lesson's exit status at `-O0`, which is undefined
+  too (201 in `results.txt`);
+- every probe and lesson added since `results.txt` was made (`c29` to
+  `c38`, `callbacks`, `logic`, `loops` and `strings`), which the file
+  lacks.
+
+GCC's and bcc's lines differ in the undefined probes' values and the new
+probes and lessons too, and in five more places:
+
+- GCC's `indeterminate` exit status at `-O0`, and bcc's `bounds` exit
+  status at `-O0`, both undefined;
+- the line number in GCC's warning about `unsigned.c`;
+- bcc's `-Wuninitialized` warnings for `indeterminate`;
+- the temporary paths in bcc's `c24` and `c25` errors.
 [`claims/results-part21.txt`](claims/results-part21.txt) holds the three
 runs above, each under the command that made it.
