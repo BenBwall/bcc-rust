@@ -97,6 +97,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         } else {
             "msvc-classic"
         },
+        clang_cl,
         ..State::default()
     };
     // clang-cl reads its `/clang:` options after the others, wherever they
@@ -261,6 +262,24 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             clang_options.extend(front_end_option(clang));
             continue;
         }
+        // clang-cl's `/imsvc DIR`, `-imsvc DIR` or `/imsvcDIR`, which CMake
+        // gives it for a `SYSTEM` include directory.
+        if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
+            let directory = if directory.is_empty() {
+                let Some(directory) = arguments.next() else {
+                    invocation.error(format_args!(
+                        "argument to '{text}' is missing (expected 1 value)"
+                    ));
+                    state.errors += 1;
+                    continue;
+                };
+                directory.to_os_string()
+            } else {
+                directory.into()
+            };
+            state.imsvc.push(directory);
+            continue;
+        }
         let remaining = arguments.len();
         if state.option(invocation, option, &mut arguments) {
             // The bare name of an option clang-cl reads with the next
@@ -310,7 +329,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         } else {
             // An option clang-cl knows takes its value from the next
-            // argument after its bare name (`/imsvc /usr/include`), which
+            // argument after its bare name (`/vctoolsdir /opt/vc`), which
             // is then no input.
             let mut text = text.to_owned();
             if known == Some(ClOption::TakesNext)
@@ -428,14 +447,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
         common.push("-D_DEBUG".into());
     }
-    if !state.ignore_include_variable
-        && let Some(include) = std::env::var_os("INCLUDE")
-    {
-        for directory in std::env::split_paths(&include) {
-            if !directory.as_os_str().is_empty() {
-                common.push("--isystem".into());
-                common.push(directory.into_os_string());
-            }
+    // `cl` searches `%INCLUDE%` before the command line's directories;
+    // clang-cl after them and its resource headers, with its own system
+    // directories ([`State::clang_cl_system_directories`]).
+    if !clang_cl {
+        for directory in state.include_variable() {
+            common.push("--isystem".into());
+            common.push(directory);
         }
     }
     // Intel's defaults come before the command line's own options.
@@ -443,6 +461,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         intel.apply(&invocation.name, &mut common, target);
     }
     common.append(&mut state.bcc);
+    if clang_cl {
+        for directory in state.clang_cl_system_directories() {
+            common.push("--idirafter".into());
+            common.push(directory);
+        }
+    }
     if X86Features::from_options(&x86_options.iter().copied(), true).unknown_vector_abi()
         == Some(32)
     {
@@ -1022,6 +1046,12 @@ struct State {
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
     ignore_include_variable: bool,
+    /// The personality is clang-cl's (or `icx-cl`'s), not `cl`'s.
+    clang_cl:                bool,
+    /// clang-cl's `/imsvc` directories, in order.
+    imsvc:                   Vec<OsString>,
+    /// The directories of clang-cl's `/external:env:` variables, in order.
+    external_env:            Vec<OsString>,
     standard:                &'static str,
     /// `/std:` named the standard, as `/std:c11` does, rather than `cl`'s
     /// default dialect.
@@ -1077,6 +1107,9 @@ impl Default for State {
             nologo:                  false,
             verbose:                 false,
             ignore_include_variable: false,
+            clang_cl:                false,
+            imsvc:                   Vec::new(),
+            external_env:            Vec::new(),
             standard:                "c17",
             standard_given:          false,
             diagnostics:             "msvc-caret",
@@ -1114,6 +1147,34 @@ impl Runtime {
 }
 
 impl State {
+    /// The directories of `%INCLUDE%`, unless `/X` leaves them out.
+    fn include_variable(&self) -> Vec<OsString> {
+        if self.ignore_include_variable {
+            return Vec::new();
+        }
+        std::env::var_os("INCLUDE")
+            .map_or_default(|include| std::env::split_paths(&include).collect::<Vec<_>>())
+            .into_iter()
+            .filter(|directory| !directory.as_os_str().is_empty())
+            .map(PathBuf::into_os_string)
+            .collect()
+    }
+
+    /// The system directories clang-cl's driver adds after its resource
+    /// headers, in its order: the `/imsvc` directories, those of the
+    /// `/external:env:` variables, and `%INCLUDE%`'s unless `/X` is given,
+    /// which leaves the others (`MSVCToolChain::AddClangSystemIncludeArgs`).
+    /// The command line's `/I` and `/external:I` directories, which come
+    /// before them all, and the resource headers keep their places, so a
+    /// header found here is a system header, whose warnings clang-cl does
+    /// not show.
+    fn clang_cl_system_directories(&mut self) -> Vec<OsString> {
+        let mut directories = std::mem::take(&mut self.imsvc);
+        directories.append(&mut self.external_env);
+        directories.extend(self.include_variable());
+        directories
+    }
+
     /// Translates the option `option` (without its `/` or `-`), reading a
     /// separate operand from `rest`. Returns whether it is a `cl` option.
     fn option<'r>(
@@ -1425,13 +1486,21 @@ impl State {
                         format_args!("invalid numeric argument '/{option}'"),
                     );
                 } else if let Some(variable) = option.strip_prefix("external:env:") {
-                    // The directories in VARIABLE are system directories.
+                    // The directories in VARIABLE are system directories,
+                    // which clang-cl searches after its `/imsvc` ones
+                    // ([`Self::clang_cl_system_directories`]).
                     for directory in std::env::var_os(variable)
                         .map_or_default(|value| std::env::split_paths(&value).collect::<Vec<_>>())
                     {
-                        if !directory.as_os_str().is_empty() {
+                        if directory.as_os_str().is_empty() {
+                            continue;
+                        }
+                        let directory = directory.into_os_string();
+                        if self.clang_cl {
+                            self.external_env.push(directory);
+                        } else {
                             self.bcc.push("-isystem".into());
-                            self.bcc.push(directory.into_os_string());
+                            self.bcc.push(directory);
                         }
                     }
                 } else if option.starts_with("RTC") && option != "RTC-" {

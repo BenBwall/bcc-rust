@@ -282,7 +282,7 @@ without a personality as well:
 | `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type | storage type | storage type |
 | Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` |
 | Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
-| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host, as Clang (zig: its own) | as Clang | the host's when compiling for the host; none for a cross target unless asked |
+| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | `/imsvc`, then `%INCLUDE%` (unless `/X`), after the resource headers | host's | the host's when compiling for the host, as Clang (zig: its own) | as Clang | the host's when compiling for the host; none for a cross target unless asked |
 | Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | Clang's | Clang's | annotated snippet |
 | Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | `a.out` (`a.exe` for Windows) | `a.out` | none (analysis only) |
 | `__bcc__` | defined | defined | defined | defined | defined | defined | defined | defined |
@@ -935,7 +935,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl`; an output of any step that is an input of the command line (by device and inode) is refused before any step runs |
 | `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i`, in `cl`'s layout (Preprocessed text) |
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
-| `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
+| `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` (clang-cl: see "clang-cl" for where it searches `%INCLUDE%`) |
 | `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
 | `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror` (clang-cl: `-w` / `-Wall` / `-Wall -Wextra`, `-Weverything` for `/Wall` / `-Werror`); each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
 | `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none. `#pragma warning` reads the same numbers (language-standards.md, "Diagnostic pragmas") |
@@ -948,7 +948,8 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/Zc:__STDC__` | defines `__STDC__` |
 | `/Zc:trigraphs`, `/Zc:trigraphs-` | `-ftrigraphs`, `-fno-trigraphs` (the default, as in `cl`) |
 | `/J` | `-funsigned-char`: plain `char` is unsigned and `_CHAR_UNSIGNED` defined |
-| `/external:I DIR`, `/external:env:VAR` | `-isystem` |
+| `/external:I DIR`, `/external:env:VAR` | `-isystem` (clang-cl searches `/external:env:` directories after the resource headers, see "clang-cl") |
+| `/imsvc DIR` (clang-cl and `icx-cl`) | a system directory after the resource headers, before `%INCLUDE%` (see "clang-cl") |
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stdout (to stderr under `/E`, `/EP` and `/P`), the path absolute (see "Preprocessed text" for where `cl` keeps it relative) |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
@@ -1455,6 +1456,23 @@ input, which `/E` preprocesses as C and which compiles only when `/Tc`
 names its language (`clang-cl: error: use /Tc or /Tp to set input type for
 standard input` otherwise).
 
+Header search follows clang-cl's driver
+(`MSVCToolChain::AddClangSystemIncludeArgs`). `/I` and `/external:I`
+directories come first, in command-line order, then the resource headers,
+then the system directories the driver adds: those of `/imsvc DIR` (also
+`-imsvc DIR` and joined, `/imsvcDIR`), which CMake gives clang-cl for a
+`SYSTEM` include directory, those of the `/external:env:VAR` variables,
+and those of `%INCLUDE%` unless `/X` is given; `/X` keeps the other two.
+A header found in any but `/I`'s directories is a system header, so its
+warnings stay hidden, and `/showIncludes` lists it. `/imsvc` without a
+directory is clang-cl's `argument to '/imsvc' is missing (expected 1
+value)`. Two remaining differences are bcc's in every mode: clang-cl drops
+a directory given twice, keeping the system one (so `/I d -imsvc d` makes
+`d` a system directory there), and it honours `-Wsystem-headers`.
+`icx-cl` reads these options as clang-cl does. `cl` searches `%INCLUDE%`
+before its command line's directories and draws D9002 for `/imsvc`, which
+it does not know.
+
 ### Options clang-cl ignores
 
 clang-cl's driver takes `cl`'s options and only some of Clang's: any other
@@ -1546,7 +1564,7 @@ clang-cl knows (`personality/options/clang-cl.list`, frozen from its
   `/I /usr/include`, `/Fe/tmp/a.exe`, `/Fa/tmp/a.asm`, `/Fi/tmp/a.i`. The
   bare name of an option clang-cl reads with its value in the next
   argument takes that argument, also where bcc ignores the option or does
-  not know it (`/Fp: /tmp/a.pch`, `/imsvc /usr/include`), so it is no
+  not know it (`/Fp: /tmp/a.pch`, `/vctoolsdir /opt/vc`), so it is no
   input. `/Fo` takes its value joined only: in `/Fo /tmp/a.obj`, as in
   clang-cl, `/tmp/a.obj` is an input.
 - A missing input is reported as each compiler reports one: clang-cl's
@@ -2759,7 +2777,7 @@ Besides those above:
   other than letters, digits, `_`, `/`, `-` and `.`, and its `-v` none, as
   GCC does. The header search lists every configured directory, without the
   embedded resource headers, which are no directory on disk.
-- clang-cl's `/o` (a deprecated `/Fe` or `/Fo`), `/imsvc` and the
+- clang-cl's `/o` (a deprecated `/Fe` or `/Fo`) and the
   `/winsysroot` family are not implemented; they draw the unknown-option
   warning, so `/opt/a.c`, which clang-cl reads as `/o`, is ignored with it
   rather than compiled. Use `-- /opt/a.c`.
