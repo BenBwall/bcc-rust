@@ -701,10 +701,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(Integer::to_u64)
             .filter(|&value| value > 65535)
         {
-            self.compiler_refusal(
-                &format!("argument value {value} is outside the valid range [0, 65535]"),
-                call.source_vectors,
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "argument value {value} is outside the valid range [0, 65535]"
             );
+            self.compiler_refusal(text, call.source_vectors);
         }
     }
 
