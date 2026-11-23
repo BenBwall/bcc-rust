@@ -557,7 +557,14 @@ fn every_lesson_counts_each_basic_block_once() {
             })
             .count()
     }
-    let ir = ["jump", "brif", "switch", "return", "indirect_br", "unreachable"];
+    let ir = [
+        "jump",
+        "brif",
+        "switch",
+        "return",
+        "indirect_br",
+        "unreachable",
+    ];
     let llvm = ["br", "switch", "ret", "indirectbr", "unreachable", "resume"];
     for demo in &DEMOS {
         let stem = demo.name.trim_end_matches(".c");
