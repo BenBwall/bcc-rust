@@ -1686,6 +1686,16 @@ mod tests {
             .expect("the designator's node");
         assert!(node.function, "{node:?}");
         assert_eq!(node.value.as_deref(), Some("&square"));
+        // Its value flow shows the pointer appear, as an array's decay does.
+        assert_eq!(
+            designator
+                .event
+                .flow
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>(),
+            ["square", "becomes", "&square"]
+        );
     }
 
     #[test]

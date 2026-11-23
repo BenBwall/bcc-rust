@@ -5445,3 +5445,166 @@ t;` in two blocks.
   constants' values, so at least 0 to 6", and the limits text reads "a typedef of any of these
   types but a const one". No sideways scroll, console error or warning, or
   running animation.
+
+## Part 18: a lesson on callbacks (2026-11)
+
+Parts 15 and 16 taught the machine pointers to functions but left the lesson
+that would show them. A lesson needs its LLVM IR and line tables from a
+native bcc build with LLVM and its WebAssembly module from wasi-sdk, and
+twice the disk was too short for that build beside the site's. With about
+18 GB free, this part adds the lesson "Callbacks: passing a function to a
+function" and checks it in every view. The work is on
+`agent/lesson-callbacks`.
+
+### The lesson
+
+It follows "Walking a string with a pointer" in Table 1's part on memory,
+as lesson 13
+([`table1-1024-dark`](screenshots/part18/table1-1024-dark.png)):
+
+```c
+// f points to a function that takes
+// an int and returns an int.
+int sum_of(const int *v, int n,
+           int (*f)(int)) {
+    int total = 0;
+    // A call through the pointer f:
+    for (int i = 0; i < n; i++)
+        total += f(v[i]);
+    return total;
+}
+
+int main(void) {
+    int v[2] = {3, 4};
+    // A function's name becomes a
+    // pointer to the function:
+    int a = sum_of(v, 2, twice);
+    int b = sum_of(v, 2, square);
+    printf("%d %d\n", a, b);
+    return 0;
+}
+```
+
+`twice` and `square` stand above it. The run is 187 steps and prints `14
+25`, as GCC 14 does. A first draft summed three elements in 247 steps,
+longer than any other lesson, so the array has two. Its comments stand on
+lines of their own, and every line takes at most 36 columns, so nothing
+wraps in the narrow listing. The steps that carry the lesson:
+
+- **Note 15, "`twice` becomes a pointer to the function".** A function is
+  code, not an object, so its name used as an operand converts to a
+  pointer to it (C99 §6.3.2.1p4, p. 46; PDF p. 58), a value of a type
+  derived from the function's type (§6.2.5p20, pp. 35-36; PDF pp. 47-48).
+  Its note says why that matters: a table of pointers or a callback lets a
+  program choose at run time which code runs. Its value flow was empty, where
+  an array's decay two steps earlier draws "v int[2] → decays to → &v[0] int
+  *"; it now draws "twice → becomes → &twice", so the pointer can be seen
+  appearing
+  ([`machine-designator-1440-light`](screenshots/part18/machine-designator-1440-light.png)).
+- **Note 16, the call of `sum_of`.** Its parameter `f` gets a copy of the
+  pointer, as `v` gets a copy of `&v[0]`: the value flow reads "&v[0] →
+  copied to → v, 2 → n, &twice → f int (*)(int)".
+- **Note 43, "Call twice through `f` (frame #3)".** The expression before
+  the parentheses gave a pointer to the function, and the call runs the
+  function it points to (§6.5.2.2p1 and p3, p. 71; PDF p. 83). In compiled
+  code, the explanation says, the call jumps to the address the pointer
+  holds rather than to one fixed when the program was linked. Under the
+  head, screen readers hear `f` as "f, int (*)(int), 8 bytes: a pointer to
+  the function twice, defined on line 5"
+  ([`machine-call-1366-dark`](screenshots/part18/machine-call-1366-dark.png)).
+- **Note 126, "Call square through `f` (frame #6)".** The same line, in
+  the second call of `sum_of`, runs another function
+  ([`machine-square-390-dark`](screenshots/part18/machine-square-390-dark.png)).
+
+The engine's narration needed no change: Part 15's steps already say what
+happened to memory and values, the rule, why it matters and what comes
+next for each of these. The value flow of note 15 is the one change to the
+machine view, and no other lesson has such a step.
+
+### The indirect call in the compiler views
+
+Line 20, `total += f(v[i]);`, is the one place each view shows the call
+through a pointer:
+
+- **bcc IR**, line 32: `v13 = call_indirect v2(v12) : (i32 noundef) ->
+  i32`, where `v2` is the parameter `f`
+  ([`compiler-bcc-ir-1366-dark`](screenshots/part18/compiler-bcc-ir-1366-dark.png)).
+- **LLVM IR**, line 32: `%v13 = call i32 %v2(i32 noundef %v12)`, a call of
+  a value rather than of a name like `@sum_of`
+  ([`compiler-llvm-ir-1024-light`](screenshots/part18/compiler-llvm-ir-1024-light.png)).
+  At `-O2` bcc inlines `sum_of` into `main`, where the pointer is a known
+  function, so those two copies call `@twice` and `@square` directly; the
+  standalone `sum_of` keeps its `call i32 %v2`, since any caller could pass
+  any function.
+- **x86-64 assembly**, line 79: `callq *%r13`, where the stage's summary
+  lists the calls as "*%r13, sum_of and printf"
+  ([`compiler-x86-64-assembly-1366-dark`](screenshots/part18/compiler-x86-64-assembly-1366-dark.png)).
+- **WebAssembly**: with both compilers, the step reaches `call_indirect`
+  with C line 20
+  ([`wasm-clang-1440-light`](screenshots/part18/wasm-clang-1440-light.png),
+  [`wasm-bcc-390-dark`](screenshots/part18/wasm-bcc-390-dark.png)).
+
+The WebAssembly view's step for `call_indirect` used to say "`call` pops
+the arguments", with a sentence on the index after it. It now explains the
+instruction itself: "Call `$twice` through the table with `3`", led by
+"`call_indirect` pops a table index, `1`, and calls the function stored at
+that index of the table, here `$twice`. A C function pointer compiles to
+such an index, so this one instruction runs whichever function the pointer
+names. It first checks that `$twice` has the type the instruction names,
+and traps if not; then it pops the arguments…", and it links the Tables
+concept beside Calls and frames. wasi-libc's `printf` calls its stream's
+write function the same way, so ten steps in the seven lessons that print
+now read "Call `$__stdout_write` through the table with …" too; no other
+step of theirs changed.
+
+### How the artifacts were made
+
+As in Parts 13 and 14: `web/pipeline/generate.sh` with a dev-profile bcc
+(`cargo build --bin bcc-rust`; the script takes any bcc through `BCC`, so
+no release build was needed) and `web/wasm/generate.sh` with wasi-sdk 34
+(clang 23.1.0). Before the lesson was added, both rewrote every other
+lesson's files byte for byte: `git status` showed only the new lesson's
+`web/pipeline/callbacks/` and `web/wasm/callbacks.wasm`, and both scripts'
+`--check` pass. bcc's own binary of the lesson prints `14 25` and exits 0
+at `-O0` and `-O2`.
+
+### Checks
+
+- **GCC 14.** `gcc -B …/gcc14…/14/ -std=c99 -pedantic -Wall -Wextra` (cc1
+  14.2.0) compiles the lesson without a warning, and at `-O0` and `-O2` it
+  prints `14 25` and exits 0, as the machine, bcc and both WebAssembly
+  modules do.
+- **The lesson walk.** Part 9's walk at 1440x900 light and 390x844 dark,
+  on the deployed site (`main` at `0d5cf90f6`) and on CI's Pages build of
+  this branch: the 16 existing machine lessons' 1,571 notes are the same in
+  title, lead, value flow, "why it matters" note and next step at both
+  sizes. The new lesson walks 188 states with its current line and lead in
+  view at each. Neither build scrolled sideways or raised a page error.
+- **The scenes.** At 1440x900, 1366x768, 1024x768 and 390x844 in both
+  themes, the machine reached notes 15, 43 and 126, the three compiler
+  stages showed their indirect call with no stop, and the WebAssembly view
+  reached `call_indirect` with each compiler. No sideways scroll, no
+  console error or warning.
+- **Contrast.** The notes' text measures 15.82:1 (light) and 13.34:1
+  (dark); the WebAssembly step's explanation 10.59:1 and 9.40:1.
+- **Tests,** as `pages.yml` runs them: the engine's 160 and its clippy, the
+  site's (one new, that the lesson's `call_indirect` runs `$twice` twice
+  and `$square` twice with the new text, and one extended, for the
+  conversion's value flow; and the prerender's 2), the
+  WebAssembly stepper's 79, and the site's four clippy runs. The site's
+  tests also check that the lesson's module and LLVM IR match its source.
+  `rustfmt +nightly --check` reports nothing on the changed lines (the
+  site's files have older unformatted lines, as on `main`), and `git diff
+  --check` is clean.
+
+### Left for later
+
+- **A dispatch table lesson**: `int (*ops[2])(int, int)` indexed by a
+  command, the other common use, which the corpus's `g02` and `g07` show
+  through Open .c.
+- **The function's type in that value flow**: the engine records no type
+  on the conversion, so the chips read "twice → becomes → &twice" without
+  "int (int)" and "int (*)(int)" beneath them, as the call's chips have.
+- Part 16's list stands: the lessons' opening comments, a function
+  returning a pointer to an object, static pointers to objects, hidden
+  names, and the listing's label for a pointer to a function.
