@@ -5616,13 +5616,12 @@ into blocks.
   blocks.
 - **Entering blocks.** A jump into a block begins the lifetimes of the
   block's objects, as entering at its brace does (§6.2.4p5), but runs none
-  of their initializers (§6.8p3): "The label is inside the block that begins
-  on line 3, which the jump enters from outside… `count` begins to exist
-  here, indeterminate: the jump passed its declaration, so no initializer
-  ran. C forbids such a jump only into the scope of a variable-length array,
-  which this machine leaves out." The names declared before the label are in
-  scope there, and the step says so; `x01` then stops at its read of
-  `count`.
+  of the initializers it passes (§6.8p3): "The label is inside the block
+  that begins on line 3, which the jump enters from outside… `count` begins
+  to exist here, indeterminate. The jump passed its declaration, so no
+  initializer ran, but its name is in scope at the label and can be
+  assigned…" (the wording of round 1, below, which also tells apart the
+  declarations after the label). `x01` then stops at its read of `count`.
 - **Passing a declaration in the same block.** Jumping ahead past `int x =
   4;` brings `x`'s name into scope without its initializer: "The jump passes
   the declaration of `x` on line 4: … no initializer of that declaration
@@ -5712,14 +5711,16 @@ return type is refused as the constraint violation it is (§6.7.5.3p1).
 - **A dangling result.** When a function returns a pointer to one of its own
   automatic objects, its return step says so: "`make` returns a pointer to
   its own `local`, which ends with the call, so the caller receives a
-  dangling pointer", explained by §6.2.4p2: the value of every pointer to an
-  object becomes indeterminate when the object's lifetime ends, and using it,
-  even to store or compare it, is undefined.
+  dangling pointer", explained by §6.2.4p2, by which the value of every
+  pointer to an object becomes indeterminate when the object's lifetime
+  ends, and by Annex J.2, which lists using that value, even to store or
+  compare it, as undefined (round 1 added J.2; §6.2.4p2 alone says only
+  "indeterminate").
 - **The machine stops at the first use,** not at the return: "Undefined
   behavior: use of a dangling pointer", "The pointer pointed to an object of
   a call that has returned. When that object's lifetime ended, the pointer's
   value became indeterminate, and C gives no meaning to using it", citing
-  §6.2.4p2. A statement that only discards the result, `make();`, runs on,
+  §6.2.4p2 and J.2. A statement that only discards the result, `make();`, runs on,
   since it does not use the value.
 
 [`dangling-1366-light`](screenshots/part17/dangling-1366-light-after.png)
@@ -5862,3 +5863,147 @@ The glossary defines goto (§6.8.6.1p2) and continue (§6.8.6.2p2).
 - **break's leave steps** still say "The block ends", where continue's and
   goto's now say which statement leaves the block; changing break's would
   change Part 16's notes, so it was left out of this part.
+- **A hidden `static` local** (round 1): name it among the objects a use's
+  name hides, once the machine records where its scope ends.
+
+### Review, round 1
+
+The review of the branch at `a48a2f56a` found two blockers, both false
+narration about jumps, a citation that claimed more than its paragraph, six
+minor findings and some nits. Its 120 probes (`a` to `i`: gotos into, out
+of and back over blocks, `continue`, Duff's device, hidden names and pointer
+returns) join this part's 65 probes and 13 corpus programs, the 72 corpus
+programs before them, the 17 lessons and the regression probes of Parts 15
+and 16: 1,142 programs in all. A throwaway engine test dumped every step of
+each on `a48a2f56a` and on the fixed branch, and the review's probes, this
+part's probes and the corpus were compiled with GCC 14 (`-std=c99 -pedantic
+-O0`) and run.
+
+#### 1. A jump into a block said it passed the declarations after its label
+
+A jump into a block said of every object of the block that "the jump passed
+their declarations, so no initializer ran". For an object declared after
+the label that is false. In
+
+```c
+goto in;
+{
+    int a = 1;
+in: ;
+    int b = 2;
+    return b;
+}
+```
+
+the jump said so of `a` and `b`, and three steps later the machine ran
+`b`'s declaration and its initializer. A switch's jump to a case label in a
+block said the same.
+
+**Fixed.** Entering a block still begins the lifetimes of all its objects
+(§6.2.4p5); only the declarations before the label are said to be passed:
+"`a` and `b` begin to exist here, indeterminate. `a` is declared before the
+label: the jump passed its declaration, so no initializer ran, but its name
+is in scope at the label and can be assigned; reading it first would read
+an indeterminate value. `b` is declared after the label, so the jump did
+not pass it: execution reaches it as usual, and only then does its name
+come into scope and any initializer run" (§6.8p3). With objects of only
+one kind, the step does not name them twice: "The jump passed its
+declaration…", or "Its declaration comes after the label…". A new engine
+test runs this program as a goto and as a switch, and a block whose only
+object comes after the label.
+
+#### 2. A read after a goto back said nothing had been stored
+
+After a goto back over `int k;` made `k` indeterminate again, its read
+stopped with "The read would use a value the program never set" and
+"nothing has been stored in `k` yet", though the program had stored 4 in it
+on the pass before. (GCC 14's build returns that 4.)
+
+**Fixed.** The machine keeps what such a declaration discarded, apart from
+the objects' metadata, and the read now says what happened: "a value was
+stored in `k` earlier, but execution then reached the declaration of `k` on
+line 4 again, and a declaration without an initializer makes the value
+indeterminate each time it is reached", led by "The program stored a value
+in this object earlier, but reaching its declaration again, with no
+initializer, made the value indeterminate once more", citing §6.8p3. A read
+of an object that held nothing before the jump back still says "nothing has
+been stored". The engine test checks both messages, not only the kind.
+
+#### 3. The dangling pointer's citation
+
+The return step and the stop called any use of a dangling pointer undefined
+on the authority of §6.2.4p2, which says only that the pointer's value
+becomes indeterminate. Annex J.2 lists "The value of a pointer to an object
+whose lifetime has ended is used (6.2.4)" as undefined (p. 492; PDF p.
+504). Both steps now cite J.2 beside §6.2.4p2, the return step no longer
+cites §6.2.4p2 twice, and §6.2.4p2's gloss says what the paragraph does:
+referring to an object outside its lifetime is undefined, and every pointer
+to it becomes indeterminate. Item 6 above now cites J.2 as well.
+
+#### 4. The minor findings
+
+- **`break;` advice outside a switch.** A label at a block's end, as in
+  `{ goto L; L: }`, was told "write `break;` (or an empty statement, `;`)",
+  and there `break;` would itself break §6.8.6.3p1. Only a run of labels
+  with a case or default label among them, which must be in a switch, gets
+  that advice now; others get "write an empty statement, `;`, after the last
+  label".
+- **The hover on a goto on its label's line.** `loop: n++; if (n < 3) goto
+  loop;` said "jumps ahead" in the listing's hover, from comparing lines
+  only. It compares positions now, and says "jumps back"; a new site test
+  covers it.
+- **"Variably modified type".** The jump's note and §6.8.6.1p1's gloss now
+  say what C forbids as the paragraph does: a jump into the scope of an
+  identifier with a variably modified type, such as a variable-length array.
+- **The limits text** lists among what functions return "a pointer to one
+  of these objects, to a pointer or to a function", since `int **f(void)`
+  runs; the limits test runs one.
+- **A `static` local that a hidden name hides** is still not named. The
+  machine resolves a static local's name when it compiles the use and
+  keeps no record at run time of where its scope ends, so a note that named
+  it could name one declared in a block that has ended. Left for later.
+
+The nits (generic lifetime sentences after leaving a block with no objects,
+the generic "until something is stored" beside "it held 50", `int x = x;`'s
+note, the repeated hiding paragraph, `continue` through a switch, and the
+listing's window at 390 px) are left as they were.
+
+#### What changed in the dumps
+
+Of the 1,142 programs, 1,094 dump byte for byte as before, the 17 lessons
+among them. The other 48 change only where intended:
+
+- **26 jumps into blocks** (the corpus's `j08` and `x01`, 13 of the review's
+  probes, 7 of this part's, and four copies of the two corpus programs) say
+  item 1's new text. All but three have objects only before the label, so
+  they read "The jump passed its declaration…"; `e09` and `s01` name `a`
+  before and `b` after the label, and `a09` reads "Its declaration comes
+  after the label".
+- **17 dangling-pointer programs** (the corpus's `u07`, 10 of the review's
+  probes, 4 of this part's, and two copies of `u07`) cite J.2 at the return,
+  and at the stop where they stop.
+- **2 reads after a goto back** (the review's `g06`, this part's `g08`) stop
+  with item 2's text.
+- **1 refusal** (`l02`, `{ goto L; L: }`) gets the new advice.
+- **2 recursions** that end at the engine's 8 MB trace limit reach it one
+  step sooner (`r-rv-p1/b17` at 419 of 420, `r-rv-p3/d03` at 476 of 477):
+  each retained step now carries the machine's (empty) list of discarded
+  values, 24 bytes. Their steps before the limit are the same.
+
+No other program's result changed: every one finishes, stops or is
+refused as before, at the same step. Of the 283 programs compiled with GCC
+14 (the review's 120, this part's 65, the 85 corpus programs and this
+part's own copy of its 13), the 218 that finish in the engine give GCC's
+exit status, and the 15 of them that print give its output.
+
+#### Checks
+
+As `pages.yml` runs them: the engine's tests (171: two new, for item 1 and
+the `break;` advice; the goto-back test now checks item 2's messages, and
+the limits test runs a function that returns `int **`) and its clippy pass;
+the site's tests (174, one new for the hover) and the prerender's 2; the
+WebAssembly stepper's 79; and the site's four clippy runs, all clean.
+`cargo +nightly fmt --check` passes for every changed engine file, every
+changed line in the site's files is formatted, and `git diff --check` is
+clean. This round took no screenshots: its visible changes are notes'
+text and one hover's word, which the dumps and the site test cover.
