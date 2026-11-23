@@ -6630,3 +6630,142 @@ compilers at `-O0` and `-O2`, with no warning under `-std=c99 -pedantic
   at `-O2`, a `switch` in LLVM IR, `continue`'s "fresh ones", a dispatch
   table lesson and the function's type in the conversion's value flow,
   with Part 17's list behind them.
+
+## Part 21: the remaining loose explanations (2026-11)
+
+The reviews of Part 20 (#442) and of its results file (#443) left six
+non-blocking findings, all fixed here on `agent/site-part21`. The claims
+audit's [Part 21's follow-ups](claims-audit.md#part-21s-follow-ups-2026-11-23)
+holds the evidence. Citations were checked with `search-standard`, and the
+compiler claims against GCC 14, Clang 23.1.5 and a dev build of bcc in C99.
+
+### The fixes
+
+- **The `?:` gloss** (§6.5.15p3) let any pointer pair with a pointer to
+  void. The paragraph allows only a pointer to an object or incomplete
+  type, so a function pointer is excluded. GCC (`-pedantic`) and Clang
+  warn about `c ? fp : v` but not about an object pointer. The gloss now
+  says so. The `==` constraint's gloss (§6.5.9p2) also left out
+  incomplete types, and now includes them.
+- **Pointer equality** (§6.5.9p6) now follows the paragraph: a pointer to
+  an object equals a pointer to a subobject at its start, and a pointer
+  one past an array equals a pointer to the start of a different array
+  that immediately follows it.
+- **A call through the wrong function type.** The note on pointers to
+  functions and the stop at such a call gave "the caller and the function
+  disagree about where the arguments and the result are" as the reason.
+  A new probe, `c38`, calls `int (*)(int)` as `unsigned (*)(unsigned)`.
+  Both types use the same registers, and the probe prints 42 under all
+  three compilers at `-O0` and `-O2`. Both texts now say the call is
+  undefined (§6.5.2.2p9) even when it seems to work, and give the
+  disagreement only as one possible consequence. A test pins the stop's
+  wording.
+- **Sizes "on x86-64".** For `x86_64-pc-windows-msvc`, a long and an
+  unsigned long are 4 bytes and a long double is 8 (LLP64). For
+  x86_64-linux-gnu they are 8 and 16 (LP64). Every size, range, alignment
+  and format the site states now says "on x86-64 Linux", as ptrdiff_t and
+  size_t already did. That covers:
+  - every object's declaration;
+  - `sizeof`;
+  - a structure's layout and a structure assignment;
+  - the cast to char;
+  - the notes on promotion, pointer arithmetic, int's range, padding and
+    the floating sizes;
+  - the glosses of §6.7.2.1p12 and §F.2p1;
+  - the glossary's alignment, unsigned type and floating type;
+  - the datasheet's byte counts;
+  - "Limits of this model";
+  - the rank panel's sentences that depend on long's width.
+
+  Statements about the processor itself are unchanged, and are the same
+  on every x86-64 target: its shift and division instructions, its
+  default NaN, FLT_EVAL_METHOD 0 and two's complement.
+- **`run.sh`** now takes three things:
+  - `STD`, the language standard. It defaults to `c17`, so `results.txt`
+    stays reproducible: a default run's Clang lines differ from it only in
+    the values that the undefined probes `c03b`, `c04b` and `c07` print.
+  - `EXTRA`, options added after `-Wall -Wextra`.
+  - The names of the probes or lessons to run.
+
+  The script's header and both audit method sections document it.
+- **The warning rows.** `results-part21.txt` records two runs:
+  - `c34` with `-Wimplicit-fallthrough`: GCC and Clang warn, and bcc
+    reports the option unknown.
+  - `c35` with `-Wshadow`: all three warn.
+
+  The `c34` and `c35` rows now cite the file that backs each half.
+
+### Checks
+
+- **The lesson walk.** A throwaway test stepped all 19 lessons on `main`
+  (`d623744e2`) and on this branch, plus a wrong-type call. It wrote each
+  step's title, lead, explanation, note, clauses, next step, diagnostics
+  and output, and each cited clause's gloss. Every step count is the same.
+  The preprocessor lesson is refused before its first step on both
+  ("line splicing is outside this subset"). Every changed line differs
+  only by the added " Linux", except the note on pointers to functions
+  (Callbacks, notes 15 and 98) and the wrong-type call's stop. Explanations
+  changed at these steps:
+
+  | Lesson | Steps | What |
+  | --- | --- | --- |
+  | Bits and masks | 7, 26 | an unsigned int and an int declared |
+  | Reading past the end | 2, 12 | an array of ints, an int * |
+  | Callbacks | 4, 11, 18, 23, 94, 101, 106 | an array of ints, ints |
+  | Names for values | 6, 10, 15, 84 | ints, the cast to char |
+  | Floating point | 9, 13, 17, 44, 62, 67, 212, 216 | ints, doubles |
+  | Hello, world | 11, 16 | ints |
+  | Uninitialized reads | 2, 3 | ints |
+  | Short-circuit evaluation | 7, 17, 84 | an array of ints, an int, an int * |
+  | Loops three ways | 4, 8, 72, 76, 134, 139 | ints |
+  | Objects, loops and calls | 2, 6, 16, 23, 33, 39, 87, 93, 141, 147 | ints, an array of ints, an int * |
+  | Signed overflow | 2, 7 | ints |
+  | From source to a running program | 2, 6 | ints |
+  | Pointers and arrays | 2, 15, 19, 31 | an array of ints, int *s, an int |
+  | Integer promotions | 6 | an int |
+  | Recursion and frames | 2, 12, 25, 38 | ints |
+  | Walking a string | 6, 10, 91 | char *s |
+  | Structs and static storage | 2, 5, 10, 44, 59, 76, 119 | struct layouts, a struct point *, a structure assignment |
+  | Unsigned numbers wrap | 6, 22, 70, 80, 85, 144, 146, 148, 156 and 162 | unsigned ints, an array, the size_t object (unsigned long), sizeof of int[3], an int |
+
+  Notes changed at these steps. The site shows a note the first time
+  its topic appears.
+
+  | Note | Lessons and steps |
+  | --- | --- |
+  | Pointers to functions | Callbacks 15, 98 |
+  | Int's range | Callbacks 48, 76, 132, 161; Objects 52, 65, 78, 106, 119, 132, 160, 173, 186; Signed overflow 21; From source 11, 18; Pointers and arrays 49, 73, 97, 121; Integer promotions 14, 24, 33; Recursion 17, 30, 43, 59, 66, 73; Structs 23, 29, 38, 57, 74, 99, 105, 114, 126, 129, 133 |
+  | Pointer arithmetic | Reading past the end 16; Objects 20, 71, 125, 179; Pointers and arrays 23, 55, 79, 103, 127 |
+  | Promotion | Names for values 89; Hello 26, 41, 56, 71; Integer promotions 10, 13, 20, 23, 32; Walking a string 22, 37, 52, 67, 82 |
+  | Floating sizes | Floating point 17, 44, 62, 212 |
+  | Padding | Structs 76 |
+
+  Only two cited glosses changed in any lesson: §6.7.2.1p12 in Structs
+  and static storage, and §F.2p1 in Floating point. No lesson cites the
+  `?:`, `==` or pointer equality glosses, so those were checked against
+  their paragraphs only. No clause list or next step changed.
+- **Tests,** as `pages.yml` runs them:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 175 passed (one test also checks the stop's new wording) |
+  | Engine clippy | clean |
+  | Site tests | 177 passed, plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | passes |
+  | `cargo +nightly fmt --check` | passes |
+  | `git diff --check` | clean |
+
+  rustfmt reports nothing on the site's changed lines.
+
+### Left for later
+
+- **Doc comments.** The engine's own doc comments still say "on x86-64",
+  for example `integers.rs`'s "Size in bytes". The site never shows them.
+- **§6.5.9p7** (an object outside an array counts as an array of one) has
+  no gloss of its own. No step cites it.
+- **A Playwright walk.** Part 9's walk of the page was not run: the page
+  shows the strings the lesson walk compared, and no layout changed.
+- Part 20's list stands.
