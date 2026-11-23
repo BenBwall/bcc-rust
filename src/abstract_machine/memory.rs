@@ -97,6 +97,9 @@ impl Machine {
         if object.constant {
             self.make_const(id);
         }
+        if !object.literal {
+            self.metadata[id - 1].line = u32::try_from(object.range.line).unwrap_or(0);
+        }
         Ok(id)
     }
 
@@ -236,6 +239,9 @@ impl Machine {
             ty,
             constant: false,
             typedef: None,
+            block: None,
+            line: 0,
+            reached: false,
         });
         self.cells += cells;
         Ok(id)
@@ -297,6 +303,9 @@ impl Machine {
             .cloned()
             .unwrap_or(Value::Indeterminate);
         if value == Value::Indeterminate {
+            if let Some(diagnostic) = self.forgotten_read(target, offset, index) {
+                return Err(diagnostic);
+            }
             // C99 indeterminate values may be unspecified or trap
             // representations; the machine stops conservatively, without
             // asserting that every indeterminate read is undefined.
@@ -312,6 +321,32 @@ impl Machine {
         }
         self.check_pointer_lifetime(&value)?;
         Ok(value)
+    }
+
+    /// The stop for a read of leaf `index` of object `target`, at
+    /// `offset`, that held a value until execution reached the object's
+    /// declaration again: without an initializer, that declaration stored
+    /// an indeterminate value once more (C99 §6.8p3).
+    fn forgotten_read(&self, target: usize, offset: i32, index: usize) -> Option<Diagnostic> {
+        if !self.forgotten.contains(&(target, index)) {
+            return None;
+        }
+        let at = match self.metadata[target - 1].line {
+            | 0 => String::new(),
+            | line => format!(" on line {line}"),
+        };
+        Some(Diagnostic::indeterminate(
+            self.state.source_range,
+            &format!(
+                "a value was stored in {} earlier, but execution then reached the declaration of \
+                 `{}`{at} again, and a declaration without an initializer makes the value \
+                 indeterminate each time it is reached; the machine stops instead of making up a \
+                 value",
+                self.location(target, offset),
+                self.state.objects[target - 1].name,
+            ),
+            &clauses::DECLARATION_REACHED,
+        ))
     }
 
     /// The value of the whole structure `structure` at leaf `offset`: a copy
@@ -363,12 +398,17 @@ impl Machine {
         if let Value::Struct { .. } = value {
             let mut leaves = Vec::new();
             layout::flatten(&value, &mut leaves);
+            let stored = index..index + leaves.len();
             let object = &mut self.state.objects[target - 1].value;
             for (at, leaf) in leaves.into_iter().enumerate() {
                 if let Some(slot) = layout::leaf_mut(object, index + at) {
                     *slot = leaf;
                 }
             }
+            // An indeterminate member the copy stored is the copy's, not
+            // the declaration's (C99 §6.2.6.1p6).
+            self.forgotten
+                .retain(|&(id, leaf)| id != target || !stored.contains(&leaf));
             return Ok(value);
         }
         let ty = self.leaf_type(target, offset);
@@ -394,6 +434,7 @@ impl Machine {
         if let Some(slot) = layout::leaf_mut(&mut self.state.objects[target - 1].value, index) {
             *slot = value.clone();
         }
+        self.forgotten.retain(|&entry| entry != (target, index));
         Ok(value)
     }
 
@@ -503,6 +544,32 @@ impl Machine {
             ));
         }
         Ok(object)
+    }
+
+    /// A value about to be used: a pointer whose object has ended, as one a
+    /// call returned to an object of its own, is indeterminate (C99
+    /// §6.2.4p2), and using it is undefined (C99 §J.2).
+    pub fn check_dangling(&self, value: &Value) -> Result<(), Diagnostic> {
+        if let Value::Pointer {
+            target: Some(target),
+            ..
+        } = value
+            && let Some(object) = self.state.objects.get(target - 1)
+            && object.lifetime != "alive"
+        {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "this pointer points to `{}`, an automatic object of a call that has \
+                     returned: its lifetime ended with that call, so the pointer's value became \
+                     indeterminate, and using it is undefined",
+                    object.name
+                ),
+                &clauses::LIFETIME,
+                Undefined::DanglingPointer,
+            ));
+        }
+        Ok(())
     }
 
     fn check_pointer_lifetime(&self, value: &Value) -> Result<(), Diagnostic> {

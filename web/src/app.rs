@@ -1243,6 +1243,7 @@ impl State {
                 execution.push(boxed(next, "exec-next", 2));
             }
             objects.extend(function_marks(snapshot));
+            objects.extend(goto_mark(snapshot));
             self.source.with(|source| {
                 let names: Vec<&str> = snapshot
                     .objects
@@ -1722,6 +1723,35 @@ fn function_marks(snapshot: &Snapshot) -> Vec<Decoration> {
             }
         })
         .collect()
+}
+
+/// The listing's arrow for a jump: while a `goto` leaves blocks and
+/// jumps, its label is marked, with where the goto is written before it
+/// (`goto, line 7 →`), so the jump reads from the goto to its target.
+fn goto_mark(snapshot: &Snapshot) -> Option<Decoration> {
+    let label = snapshot.event.label?;
+    let goto = snapshot.event.range?.start;
+    let from = goto.line;
+    // Compare positions, not lines: a goto may share its label's line.
+    let direction = if (goto.line, goto.column) > (label.start.line, label.start.column) {
+        "back"
+    } else {
+        "ahead"
+    };
+    Some(Decoration {
+        start_line: label.start.line,
+        start_column: label.start.column,
+        end_line: label.end.line,
+        end_column: label.end.column,
+        inline_class: Some("jump-target".to_owned()),
+        hover: Some(format!(
+            "The goto on line {from} jumps {direction} to this label"
+        )),
+        before: Some(format!("goto, line {from} →")),
+        before_class: Some("jump-label".to_owned()),
+        z_index: 4,
+        ..Decoration::default()
+    })
 }
 
 fn boxed(range: Range, class: &str, z_index: i32) -> Decoration {
@@ -2669,16 +2699,15 @@ fn About() -> impl IntoView {
                          one, at file or block scope; subtracting two pointers into one array and ordering two \
                          pointers into one object (p - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
                          such as 1 << 3, string literals or the names of functions; functions that return a number, \
-                         an enumeration, a structure or a pointer to a function, called anywhere in an expression; \
-                         pointers to functions, kept in variables, tables, parameters and structure members, called \
+                         an enumeration, a structure, or a pointer to one of these objects, to a pointer or to a function, called \
+                         anywhere in an expression; pointers to functions, kept in variables, tables, parameters and structure members, called \
                          as fp(x), (*fp)(x), s.f(x) or p->f(x), compared and tested for null; assignments, compound \
                          assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c = \
                          next()) != 0), except in an initializer list and before a . that selects a member of their \
-                         value; if and else, while and for, switch with its case and default labels directly in its \
-                         block, and break; printf, puts and putchar after #include <stdio.h>; and #define of a name \
-                         as one number, character or string. Outside it are, among others: do, continue and goto, \
-                         and a case label nested deeper in a switch's body; union and _Bool; void and static \
-                         functions; a function that returns any other pointer, and a pointer to a library function; \
+                         value; if and else, while, do and for, switch with its case and default labels anywhere in \
+                         its block, break, continue, and goto with the labels it jumps to; printf, puts and putchar \
+                         after #include <stdio.h>; and #define of a name as one number, character or string. Outside it are, among others: a declaration directly in a \
+                         switch's block; union and _Bool; void and static functions; a pointer to a library function; \
                          a static pointer initialized to an object's address; arrays of structures or of arrays; and \
                          the other library functions. A program that uses one of them stops before its first step, \
                          and its note says so. One that needs more of the preprocessor (another header, a \

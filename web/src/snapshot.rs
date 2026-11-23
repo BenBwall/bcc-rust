@@ -96,6 +96,10 @@ pub struct StepEvent {
     /// and the one it produced, for the rank picture.
     #[serde(default)]
     pub conversion:     Option<Conversion>,
+    /// For a step of a `goto`, the label it jumps to, `again:`, which the
+    /// listing marks.
+    #[serde(default)]
+    pub label:          Option<Range>,
 }
 
 /// A conversion between arithmetic types, by the types' spellings.

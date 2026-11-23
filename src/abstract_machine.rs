@@ -14,8 +14,9 @@
 //! ending the full expression). [`Session::back`] restores history; stepping
 //! forward replays it exactly.
 //!
-//! Read `parser.rs` and `expressions.rs` for compilation, `machine.rs` and
-//! `memory.rs` for execution, `integers.rs` for the integer types and their
+//! Read `parser.rs` and `expressions.rs` for compilation (`switch.rs` and
+//! `jumps.rs` for `switch`, `do`, `continue`, `goto` and labels), `machine.rs`
+//! and `memory.rs` for execution, `integers.rs` for the integer types and their
 //! conversions, `floating.rs` for the floating types, their arithmetic and
 //! conversions, and `decimal.rs` for their exact decimal forms and
 //! `printf`'s conversions of them, `sequencing.rs` for the run-time check of
@@ -59,6 +60,7 @@
 mod constant;
 mod enumerations;
 mod expressions;
+mod jumps;
 mod lexer;
 mod parser;
 mod switch;
@@ -248,6 +250,21 @@ impl Program {
     #[must_use]
     pub fn enumerations(&self) -> &[Enumeration] {
         &self.enumerations
+    }
+
+    /// The label a `goto` written at `goto` jumps to, `again:`, for the
+    /// steps that range covers: the blocks the goto leaves, and its jump.
+    #[must_use]
+    pub fn goto_label(&self, goto: SourceRange) -> Option<SourceRange> {
+        self.functions.iter().find_map(|function| {
+            function
+                .code
+                .iter()
+                .find_map(|instruction| match &instruction.op {
+                    | model::Op::Goto(jump) if instruction.range == goto => Some(jump.at),
+                    | _ => None,
+                })
+        })
     }
 
     /// The name of function `function`, in definition order.

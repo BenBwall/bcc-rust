@@ -1625,6 +1625,12 @@
     margin-right: 6px; padding: 0 5px; border: 1px solid var(--fn-screen); color: var(--fn-screen);
     background: color-mix(in srgb, var(--fn-screen) 12%, transparent); font-size: 85%; font-weight: 700;
   }
+  /* The label a goto jumps to, and before it where the goto is. */
+  .monaco-editor .jump-target { text-decoration: underline dotted 2px var(--accent); text-underline-offset: 4px; }
+  .monaco-editor .jump-label {
+    margin-right: 6px; padding: 0 5px; border: 1px solid var(--accent); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 85%; font-weight: 700;
+  }
   .monaco-editor .target-line { background: #2a2210; }
   .monaco-editor .target-glyph::before { content: ""; display: block; width: 9px; height: 9px; margin: 6px auto 0; background: #e2b45c; }
   .monaco-editor .link-line { background: color-mix(in srgb, var(--flow) 16%, transparent); }

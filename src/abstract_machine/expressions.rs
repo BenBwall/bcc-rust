@@ -1533,7 +1533,10 @@ impl Parser<'_> {
         }
         self.position += 1;
         let operand = &self.expressions[base];
-        if operand.call {
+        // `f()->m` selects a member of the structure the pointer a call
+        // returns points to, an lvalue; `f().m` would select one of the
+        // call's structure value, which is none.
+        if operand.call && !arrow {
             return Err(self.error(
                 "a member of a call's result is outside this subset; store the result first",
             ));
