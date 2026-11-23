@@ -530,6 +530,24 @@ fn the_optimizer_comparison_names_what_changed() {
         grown.contains("Basic blocks: 2 at -O0, 3 at -O2.\n"),
         "{grown}"
     );
+    assert!(!text.contains("more code"), "{text}");
+    // Code that grew where a function was inlined says why.
+    let callbacks = crate::demos::find("callbacks").expect("the callbacks lesson");
+    let changes = optimizer_changes(
+        Stage::Ir,
+        &crate::explorer::compile(callbacks.source, false),
+        &crate::explorer::compile(callbacks.source, true),
+    );
+    assert_eq!(
+        changes[changes.len() - 2..],
+        [
+            "sum_of is no longer called: the optimizer inlined it, copying its body into the \
+             caller, where it could be simplified further.",
+            "That is why there is more code at -O2: each inlined call gets its own copy of the \
+             body, and a function that other files could call is kept as well.",
+        ],
+        "{changes:?}"
+    );
     let same = optimizer_changes(Stage::Ir, &optimized, &optimized);
     assert_eq!(same.len(), 1);
     assert!(same[0].contains("nothing to improve"));

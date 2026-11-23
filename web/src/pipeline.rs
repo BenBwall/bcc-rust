@@ -1542,6 +1542,17 @@ pub fn optimizer_changes(
     };
     let before = Census::of(stage, before);
     let after = Census::of(stage, after);
+    // A call to a function the program defines that disappeared was inlined.
+    let defined: Vec<&str> = plain
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect();
+    let inlined: Vec<&String> = before
+        .callees
+        .iter()
+        .filter(|callee| !after.callees.contains(callee) && defined.contains(&callee.as_str()))
+        .collect();
     let mut changes = Vec::new();
     let mut compare = |what: &str, before: usize, after: usize, why: &str| {
         // The reason explains a saving, not a cost.
@@ -1577,19 +1588,21 @@ pub fn optimizer_changes(
         after.slots,
         " Each one is memory reserved in the function's stack frame.",
     );
-    // A call to a function the program defines that disappeared was inlined.
-    let defined: Vec<&str> = plain
-        .functions
-        .iter()
-        .map(|function| function.name.as_str())
-        .collect();
-    for callee in &before.callees {
-        if !after.callees.contains(callee) && defined.contains(&callee.as_str()) {
-            changes.push(format!(
-                "{callee} is no longer called: the optimizer inlined it, copying its body into \
-                 the caller, where it could be simplified further."
-            ));
-        }
+    let grew = after.instructions > before.instructions && !inlined.is_empty();
+    for callee in inlined {
+        changes.push(format!(
+            "{callee} is no longer called: the optimizer inlined it, copying its body into the \
+             caller, where it could be simplified further."
+        ));
+    }
+    // Code that grew where a function was inlined: a cost the saving
+    // reasons do not explain.
+    if grew {
+        changes.push(
+            "That is why there is more code at -O2: each inlined call gets its own copy of the \
+             body, and a function that other files could call is kept as well."
+                .to_owned(),
+        );
     }
     if changes.is_empty() && stage.phase() != "Front end" {
         changes.push(
