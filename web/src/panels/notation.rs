@@ -11,9 +11,7 @@ use crate::pipeline::Stage;
 /// the other kinds of token its view colours.
 #[derive(Clone, Copy, Debug)]
 pub struct Notation {
-    /// A line as the view shows it.
-    pub line:  &'static str,
-    /// The same line, in the parts a reader takes it apart into.
+    /// A line of output, in the parts a reader takes it apart into.
     pub parts: &'static [Part],
     /// What the line does, in a sentence.
     pub reads: &'static str,
@@ -25,8 +23,11 @@ pub struct Notation {
 #[derive(Clone, Copy, Debug)]
 pub struct Part {
     /// The piece's text, as the view colours it.
-    pub code:  &'static [(&'static str, Ink)],
-    pub gloss: &'static str,
+    pub code:   &'static [(&'static str, Ink)],
+    pub gloss:  &'static str,
+    /// Whether it follows the part before it without a space, as `.i32`
+    /// follows `iadd`.
+    pub joined: bool,
 }
 
 /// The colour a kind of token has in every code view.
@@ -72,7 +73,20 @@ impl Ink {
 }
 
 const fn part(code: &'static [(&'static str, Ink)], gloss: &'static str) -> Part {
-    Part { code, gloss }
+    Part {
+        code,
+        gloss,
+        joined: false,
+    }
+}
+
+/// A part written against the one before it.
+const fn joined(code: &'static [(&'static str, Ink)], gloss: &'static str) -> Part {
+    Part {
+        code,
+        gloss,
+        joined: true,
+    }
 }
 
 use Ink::{
@@ -91,14 +105,13 @@ use Ink::{
 
 /// bcc IR, before and after ABI lowering, which writes the same notation.
 const BCC_IR: Notation = Notation {
-    line:  "v3 = iadd.i32 nsw v1, v2",
     parts: &[
         part(
             &[("v3", Value), (" =", Qualifier)],
             "the result: a new value, assigned only here",
         ),
         part(&[("iadd", Instruction)], "the operation: integer add"),
-        part(&[(".i32", Type)], "its type: a 32-bit integer, as int is"),
+        joined(&[(".i32", Type)], "its type: a 32-bit integer, as int is"),
         part(
             &[("nsw", Qualifier)],
             "no signed wrap: bcc may assume the sum fits, since signed overflow is undefined",
@@ -125,7 +138,6 @@ const BCC_IR: Notation = Notation {
 };
 
 const LLVM_IR: Notation = Notation {
-    line:  "%v1 = load i32, ptr %v0, align 4",
     parts: &[
         part(
             &[("%v1", Value), (" =", Qualifier)],
@@ -163,10 +175,9 @@ const LLVM_IR: Notation = Notation {
 
 /// AT&T syntax, as GCC and Clang print x86-64 assembly by default.
 const ASSEMBLY: Notation = Notation {
-    line:  "movl %eax, (%rdi)",
     parts: &[
         part(&[("mov", Instruction)], "the instruction: copy"),
-        part(&[("l", Instruction)], "the size: l for long, 32 bits"),
+        joined(&[("l", Instruction)], "the size: l for long, 32 bits"),
         part(
             &[("%eax", Register), (",", Qualifier)],
             "the source: register eax",
@@ -193,7 +204,6 @@ const ASSEMBLY: Notation = Notation {
 
 /// The listing: offset, bytes, then the instruction they encode.
 const MACHINE_CODE: Notation = Notation {
-    line:  "5  89 07  movl %eax, (%rdi)",
     parts: &[
         part(
             &[("5", Muted)],
@@ -256,7 +266,9 @@ pub fn StageNotation(stage: RwSignal<Stage>, #[prop(into)] hidden: Signal<bool>)
         Some(view! {
             <figure class="notation" hidden=move || hidden.get()>
                 <figcaption class="notation-title">"How to read a line"</figcaption>
-                <dl class="notation-parts" aria-label=format!("{}, part by part", notation.line)>
+                <p class="notation-line">{whole(notation.parts)}</p>
+                <p class="notation-reads">{notation.reads}</p>
+                <dl class="notation-parts" aria-label="The line, part by part">
                     {notation.parts.iter().map(|part| view! {
                         <div class="notation-part">
                             <dt>{code(part)}</dt>
@@ -264,8 +276,7 @@ pub fn StageNotation(stage: RwSignal<Stage>, #[prop(into)] hidden: Signal<bool>)
                         </div>
                     }).collect_view()}
                 </dl>
-                <p class="notation-reads">{notation.reads}</p>
-                <dl class="notation-key" aria-label="Colours in this view">
+                <dl class="notation-key" aria-label="Other colours in this view">
                     {notation.key.iter().map(|part| view! {
                         <div>
                             <dt>{code(part)}</dt>
@@ -276,6 +287,20 @@ pub fn StageNotation(stage: RwSignal<Stage>, #[prop(into)] hidden: Signal<bool>)
             </figure>
         })
     }
+}
+
+/// The parts as one line, as the view writes it.
+fn whole(parts: &'static [Part]) -> impl IntoView + use<> {
+    let pieces = parts
+        .iter()
+        .enumerate()
+        .flat_map(|(index, part)| {
+            let gap = (index > 0 && !part.joined).then_some((" ", Qualifier));
+            gap.into_iter().chain(part.code.iter().copied())
+        })
+        .map(|(text, ink)| view! { <span class=ink.class()>{text}</span> })
+        .collect_view();
+    view! { <code>{pieces}</code> }
 }
 
 /// A part's text in its colours.
@@ -333,8 +358,8 @@ mod tests {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// Each example is a line of real output, the first lesson's at -O0 or
-    /// -O2, and its parts spell it.
+    /// Each example, as its parts spell it, is a line of real output: the
+    /// first lesson's at -O0 or -O2.
     #[test]
     fn every_example_is_a_line_of_the_first_lessons_output() {
         let outputs = outputs(&DEMOS[..1]);
@@ -342,13 +367,15 @@ mod tests {
             let Some(notation) = notation(stage) else {
                 continue;
             };
-            let parts: String = notation.parts.iter().map(spelled).collect();
-            assert_eq!(
-                parts.replace(' ', ""),
-                notation.line.replace(' ', ""),
-                "{stage:?}: the parts spell another line"
-            );
-            let line = squeezed(notation.line);
+            // The parts, spaced as the figure writes them.
+            let mut line = String::new();
+            for (index, part) in notation.parts.iter().enumerate() {
+                if index > 0 && !part.joined {
+                    line.push(' ');
+                }
+                line.push_str(&spelled(part));
+            }
+            let line = squeezed(&line);
             assert!(
                 outputs.iter().any(|(each, output)| *each == stage
                     && output.lines().any(|each| squeezed(each) == line)),
