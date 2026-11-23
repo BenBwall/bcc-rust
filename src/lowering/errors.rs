@@ -191,6 +191,16 @@ pub(crate) enum Construct {
     /// not executable, which GCC's MinGW port makes so through
     /// `__enable_execute_stack` at each trampoline.
     NestedTrampolineTarget,
+    /// `__builtin_frame_address` or `__builtin_return_address` above level
+    /// 0 where no frame-pointer chain links the callers' frames: on Windows,
+    /// whose unwind tables describe the frames instead, and
+    /// `__builtin_return_address` on WebAssembly, whose return addresses are
+    /// not in memory (an outer frame address there is null, as in Clang).
+    /// GNU extension: GCC manual, "Return Address".
+    OuterFrameTarget,
+    /// `__builtin_frame_address` or `__builtin_return_address` above level
+    /// 65535, which Clang refuses; GCC takes the level and unrolls the walk.
+    OuterFrameLevel,
     Builtin,
     StaticInitializer,
     Initializer,
@@ -290,6 +300,11 @@ impl Construct {
             | Self::NestedChainTarget => "nested functions on x86_64-pc-windows-msvc",
             | Self::NestedTrampolineTarget =>
                 "the address of a nested function on x86_64-w64-windows-gnu",
+            | Self::OuterFrameTarget =>
+                "__builtin_frame_address and __builtin_return_address above level 0 on this \
+                 target, whose frames no frame-pointer chain links",
+            | Self::OuterFrameLevel =>
+                "__builtin_frame_address and __builtin_return_address above level 65535",
             | Self::Builtin => "this builtin",
             | Self::StaticInitializer => "this static initializer",
             | Self::Initializer => "this initializer",

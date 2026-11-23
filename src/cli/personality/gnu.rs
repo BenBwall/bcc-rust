@@ -32,7 +32,9 @@ use super::{
     host_target,
     icx,
     known::{
+        ClangIgnored,
         Compiler,
+        clang_ignored,
         knows,
         knows_exactly,
     },
@@ -191,6 +193,7 @@ pub(super) fn plan_translated(
         compiler_option_errors: Vec::new(),
         bad_standard: None,
         other_languages: Vec::new(),
+        ignored: Vec::new(),
     };
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
@@ -329,6 +332,7 @@ pub(super) fn plan_translated(
     let target = state.target.unwrap_or_else(|| host_target(personality));
     let machine = state.machine_options(target, personality);
     state.check_inputs();
+    state.warn_ignored();
     let jobs = state.jobs();
     // Clang's compiler validates the last `-std=` for each C source, so a
     // driver error that stops the compilation, or `-###`, hides it.
@@ -769,6 +773,9 @@ struct State<'a> {
     /// The options of other languages GCC's C compiler warns about, with
     /// the languages it names.
     other_languages: Vec<(String, &'static str)>,
+    /// The options Clang ignores with a warning for each source it
+    /// compiles: GCC optimization flags and retired flags, in order.
+    ignored: Vec<(ClangIgnored, String)>,
 }
 
 /// A driver query: an option that prints something about the compiler
@@ -1847,6 +1854,45 @@ impl State<'_> {
         }
     }
 
+    /// Warns as Clang's driver does about the options it ignores, when it
+    /// builds the job for each source it compiles (Clang 23.1.5,
+    /// `Clang::ConstructJob`): first the GCC optimization flags, then the
+    /// retired flags, each in order. Its compiler takes the C sources and
+    /// the assembly it preprocesses; a link or a `.s` file draws no such
+    /// warning.
+    fn warn_ignored(&mut self) {
+        let sources = self
+            .inputs
+            .iter()
+            .filter(|input| {
+                !input.dropped
+                    && matches!(
+                        input.kind,
+                        InputKind::C | InputKind::Assembly { preprocessed: true }
+                    )
+            })
+            .count();
+        let ignored = std::mem::take(&mut self.ignored);
+        for _ in 0..sources {
+            for (kind, option) in &ignored {
+                if *kind == ClangIgnored::Optimization {
+                    self.clang_warning(
+                        "ignored-optimization-argument",
+                        format_args!("optimization flag '{option}' is not supported"),
+                    );
+                }
+            }
+            for (kind, option) in &ignored {
+                if *kind == ClangIgnored::Deprecated {
+                    self.clang_warning(
+                        "unused-command-line-argument",
+                        format_args!("the flag '{option}' has been deprecated and will be ignored"),
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether the command line names an input: a file, or a linker
     /// option the compiler counts as one. GCC counts `-l`, `-Wl,` and
     /// `-Xlinker`; Clang counts every linker input, `-z` and `-e` too.
@@ -2051,6 +2097,19 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
+        // The options Clang takes and ignores, and the aliases it defines
+        // without a name of their own.
+        if self.compiler == Compiler::Clang
+            && let Some(ignored) = clang_ignored(text)
+        {
+            match ignored {
+                | ClangIgnored::Optimization | ClangIgnored::Deprecated =>
+                    self.ignored.push((ignored, text.into())),
+                | ClangIgnored::Silent => {},
+                | ClangIgnored::Alias(option) => self.flag(option),
+            }
+            return;
+        }
         if text.starts_with("-m") {
             self.x86_options.push(text.into());
         }

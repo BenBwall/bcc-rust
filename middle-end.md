@@ -3429,11 +3429,24 @@ way keeps a frame pointer. TinyCC's `tests/tcctest.c` relies on them
 (`builtin_frame_address_test`, built with `-O0 -fno-omit-frame-pointer`).
 
 - **Lowering** (`lowering/builtins.rs`). Level 0 is `frame_address` or
-  `return_address`. Levels 1 to 64 outside Windows are `frame_address` and N
+  `return_address`. On Linux, levels 1 to 65535 are `frame_address` and N
   `load.ptr`s, and the return address one more load 8 bytes above the frame
-  reached. A deeper level, and any outer level on Windows (Win64 unwinds
-  through tables, and a Win64 `%rbp` points into its frame, so no chain
-  exists), stay refused as "not yet supported by lowering: this builtin".
+  reached. Clang takes the same levels and its back end unrolls the walk the
+  same way; LLVM test-suite `20030323-1.c` asks for levels up to 100, past
+  the 64 bcc stopped at before (2026-11-23). Under the Clang identity a
+  level above 65535 (after its conversion to `unsigned int`, so -1 is
+  4294967295) is Clang's error, "argument value 65536 is outside the valid
+  range [0, 65535]". GCC takes any level and unrolls the walk however long
+  it is; bcc refuses one above 65535 by name ("not yet supported by
+  lowering: __builtin_frame_address and __builtin_return_address above
+  level 65535"). Any outer level on Windows (Win64 unwinds through tables,
+  and a Win64 `%rbp` points into its frame, so no chain exists) and an
+  outer `__builtin_return_address` on WebAssembly (whose return addresses
+  are not in memory; Clang refuses `__builtin_return_address` there at
+  every level) are refused by name as well: "... above level 0 on this
+  target, whose frames no frame-pointer chain links". An outer
+  `__builtin_frame_address` on WebAssembly is a null pointer, as Clang's
+  WebAssembly back end makes it (`i32.const 0`).
 - **Frame pointers.** `-fno-omit-frame-pointer` (`Hardening::
   keep_frame_pointer`) gives the LLVM back end `"frame-pointer"="all"` and
   now the native back end GCC's System V frames, `%rbp` pushed first and set

@@ -271,7 +271,18 @@ included, as GCC compares it (Clang 23 calls libgcc's signaling
 before any rounding, so `__builtin_nans("")` and its negation are
 signaling. For an x87 `long double`, the encodings the format leaves
 unsupported (pseudo-NaN, pseudo-infinity, unnormal) are signaling except
-under the Clang identities, as GCC and Clang classify them. `msvc`
+under the Clang identities, as GCC and Clang classify them. The Clang
+identities also have Clang's `__builtin_isfpclass(x, mask)`, with its
+`__FPCLASS_*` mask macros, which GCC 14 lacks: `x` is a real floating value
+and `mask` an integer constant expression from 0 to 1023, and the call is 1
+when `x` is in a class `mask` names. It folds a constant `x`, a signaling NaN
+included, and reads any other from its representation, so no comparison
+raises "invalid" and denormal modes do not matter. An x87 encoding the format
+leaves unsupported, or a pseudo-denormal, is in no class alone; as in
+Clang, a test holds for one depending on the whole mask (a test for every
+NaN holds for an unsupported encoding), as Clang tests them at `-O0` (its
+`-O2` answers otherwise for a pseudo-denormal and a few masks). Vector
+operands, which Clang also takes, are refused. `msvc`
 (`cl.exe`) removes the GNU and Clang macros and the inline-semantics macro,
 and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
@@ -1852,16 +1863,16 @@ backend work before they can be enabled.
 | `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
 | `__BITINT_MAXWIDTH__` | The widest _BitInt follows the compiler identity; defined beside the identity macros. |
 | `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
-| `__FPCLASS_NEGINF` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_NEGNORMAL` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_NEGSUBNORMAL` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_NEGZERO` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_POSINF` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_POSNORMAL` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_POSSUBNORMAL` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_POSZERO` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_QNAN` | Floating classification intrinsics are not implemented. |
-| `__FPCLASS_SNAN` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_NEGINF` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_NEGNORMAL` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_NEGSUBNORMAL` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_NEGZERO` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_POSINF` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_POSNORMAL` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_POSSUBNORMAL` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_POSZERO` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_QNAN` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
+| `__FPCLASS_SNAN` | The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros. |
 | `__FXSR__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_CONSTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_DESTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |

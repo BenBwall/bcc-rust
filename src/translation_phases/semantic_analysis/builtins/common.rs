@@ -155,6 +155,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.check_registry_argument(descriptor, index, argument, name.name);
             }
         }
+        if matches!(builtin, CommonBuiltin::Address(_)) {
+            self.clang_frame_level(e, descriptor, args[0]);
+        }
         match builtin {
             | CommonBuiltin::CpuInit | CommonBuiltin::CpuQuery(_) =>
                 self.cpu_builtin(&mut info, builtin, args),
@@ -669,6 +672,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
             .then_some(arg)
         })
+    }
+
+    /// Clang takes a level of `__builtin_frame_address` and
+    /// `__builtin_return_address` from 0 to 65535 after its conversion to
+    /// `unsigned int` (`Sema::BuiltinConstantArgRange`), which GCC does not
+    /// bound; the level must be a constant either way, which the
+    /// descriptor's constraint checks.
+    /// Clang extension: the error "argument value 4294967295 is outside the
+    /// valid range [0, 65535]".
+    fn clang_frame_level(
+        &mut self,
+        call: &'tu Expression<'tu>,
+        descriptor: &BuiltinDescriptor,
+        level: &'tu Expression<'tu>,
+    ) {
+        if self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Clang
+        {
+            return;
+        }
+        let ConversionRule::Parameter(pattern) = descriptor.arguments[0].conversion else {
+            return;
+        };
+        let ty = self.signature_type(pattern);
+        if let Some(value) = self
+            .common_integer_constant(level, ty)
+            .and_then(Integer::to_u64)
+            .filter(|&value| value > 65535)
+        {
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "argument value {value} is outside the valid range [0, 65535]"
+            );
+            self.compiler_refusal(text, call.source_vectors);
+        }
     }
 
     /// Apply compatibility before the descriptor's converted/original constant

@@ -113,6 +113,87 @@ def clang_cl_options(options_td):
     )
 
 
+# An option of a group the pinned Clang's driver ignores, and an alias
+# defined without a name of its own (`-ftree-vectorize` for `-fvectorize`),
+# which `--autocomplete` lists neither of.
+IGNORED_GROUP = re.compile(r"Group<clang_ignored_(?:gcc_optimization_f|f|m|legacy_options)_Group>")
+IGNORED_OPTION = re.compile(r'def\s*\w*\s*:\s*(Flag|Joined)<\["-"\],\s*"([^"]*)">')
+IGNORED_BOOLEAN = re.compile(r'defm\s*\w*\s*:\s*BooleanFFlag<"([^"]*)">')
+ALIAS = re.compile(r'def\s*:\s*Flag<\["-"\],\s*"([fm][^"]*)">,\s*Alias<(\w+)>')
+# How the pinned Clang reports an option it ignores (Clang.cpp,
+# `Clang::ConstructJob`).
+IGNORED_REPORTS = (
+    ("warn", re.compile(r"optimization flag '(.*)' is not supported \[-Wignored-optimization-argument\]")),
+    ("deprecated", re.compile(r"the flag '(.*)' has been deprecated and will be ignored \[-Wunused-command-line-argument\]")),
+)
+
+
+def clang_ignored_options(options_td):
+    """The options the pinned Clang's driver takes and ignores, which its
+    `--autocomplete` does not list, as `KIND PATTERN [TARGET]` lines: those
+    of its ignored groups in `Options.td`, which it reports as `warn` (an
+    unsupported GCC optimization flag), `deprecated` (a retired flag) or
+    `ignore` (nothing), and as `alias` the unnamed aliases of a `-f` or `-m`
+    flag it lists, the TARGET they stand for. A joined option's PATTERN ends
+    in `*`. The driver itself classifies each, so an option it refuses is
+    left out."""
+    import tempfile
+
+    text = Path(options_td).read_text()
+    listed = set()
+    for kind in ("flags", "machine"):
+        listed.update(line for line in (OUT / f"clang-{kind}.list").read_text().splitlines() if not line.startswith("#"))
+    candidates = {}
+    for definition in re.split(r"(?m)^(?=def |class |multiclass |let |defm )", text):
+        alias = ALIAS.match(definition)
+        if alias:
+            target = "-" + alias.group(2).replace("_EQ", "=").replace("_", "-")
+            if target in listed:
+                candidates["-" + alias.group(1)] = ("alias", target)
+            continue
+        if not IGNORED_GROUP.search(definition):
+            continue
+        option = IGNORED_OPTION.match(definition)
+        boolean = IGNORED_BOOLEAN.match(definition)
+        if option:
+            joined = option.group(1) == "Joined"
+            candidates["-" + option.group(2)] = ("joined" if joined else "flag", None)
+        elif boolean:
+            for name in (f"-f{boolean.group(1)}", f"-fno-{boolean.group(1)}"):
+                candidates[name] = ("flag", None)
+    lines = []
+    with tempfile.TemporaryDirectory() as scratch:
+        directory = Path(scratch)
+        (directory / "a.c").write_text("int main(void) { return 0; }\n")
+        for name, (kind, target) in sorted(candidates.items()):
+            argument = f"{name}1" if kind == "joined" else name
+            result = subprocess.run(
+                [str(CLANG), "-c", str(directory / "a.c"), "-o", str(directory / "a.o"), argument],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+            )
+            if result.returncode != 0:
+                continue
+            pattern = f"{name}*" if kind == "joined" else name
+            if kind == "alias":
+                if not result.stderr:
+                    lines.append(f"alias {pattern} {target}")
+                continue
+            report = "ignore" if not result.stderr else None
+            for label, message in IGNORED_REPORTS:
+                match = message.search(result.stderr)
+                if match and match.group(1) == argument:
+                    report = label
+            if report:
+                lines.append(f"{report} {pattern}")
+    lines.sort(key=lambda line: line.split(" ")[1])
+    return (
+        "# pinned Clang's ignored options and unnamed aliases (Options.td); regenerate with "
+        "scripts/update_driver_options.py --options-td\n" + "".join(f"{line}\n" for line in lines)
+    )
+
+
 DIAG_ENTRY = re.compile(
     r"DIAG_ENTRY\(\w+ /\* (.*?) \*/, \d+, (?:/\* (DiagArray\d+) \*/ )?\d+, "
     r"(?:/\* (DiagSubGroup\d+) \*/ )?\d+, R\""
@@ -414,6 +495,7 @@ def main():
             files[f"clang-{kind}.list"] = render(clang, prefix, "pinned Clang --autocomplete")
         if args.options_td:
             files["clang-cl.list"] = clang_cl_options(args.options_td)
+            files["clang-ignored.list"] = clang_ignored_options(args.options_td)
         if args.diagnostic_groups:
             files["clang-warning-groups.list"] = clang_warning_groups(args.diagnostic_groups)
     stale = []

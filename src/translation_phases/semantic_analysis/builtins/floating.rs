@@ -140,6 +140,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut result = Self::expression_result(expression, result_type);
         result.operation_type = Some(operand);
+        if matches!(
+            operation,
+            FloatOperation::Isfpclass | FloatOperation::Issubnormal | FloatOperation::Iszero
+        ) {
+            let mask = match operation.fixed_fpclass() {
+                | Some(mask) => Some(mask),
+                | None => self.fpclass_mask(expression, args[1]),
+            };
+            let Some(mask) = mask else {
+                return result;
+            };
+            if first.constant == ConstantClass::Arithmetic
+                && let Some(class) = self.fpclass_constant(first, operand)
+            {
+                result.integer = Some(Integer::int(i128::from(mask & class != 0)));
+                result.ice = true;
+                result.constant = ConstantClass::Arithmetic;
+            }
+            return result;
+        }
         if operation == FloatOperation::Issignaling && first.constant == ConstantClass::Arithmetic {
             if let Some(signaling) = self.signaling_constant(first, operand) {
                 result.integer = Some(Integer::int(i128::from(signaling)));
@@ -234,6 +254,91 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 CompilerIdentity::Clang | CompilerIdentity::ClangCl
             );
         Some(signaling || unsupported)
+    }
+
+    /// The class mask of `__builtin_isfpclass`, which must be an integer
+    /// constant expression from 0 to 1023, as Clang checks it
+    /// (`Sema::BuiltinConstantArgRange`); `None` once its error is reported.
+    /// C99: §6.6 paragraph 6, p. 95; PDF p. 107 (integer constant
+    /// expressions).
+    fn fpclass_mask(
+        &mut self,
+        call: &'tu Expression<'tu>,
+        mask: &'tu Expression<'tu>,
+    ) -> Option<u16> {
+        let info = self.expression_info(mask);
+        if self.types.unanalyzed(info.ty) {
+            return None;
+        }
+        let ty = self.converted(info);
+        let Some(value) = info
+            .integer
+            .filter(|_| info.ice && self.integer_type(ty).is_some())
+        else {
+            self.compiler_refusal(
+                "argument to '__builtin_isfpclass' must be a constant integer",
+                call.source_vectors,
+            );
+            return None;
+        };
+        let mask = value
+            .to_i128()
+            .and_then(|mask| u16::try_from(mask).ok())
+            .filter(|&mask| mask <= 0x3FF);
+        if mask.is_none() {
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "argument value {value} is outside the valid range [0, 1023]"
+            );
+            self.compiler_refusal(text, call.source_vectors);
+        }
+        mask
+    }
+
+    /// The `__builtin_isfpclass` bit of the class of the constant `info` of
+    /// the real floating type `operand`: signaling and quiet NaN (bits 0 and
+    /// 1), then negative infinity, normal, subnormal and zero (2 to 5), then
+    /// positive zero, subnormal, normal and infinity (6 to 9). A NaN is read
+    /// as it stands, so that rounding does not quiet it; every other class
+    /// from the value in `operand`'s format.
+    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 23-24; PDF pp. 35-36.
+    fn fpclass_constant(&self, info: ExpressionInfo<'tu>, operand: TypeId) -> Option<u16> {
+        let signaling = self.signaling_constant(info, operand)?;
+        let (sign, positive) = if self.binary128_type(operand) {
+            let bits = self.binary128_value(info)?.real.to_bits();
+            let exponent = bits >> 112 & 0x7FFF;
+            let fraction = bits & ((1 << 112) - 1);
+            let class = match (exponent, fraction) {
+                | (0x7FFF, 0) => 9,
+                | (0x7FFF, _) => return Some(if signaling { 1 } else { 2 }),
+                | (0, 0) => 6,
+                | (0, _) => 7,
+                | _ => 8,
+            };
+            (bits >> 127 != 0, class)
+        } else {
+            let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(operand).index]
+            else {
+                return None;
+            };
+            let value = self.converted_floating(info, operand)?;
+            let (sign, exponent, significand) = value.real.x87_parts()?;
+            let minimum_exponent = match self.floating_precision(scalar)? {
+                | _ if matches!(scalar, Scalar::Float16 | Scalar::Fp16) => 16383 - 14,
+                | 1 => 16383 - 126,
+                | 2 => 16383 - 1022,
+                | _ => 1,
+            };
+            let class = match (exponent, significand) {
+                | (0x7FFF, 0x8000_0000_0000_0000) => 9,
+                | (0x7FFF, _) => return Some(if signaling { 1 } else { 2 }),
+                | (_, 0) => 6,
+                | _ if exponent < minimum_exponent => 7,
+                | _ => 8,
+            };
+            (sign, class)
+        };
+        Some(1 << if sign { 11 - positive } else { positive })
     }
 
     /// `__builtin_isless(x, y)` and its siblings: both operands are real,
@@ -420,6 +525,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })?,
             // Folded apart, from the value before rounding.
             | FloatOperation::Issignaling
+            | FloatOperation::Isfpclass
+            | FloatOperation::Issubnormal
+            | FloatOperation::Iszero
             | FloatOperation::Copysign
             | FloatOperation::Fabs
             | FloatOperation::Compare(_) => return None,
