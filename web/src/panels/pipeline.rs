@@ -10,9 +10,12 @@
 
 use leptos::prelude::*;
 
-use super::front_end::{
-    FrontEndCard,
-    StageClauses,
+use super::{
+    front_end::{
+        FrontEndCard,
+        StageClauses,
+    },
+    notation::StageNotation,
 };
 use crate::{
     app::links::{
@@ -436,6 +439,7 @@ pub fn PipelineView(
                         <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
                     </footer>
                 </div>
+                <StageNotation stage hidden=Signal::derive(move || outputs_hidden.get()) />
                 <div class="stage-missing" hidden=move || !outputs_hidden.get()>
                     <p>{missing_text}</p>
                     <div class="stage-missing-actions" hidden=move || stage.get() != Stage::Llvm || lesson.get()>

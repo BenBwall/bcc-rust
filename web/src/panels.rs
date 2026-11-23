@@ -6,7 +6,8 @@
 //! the program has written to standard output (`output`), and the objects'
 //! datasheet.
 //! In pipeline mode: the compiler's output stage by stage, with what each
-//! front-end stage did to the program. In WebAssembly mode: the module's
+//! front-end stage did to the program and how to read each later stage's
+//! notation (`notation`). In WebAssembly mode: the module's
 //! listing and the stepper's state. Engine data is always rendered as text
 //! nodes, never as HTML.
 
@@ -16,6 +17,7 @@ pub mod evaluation;
 mod front_end;
 mod knob;
 mod narration;
+mod notation;
 mod output;
 mod pipeline;
 pub(crate) mod ranks;
