@@ -68,7 +68,9 @@ use crate::{
 };
 
 /// Normalize GCC's single-dash long options before clap. Values and tokens
-/// after `--` are opaque, including an input string that looks like a flag.
+/// after `--` are opaque, including an input string that looks like a flag;
+/// a value that starts with `-` is joined to its option (`-I-x`,
+/// `--language=-x`), which clap would otherwise read as an option itself.
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,
@@ -77,12 +79,26 @@ use crate::{
 pub(super) fn normalize_language_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<Vec<std::ffi::OsString>, clap::Error> {
-    let mut normalized = Vec::new();
+    let mut normalized: Vec<std::ffi::OsString> = Vec::new();
     let mut opaque_value = true; // argv[0]
     let mut positional = false;
     let mut arguments = arguments.into_iter();
     let mut debug = DebugFlags::default();
     while let Some(argument) = arguments.next() {
+        if opaque_value && !positional && !normalized.is_empty() {
+            opaque_value = false;
+            match normalized.pop() {
+                | Some(mut option) if argument.as_encoded_bytes().starts_with(b"-") => {
+                    if option.as_encoded_bytes().starts_with(b"--") {
+                        option.push("=");
+                    }
+                    option.push(argument);
+                    normalized.push(option);
+                },
+                | option => normalized.extend(option.into_iter().chain([argument])),
+            }
+            continue;
+        }
         if opaque_value || positional {
             opaque_value = false;
             normalized.push(argument);
@@ -232,6 +248,7 @@ pub(super) fn normalize_language_arguments(
                     | "--diagnostic-format"
                     | "-o"
                     | "--output"
+                    | "-B"
             );
             normalized.push(argument);
         }

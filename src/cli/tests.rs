@@ -323,3 +323,38 @@ fn clang_complains_about_warning_options_in_its_own_words() {
         );
     }
 }
+
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup argv tests use owned OS strings as clap does."
+)]
+fn a_value_that_starts_with_a_dash_stays_a_value() {
+    let normalized = |arguments: &[&str]| {
+        normalize_language_arguments(arguments.iter().map(std::ffi::OsString::from))
+            .unwrap()
+            .into_iter()
+            .map(|argument| argument.into_string().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        normalized(&[
+            "bcc-rust", "-I", "-mfoo", "-x", "-c", "-B", "-T", "--", "-a.c"
+        ]),
+        ["bcc-rust", "-I-mfoo", "--language=-c", "-B-T", "--", "-a.c"]
+    );
+    assert_eq!(
+        normalized(&["bcc-rust", "-iquote", "-W", "-o", "out", "-I", "dir"]),
+        ["bcc-rust", "--iquote=-W", "-o", "out", "-I", "dir"]
+    );
+    for arguments in [
+        &["bcc-rust", "-I", "-mfoo", "--input", "int x;"][..],
+        &["bcc-rust", "-isystem", "-x", "--input", "int x;"],
+        &["bcc-rust", "-B", "-ffoo", "--input", "int x;"],
+    ] {
+        assert!(
+            Cli::try_parse_from(normalized(arguments)).is_ok(),
+            "{arguments:?}"
+        );
+    }
+}
