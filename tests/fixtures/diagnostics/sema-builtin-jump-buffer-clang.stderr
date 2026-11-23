@@ -1,0 +1,37 @@
+sema-builtin-jump-buffer-clang.c:21:21: warning: passing 'void *const [5]' to parameter of type 'void **' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   21 |   __builtin_longjmp(constant, 1);
+      |                     ^~~~~~~~
+sema-builtin-jump-buffer-clang.c:22:21: warning: passing 'const void **' to parameter of type 'void **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   22 |   __builtin_longjmp(nested, 1);
+      |                     ^~~~~~
+sema-builtin-jump-buffer-clang.c:23:21: error: incompatible pointer types passing 'char[64]' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   23 |   __builtin_longjmp(bytes, 1);
+      |                     ^~~~~
+sema-builtin-jump-buffer-clang.c:24:21: error: incompatible pointer types passing 'volatile char[64]' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   24 |   __builtin_longjmp(volatile_bytes, 1);
+      |                     ^~~~~~~~~~~~~~
+sema-builtin-jump-buffer-clang.c:25:21: error: incompatible pointer types passing 'const int *' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   25 |   __builtin_longjmp(read_only, 1);
+      |                     ^~~~~~~~~
+sema-builtin-jump-buffer-clang.c:26:21: error: incompatible pointer types passing 'struct S *' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   26 |   __builtin_longjmp(record, 1);
+      |                     ^~~~~~
+sema-builtin-jump-buffer-clang.c:27:21: error: incompatible pointer types passing 'long[5]' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   27 |   __builtin_longjmp(words, 1);
+      |                     ^~~~~
+sema-builtin-jump-buffer-clang.c:28:21: error: incompatible pointer types passing 'int **' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   28 |   __builtin_longjmp(ints, 1);
+      |                     ^~~~
+sema-builtin-jump-buffer-clang.c:29:21: error: incompatible pointer types passing 'void (void)' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   29 |   __builtin_longjmp(fn, 1);
+      |                     ^~
+sema-builtin-jump-buffer-clang.c:30:21: error: incompatible integer to pointer conversion passing 'int' to parameter of type 'void **' [-Wint-conversion]
+   30 |   __builtin_longjmp(5, 1);
+      |                     ^
+sema-builtin-jump-buffer-clang.c:31:27: error: incompatible pointer types passing 'char[64]' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   31 |   return __builtin_setjmp(bytes) + __builtin_setjmp(&fn) + __builtin_setjmp(buffer);
+      |                           ^~~~~
+sema-builtin-jump-buffer-clang.c:31:53: error: incompatible pointer types passing 'void (*)(void)' to parameter of type 'void **' [-Wincompatible-pointer-types]
+   31 |   return __builtin_setjmp(bytes) + __builtin_setjmp(&fn) + __builtin_setjmp(buffer);
+      |                                                     ^~~
+2 warnings and 10 errors generated.

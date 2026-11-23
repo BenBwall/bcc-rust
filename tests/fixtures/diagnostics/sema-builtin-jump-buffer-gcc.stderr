@@ -1,0 +1,13 @@
+sema-builtin-jump-buffer-gcc.c: In function 'f':
+sema-builtin-jump-buffer-gcc.c:21:21: warning: passing argument 1 of '__builtin_longjmp' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   21 |   __builtin_longjmp(constant, 1);
+      |                     ^~~~~~~~
+sema-builtin-jump-buffer-gcc.c:24:21: warning: passing argument 1 of '__builtin_longjmp' discards 'volatile' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   24 |   __builtin_longjmp(volatile_bytes, 1);
+      |                     ^~~~~~~~~~~~~~
+sema-builtin-jump-buffer-gcc.c:25:21: warning: passing argument 1 of '__builtin_longjmp' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   25 |   __builtin_longjmp(read_only, 1);
+      |                     ^~~~~~~~~
+sema-builtin-jump-buffer-gcc.c:30:21: error: passing argument 1 of '__builtin_longjmp' makes pointer from integer without a cast [-Wint-conversion]
+   30 |   __builtin_longjmp(5, 1);
+      |                     ^

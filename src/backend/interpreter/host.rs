@@ -1065,7 +1065,7 @@ fn external_type(
         | T::Scalar(S::Float) => Type::F32,
         | T::Scalar(S::Double) => Type::F64,
         | T::Scalar(S::LongDouble) => long_double,
-        | T::Pointer(..) | T::VaList | T::File | T::VectorPointer(..) => Type::Ptr,
+        | T::Pointer(..) | T::VaList | T::File | T::VectorPointer(..) | T::JumpBuffer => Type::Ptr,
         | _ => return None,
     })
 }

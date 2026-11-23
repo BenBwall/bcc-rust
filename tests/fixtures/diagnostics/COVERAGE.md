@@ -346,8 +346,18 @@ GCC's non-local gotos (2026-10-27): `sema-builtin-setjmp.c` pins the
 conversion to `int`, as GCC and Clang require; GCC also accepts a converted
 `1.0`) for a variable, 2, 0 and a floating constant, an integer buffer, and
 wrong argument counts, and Clang's `-Wconstant-conversion` for
-`4294967297LL`, which converts to 1. `int[5]` and `int (*)[5]` buffers are accepted, since GCC
-types the buffer `void *` (Clang's `void **` rejects them).
+`4294967297LL`, which converts to 1. It runs under Clang's identity, whose
+`void **` buffer refuses `int[5]` and `int (*)[5]`.
+
+The jump buffer by identity (2026-11-23): `sema-builtin-jump-buffer-gcc`
+and `-clang` pass the same buffers, `void *[5]`, `void **`, a null pointer,
+`void *const[5]`, `const void **`, `char[64]`, `volatile char[64]`, `const
+int *`, `struct S *`, `long[5]`, `int **`, a function, its address and an
+integer, to `__builtin_longjmp` and `__builtin_setjmp`. GCC 14 types the
+buffer `void *` and Clang 23.1.5 `void **`, and each identity follows its
+compiler: every line and status matches GCC 14 (`-std=gnu17`) byte for byte,
+and Clang 23.1.5 but for its spelling `'void *const[5]'`, which bcc spells
+with a space, as for every array type.
 
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for

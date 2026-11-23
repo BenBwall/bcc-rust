@@ -336,19 +336,23 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Value)],
         1,
     )),
+    // GCC's and Clang's `void __builtin___clear_cache(void *, void *)`;
+    // GCC's manual once gave it `char *` parameters.
+    // GNU extension: GCC manual, "Other Built-in Functions";
+    // <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>.
     descriptor(
         Id::ClearCache,
         "__builtin___clear_cache",
         B::ClearCache,
         Signature {
             result:     T::Scalar(S::Void),
-            parameters: &[T::Pointer(S::Char, false), T::Pointer(S::Char, false)],
+            parameters: &[T::Pointer(S::Void, false), T::Pointer(S::Void, false)],
             prototype:  true,
             variadic:   false,
         },
         &[
-            A::value(C::Parameter(T::Pointer(S::Char, false))),
-            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
         ],
         2,
     ),
@@ -1563,21 +1567,21 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
-    // GCC's `int __builtin_setjmp(void *)` and
-    // `void __builtin_longjmp(void *, int)`, whose value must be 1. GCC
-    // types the buffer `void *` (Clang `void **`), so any object pointer
-    // converts to it.
+    // `int __builtin_setjmp(BUFFER)` and `void __builtin_longjmp(BUFFER,
+    // int)`, whose value must be 1. GCC types the buffer `void *`, so any
+    // object pointer converts to it; Clang types it `void **`
+    // ([`T::JumpBuffer`]).
     descriptor(
         Id::Setjmp,
         "__builtin_setjmp",
         B::Setjmp,
         Signature {
             result:     T::Scalar(S::Int),
-            parameters: &[T::Pointer(S::Void, false)],
+            parameters: &[T::JumpBuffer],
             prototype:  true,
             variadic:   false,
         },
-        &[A::value(C::Parameter(T::Pointer(S::Void, false)))],
+        &[A::value(C::Parameter(T::JumpBuffer))],
         1,
     ),
     descriptor(
@@ -1586,12 +1590,12 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         B::Longjmp,
         Signature {
             result:     T::Scalar(S::Void),
-            parameters: &[T::Pointer(S::Void, false), T::Scalar(S::Int)],
+            parameters: &[T::JumpBuffer, T::Scalar(S::Int)],
             prototype:  true,
             variadic:   false,
         },
         &[
-            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::JumpBuffer)),
             A::constrained(
                 C::Parameter(T::Scalar(S::Int)),
                 K::ConvertedIntegerValue(1),
