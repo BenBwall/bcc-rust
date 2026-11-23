@@ -465,15 +465,18 @@ impl Topic {
                  which function; calling through it runs that function exactly as a call by name \
                  would, with the arguments converted to the parameter types the pointer's type \
                  spells. That type is a promise: a call through a null pointer, or through a \
-                 pointer cast to the wrong type, is undefined, and a compiled program usually \
-                 crashes there.",
+                 pointer cast to the wrong type, is undefined. Without optimization the first \
+                 usually crashes a compiled program; the second often runs on, with the caller and \
+                 the function disagreeing about where the arguments and the result are.",
             | Self::ConstantExpression =>
                 "An object with static storage duration gets its value before main runs, so its \
                  initializer must be a constant expression, which the compiler works out while it \
                  translates the program: `1 << 3`, `sizeof(int) * 4`, or a function's name for a \
                  pointer to it. Anything that needs the program to run, such as a call, reading a \
-                 variable or an assignment, is refused there. An automatic variable's initializer \
-                 may be any expression, since it runs each time the declaration is reached.",
+                 variable or an assignment, breaks that rule, and compilers refuse it, though GCC \
+                 and Clang accept reading a const variable whose value they know, as C lets them. \
+                 An automatic variable's initializer may be any expression, since it runs each \
+                 time the declaration is reached.",
             | Self::Enumeration =>
                 "An enumeration gives names to related integer values, so a program can say `state \
                  == RUNNING` instead of `state == 2`. The names are constants of type int, not \
@@ -486,12 +489,14 @@ impl Topic {
                  often an enumeration's constants. Its labels are only places to jump to, not \
                  separate blocks: after the jump, execution runs straight on through the next \
                  labels until a break. Forgetting a break, so one case falls through into the \
-                 next, is a classic bug, which is why compilers can warn about it.",
+                 next, is a classic bug, which is why compilers can warn about it: GCC with \
+                 -Wextra, Clang with -Wimplicit-fallthrough.",
             | Self::Loops =>
                 "C has three loops. while tests its condition before each pass, so its body may \
                  never run; do tests after each pass, so its body runs at least once; for puts a \
                  loop's start, test and step on one line. In any of them, break leaves the loop at \
-                 once, and continue skips the rest of one pass and goes on to the next test.",
+                 once, and continue skips the rest of one pass and goes on to the next test (in a \
+                 for, after its step).",
             | Self::Jump =>
                 "goto jumps to a label anywhere in its function. Jumping around freely makes code \
                  hard to follow, so C programs mostly use loops, break and continue, and keep goto \
@@ -503,8 +508,8 @@ impl Topic {
                 "A block may declare a name that an enclosing block, or the file, already uses. \
                  Inside the inner block the name means the inner object, which hides the outer one \
                  until the inner block ends; the outer object still exists and keeps its value. \
-                 Using the wrong one by mistake is easy, so compilers can warn about it (GCC's \
-                 -Wshadow).",
+                 Using the wrong one by mistake is easy, so compilers can warn about it (GCC's and \
+                 Clang's -Wshadow).",
             | Self::Typedef =>
                 "A typedef gives a type a second name, such as `celsius` for double or `string` \
                  for char *, so a declaration can say what a value means rather than how it is \
@@ -1202,7 +1207,8 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
         | Some(Undefined::NullCall) => (
             "Undefined behavior: call through a null pointer",
             "A null pointer points to no function, and C defines a call only of a function, so \
-             this call has no meaning; a compiled program usually crashes here.",
+             this call has no meaning. Without optimization a compiled program crashes here, but \
+             an optimizer may assume the call never happens and produce anything else.",
         ),
         | Some(Undefined::CallType) => (
             "Undefined behavior: call through the wrong function type",
@@ -3055,7 +3061,7 @@ impl Machine {
         text.push_str(
             " The operand only supplies a type and is not evaluated, so nothing is read. The \
              result has type size_t, the unsigned integer type <stdio.h> and <stddef.h> define \
-             for sizes, which is unsigned long on x86-64.",
+             for sizes, which is unsigned long on x86-64 Linux.",
         );
         let mut event = noted(
             explained(
@@ -3848,9 +3854,9 @@ impl Machine {
                 "Subtracting two pointers into the same array counts the elements between them, \
                  not the bytes: the left is {} and the right is {}, at subscripts {i} and {j} of \
                  {array}, so the result is {i} - {j} = {shown}. Its type is ptrdiff_t, the signed \
-                 integer type <stddef.h> names for this, which is long on x86-64. C defines the \
-                 difference only for two pointers into the same array, or one past its end; for \
-                 any others it is undefined.{UNORDERED}",
+                 integer type <stddef.h> names for this, which is long on x86-64 Linux. C defines \
+                 the difference only for two pointers into the same array, or one past its end; \
+                 for any others it is undefined.{UNORDERED}",
                 self.value_text(left),
                 self.value_text(right),
             );
