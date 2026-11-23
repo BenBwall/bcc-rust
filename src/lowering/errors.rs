@@ -193,9 +193,10 @@ pub(crate) enum Construct {
     NestedTrampolineTarget,
     /// `__builtin_frame_address` or `__builtin_return_address` above level
     /// 0 where no frame-pointer chain links the callers' frames: on Windows,
-    /// whose unwind tables describe the frames instead, and on WebAssembly,
-    /// whose frames are not in memory. GNU extension: GCC manual, "Return
-    /// Address".
+    /// whose unwind tables describe the frames instead, and
+    /// `__builtin_return_address` on WebAssembly, whose return addresses are
+    /// not in memory (an outer frame address there is null, as in Clang).
+    /// GNU extension: GCC manual, "Return Address".
     OuterFrameTarget,
     /// `__builtin_frame_address` or `__builtin_return_address` above level
     /// 65535, which Clang refuses; GCC takes the level and unrolls the walk.

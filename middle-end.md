@@ -3440,10 +3440,13 @@ way keeps a frame pointer. TinyCC's `tests/tcctest.c` relies on them
   it is; bcc refuses one above 65535 by name ("not yet supported by
   lowering: __builtin_frame_address and __builtin_return_address above
   level 65535"). Any outer level on Windows (Win64 unwinds through tables,
-  and a Win64 `%rbp` points into its frame, so no chain exists) and on
-  WebAssembly (whose frames are not in memory; Clang refuses
-  `__builtin_return_address` there too) is refused by name as well: "...
-  above level 0 on this target, whose frames no frame-pointer chain links".
+  and a Win64 `%rbp` points into its frame, so no chain exists) and an
+  outer `__builtin_return_address` on WebAssembly (whose return addresses
+  are not in memory; Clang refuses `__builtin_return_address` there at
+  every level) are refused by name as well: "... above level 0 on this
+  target, whose frames no frame-pointer chain links". An outer
+  `__builtin_frame_address` on WebAssembly is a null pointer, as Clang's
+  WebAssembly back end makes it (`i32.const 0`).
 - **Frame pointers.** `-fno-omit-frame-pointer` (`Hardening::
   keep_frame_pointer`) gives the LLVM back end `"frame-pointer"="all"` and
   now the native back end GCC's System V frames, `%rbp` pushed first and set

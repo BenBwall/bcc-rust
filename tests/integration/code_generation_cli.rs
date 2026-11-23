@@ -2414,6 +2414,20 @@ int main(void) { printf("%d\n", top()); return 0; }
                 text(&refused.stderr)
             );
         }
+        // WebAssembly keeps no caller's frame in memory: an outer frame
+        // address is null, as Clang's WebAssembly back end makes it.
+        let wasm = bcc(
+            "void *f(void) { return __builtin_frame_address(1); }\nvoid *g(void) { return \
+             __builtin_frame_address(3); }",
+            &["--target=wasm32-unknown-unknown", "--emit=asm"],
+        );
+        assert!(wasm.status.success(), "{}", text(&wasm.stderr));
+        assert_eq!(
+            text(&wasm.stdout).matches("i32.const 0").count(),
+            2,
+            "{}",
+            text(&wasm.stdout)
+        );
     }
 
     /// C11 atomics under contention

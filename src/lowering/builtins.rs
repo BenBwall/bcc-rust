@@ -598,9 +598,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | Some(level) => self.info(level)?.integer.map(|level| level.value),
                     | None => None,
                 };
+                let target = self.unit.target;
                 let chained = matches!(
-                    self.unit.target,
+                    target,
                     crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+                );
+                let wasm = matches!(
+                    target,
+                    crate::target::Target::Wasm32Unknown | crate::target::Target::Wasm32Wasi
                 );
                 match level {
                     | Some(0) => Operand::Value(self.nullary(if return_address {
@@ -608,6 +613,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     } else {
                         Opcode::FrameAddress
                     })),
+                    // WebAssembly keeps no caller's frame in linear memory, so
+                    // an outer frame address is null, as Clang's WebAssembly
+                    // back end makes it; an outer return address stays
+                    // refused below.
+                    | Some(1..=OUTER_FRAMES) if wasm && !return_address =>
+                        Operand::Value(self.nullary(Opcode::Null)),
                     | Some(1..=OUTER_FRAMES) if !chained =>
                         return Err(LoweringError::unsupported(
                             super::Construct::OuterFrameTarget,
