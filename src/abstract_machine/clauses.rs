@@ -473,8 +473,8 @@ clauses! {
          runs at least once.";
     /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     GOTO_CONSTRAINT = "6.8.6.1p1", "p. 137; PDF p. 149", "The goto statement",
-        "A goto must name a label in its own function, and may not jump into the scope of a \
-         variable-length array.";
+        "A goto must name a label in its own function, and may not jump into the scope of an \
+         identifier with a variably modified type, such as a variable-length array.";
     /// C99: §6.8.6.1 paragraph 2, p. 137; PDF p. 149.
     GOTO = "6.8.6.1p2", "p. 137; PDF p. 149", "The goto statement",
         "A goto jumps unconditionally to the statement its label names, anywhere in the \

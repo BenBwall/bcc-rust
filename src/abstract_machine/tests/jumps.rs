@@ -286,9 +286,9 @@ fn a_jump_into_a_block_begins_lifetimes_without_initializers() {
     assert!(jump.event.objects.contains(&y.id));
     for words in [
         "The label is inside the block that begins on line 4, which the jump enters",
-        "the jump passed its declaration, so no initializer ran",
-        "variable-length array",
-        "`y` is declared before the label",
+        "The jump passed its declaration, so no initializer ran",
+        "variably modified type, such as a variable-length array",
+        "its name is in scope at the label",
     ] {
         assert!(
             jump.event.explanation.contains(words),
@@ -322,6 +322,71 @@ fn a_jump_into_a_block_begins_lifetimes_without_initializers() {
     );
     // A jump past an inner declaration reaches the inner object.
     let _hidden = finished("int main(void) {\n    int x = 1;\n    {\n        goto in;\n        int x = 2;\nin:\n        x = 3;\n    }\n    return x;\n}\n", 1);
+}
+
+// C99 §6.2.4p5, §6.8p3: a jump into a block begins the lifetimes of all
+// its objects, but passes only the declarations before its label; those
+// after it, and their initializers, run when execution reaches them.
+#[test]
+fn a_jump_into_a_block_passes_only_the_declarations_before_its_label() {
+    let goto = "int main(void) {\n    goto in;\n    {\n        int a = 1;\n    in: ;\n        int \
+                b = 2;\n        return b;\n    }\n}\n";
+    let switch = "int main(void) {\n    switch (2) {\n    case 1: {\n        int a = 1;\n    case \
+                  2: ;\n        int b = 2;\n        return b;\n    }\n    }\n    return 0;\n}\n";
+    for (source, title) in [
+        (goto, "goto `in`: jump ahead to line 5"),
+        (switch, "switch on 2: jump to `case 2`"),
+    ] {
+        let states = finished(source, 2);
+        let at = states
+            .iter()
+            .position(|state| state.event.title.starts_with(title))
+            .unwrap_or_else(|| panic!("{title}"));
+        let jump = &states[at];
+        let text = &jump.event.explanation;
+        for words in [
+            "`a` and `b` begin to exist here, indeterminate.",
+            "`a` is declared before the label: the jump passed its declaration, so no initializer \
+             ran",
+            "`b` is declared after the label, so the jump did not pass it: execution reaches it \
+             as usual, and only then does its name come into scope and any initializer run.",
+        ] {
+            assert!(text.contains(words), "{words}: {text}");
+        }
+        assert!(!text.contains("passed their declarations"), "{text}");
+        let b = jump
+            .objects
+            .iter()
+            .find(|object| object.name == "b")
+            .expect("b");
+        assert!(!b.declared, "`b`'s name is not in scope at the label");
+        let declared = at
+            + states[at..]
+                .iter()
+                .position(|state| state.event.title.starts_with("Declare `b`"))
+                .expect("execution reaches `b`'s declaration");
+        assert!(
+            states[declared..]
+                .iter()
+                .any(|state| state.event.kind == EventKind::Initialize),
+            "`b`'s initializer runs"
+        );
+    }
+    let states = finished(
+        "int main(void) {\n    goto in;\n    {\n    in: ;\n        int b = 2;\n        return \
+         b;\n    }\n}\n",
+        2,
+    );
+    let jump = step(&states, EventKind::Jump, "goto `in`");
+    assert!(
+        jump.event.explanation.contains(
+            "Its declaration comes after the label, so the jump did not pass it: execution \
+             reaches it as usual"
+        ),
+        "{}",
+        jump.event.explanation
+    );
+    assert!(!jump.event.explanation.contains("The jump passed"));
 }
 
 // C99 §6.2.4p5: reaching a declaration again stores its initializer's

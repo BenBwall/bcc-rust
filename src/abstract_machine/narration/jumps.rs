@@ -317,8 +317,10 @@ impl Machine {
     }
 
     /// What a jump into the blocks `enter`, to `target`, did: it began
-    /// the lifetimes of `entered`, which hold indeterminate values, since
-    /// the jump passed their initializers.
+    /// the lifetimes of `entered`, which hold indeterminate values (C99
+    /// §6.2.4p5). The jump passed the declarations before `target`, and
+    /// their initializers with them; those after it still run when
+    /// execution reaches them (C99 §6.8p3).
     fn entering_text(
         &self,
         program: &Program,
@@ -353,31 +355,62 @@ impl Machine {
             return text;
         }
         let names = self.names(entered);
-        let declared: Vec<usize> = entered
+        let (declared, ahead): (Vec<usize>, Vec<usize>) = entered
             .iter()
-            .copied()
-            .filter(|&id| self.state.objects[id - 1].declared)
-            .collect();
+            .partition(|&&id| self.state.objects[id - 1].declared);
         let _ = write!(
             text,
             " Entering a block begins the lifetimes of its objects however execution gets in, so \
-             {names} {} to exist here, indeterminate: the jump passed {} declaration{}, so no \
-             initializer ran. C forbids such a jump only into the scope of a variable-length \
-             array, which this machine leaves out.",
+             {names} {} to exist here, indeterminate.",
             number(entered.len(), "begins", "begin"),
-            number(entered.len(), "its", "their"),
-            number(entered.len(), "", "s"),
         );
+        // Name the objects of each kind only when the block has both.
+        let both = !declared.is_empty() && !ahead.is_empty();
         if !declared.is_empty() {
+            let passed = if both {
+                format!(
+                    "{} declared before {target}: the jump passed",
+                    sentence(&self.names(&declared))
+                )
+            } else {
+                String::from("The jump passed")
+            };
             let _ = write!(
                 text,
-                " {} declared before {target}, so {} in scope there and can be assigned; reading \
-                 {} first would read an indeterminate value.",
-                sentence(&self.names(&declared)),
+                " {passed} {} declaration{}, so no initializer ran, but {} in scope at {target} \
+                 and can be assigned; reading {} first would read an indeterminate value.",
+                number(declared.len(), "its", "their"),
+                number(declared.len(), "", "s"),
                 number(declared.len(), "its name is", "their names are"),
                 number(declared.len(), "it", "one"),
             );
         }
+        if !ahead.is_empty() {
+            let subject = if both {
+                format!("{} declared after", sentence(&self.names(&ahead)))
+            } else {
+                format!(
+                    "{} after",
+                    number(
+                        ahead.len(),
+                        "Its declaration comes",
+                        "Their declarations come"
+                    )
+                )
+            };
+            let _ = write!(
+                text,
+                " {subject} {target}, so the jump did not pass {}: execution reaches {} as usual, \
+                 and only then does {} come into scope and any initializer run.",
+                number(ahead.len(), "it", "them"),
+                number(ahead.len(), "it", "them"),
+                number(ahead.len(), "its name", "each name"),
+            );
+        }
+        text.push_str(
+            " C forbids a jump only into the scope of an identifier with a variably modified \
+             type, such as a variable-length array, which this machine leaves out.",
+        );
         text
     }
 
