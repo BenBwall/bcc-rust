@@ -193,7 +193,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 DiagnosticGroup::PointerQualifiers | DiagnosticGroup::DiscardedArrayQualifiers
             )
         {
-            return self.gcc_discarded_qualifiers_wording(site, target, from);
+            let arrays = group == DiagnosticGroup::DiscardedArrayQualifiers;
+            return self.gcc_discarded_qualifiers_wording(site, target, from, arrays);
         }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
@@ -364,18 +365,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// as GCC names it at its site, then `discards 'const' qualifier from
     /// pointer target type`, naming the qualifiers the value's pointed-to
     /// type has and the target's lacks in GCC's order (`'_Atomic const
-    /// volatile'`), in one quote and with the singular `qualifier`. A
-    /// pointed-to array's qualifiers are its elements' (GCC's
-    /// `-Wdiscarded-array-qualifiers`, in the same words).
+    /// volatile'`), in one quote and with the singular `qualifier`. Under
+    /// GCC's `-Wdiscarded-array-qualifiers` (`arrays`), in the same words, a
+    /// pointed-to array's qualifiers are its elements'; otherwise an array
+    /// target counts as unqualified, so `const volatile void *` to `const
+    /// int (*)[3]` discards `'const volatile'`, as GCC 14 says.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.7.3p8-9, p. 109; PDF p. 121.
     fn gcc_discarded_qualifiers_wording(
         &mut self,
         site: ConversionSite,
         target: TypeId,
         from: TypeId,
+        arrays: bool,
     ) -> Option<StringCacheId> {
         let element = |mut ty: TypeId| {
-            while let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
+            while arrays && let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
                 ty = element;
             }
             ty.qualifiers
