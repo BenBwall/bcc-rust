@@ -6662,9 +6662,11 @@ compiler claims against GCC 14, Clang 23.1.5 and a dev build of bcc in C99.
   wording.
 - **Sizes "on x86-64".** For `x86_64-pc-windows-msvc`, a long and an
   unsigned long are 4 bytes and a long double is 8 (LLP64). For
-  x86_64-linux-gnu they are 8 and 16 (LP64). Every size, range, alignment,
-  format and type the site states that differs between the two now says
-  "on x86-64 Linux", as ptrdiff_t and size_t already did. Review round 1
+  x86_64-linux-gnu they are 8 and 16 (LP64). Each statement of a size,
+  range, alignment, format or type choice that differs between the two
+  now says "on x86-64 Linux", as ptrdiff_t and size_t already did; later
+  steps that only repeat a type already stated are not tagged (review
+  round 2, "Left for later"). Review round 1
   (below) finished the engine's part of that. It covers:
   - every object's declaration;
   - `sizeof`;
@@ -6873,3 +6875,13 @@ The review of #445 found two blockers and three nits, all fixed here.
   (a sum, a rounded quotient, the low bits a conversion keeps) is the
   value on x86-64 Linux; the steps tag the facts the values follow from,
   not each value.
+- **Repeated types (review round 2).** Later steps that repeat a type the
+  machine already stated, without restating the rule, are not tagged,
+  though each is false on x86_64-pc-windows-msvc, where `3000000000` and
+  `2147483648` are long long: "The value to store is the long
+  3000000000", "Unary minus negates its long operand: -(2147483648)",
+  the printf check's "`3000000000`, is a long", "`3000000000 > 2` mixes
+  an int and a long", "`(long)3e9` … converts to the long 3000000000"
+  (whose conversion is undefined on Windows), and upcoming labels such as
+  "cast `18446744073709551615u` from `unsigned long`". No lesson reaches
+  them; edited code does.
