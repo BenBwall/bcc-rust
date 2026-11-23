@@ -92,15 +92,9 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
                 .flatten()
         })
     };
-    // A lesson that includes `<stdio.h>` is a WASI command linked with
-    // wasi-libc (`web/wasm/generate.sh`); the others have no C library.
-    let linked = move || {
-        wasm.program.with(|program| {
-            program
-                .as_ref()
-                .is_some_and(|program| program.command.contains(crate::wasm::COMMAND_FLAGS))
-        })
-    };
+    // Clang links a lesson that includes `<stdio.h>` with wasi-libc; the
+    // others have no C library.
+    let linked = move || wasm.links_c_library();
     let command = move || {
         wasm.program.with(|program| {
             program

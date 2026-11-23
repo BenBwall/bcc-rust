@@ -819,6 +819,14 @@ impl WasmState {
         self.choice.with(|choice| choice.compiler)
     }
 
+    /// Whether the loaded source is a lesson Clang links with wasi-libc,
+    /// one that includes `<stdio.h>` (`web/wasm/generate.sh`), whichever
+    /// compiler's module the view steps.
+    pub fn links_c_library(self) -> bool {
+        self.loaded
+            .with(|loaded| loaded.as_deref().is_some_and(crate::wasm::is_command))
+    }
+
     /// Why bcc's module for the loaded source cannot be stepped.
     pub fn bcc_problem(self) -> Option<BccProblem> {
         self.choice.with(Choice::bcc_problem)

@@ -31,7 +31,6 @@ pub use bcc::{
     TARGET,
 };
 pub use lessons::{
-    COMMAND_FLAGS,
     LESSON_FLAGS,
     LESSON_SECTION,
     Precompiled,
