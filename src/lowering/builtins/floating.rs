@@ -50,7 +50,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 self.floating_compare(compare, value, other, source)?,
             ));
         }
-        let result = if operation == FloatOperation::Issignaling {
+        let result = if let Some(mask) = operation.fixed_fpclass() {
+            self.isfpclass(value, operand, mask, source)?
+        } else if operation == FloatOperation::Issignaling {
             self.issignaling(value, operand, source)?
         } else if matches!(
             operation,
@@ -212,6 +214,200 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok(self.extend(both, false, Type::I32))
     }
 
+    /// `__builtin_isfpclass(x, mask)`: whether `x` is in a class the
+    /// constant `mask` names, read from its stored representation with
+    /// integer tests, as Clang's `llvm.is.fpclass` expands
+    /// (`TargetLowering::expandIS_FPCLASS`), so that no comparison raises
+    /// "invalid" for a signaling NaN and denormal modes do not matter. The
+    /// magnitude bits order the classes of an IEEE format: zero, subnormal
+    /// below the smallest normal's encoding, normal below infinity's, then
+    /// NaN, quiet from the quiet bit up.
+    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 23-24; PDF pp. 35-36.
+    /// Clang extension: Clang Language Extensions, "`__builtin_isfpclass`".
+    pub(in crate::lowering) fn isfpclass(
+        &mut self,
+        value: Value,
+        operand: TypeId,
+        mask: u16,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        // Clang folds the empty and the full test, whatever the operand.
+        if mask & FPCLASS_ALL == 0 || mask & FPCLASS_ALL == FPCLASS_ALL {
+            return Ok(self.iconst(Type::I32, i128::from(mask != 0)));
+        }
+        let ty = self.draft.value_type(value);
+        let (address, _) = self.floating_sign_byte(value, operand, source)?;
+        if ty == Type::F80 {
+            return Ok(self.x87_fpclass(address, mask));
+        }
+        let (bits_type, fraction_bits) = match ty {
+            | Type::F16 => (Type::I16, 10),
+            | Type::BF16 => (Type::I16, 7),
+            | Type::F32 => (Type::I32, 23),
+            | Type::F64 => (Type::I64, 52),
+            | Type::F128 => (Type::I128, 112),
+            | _ =>
+                return Err(LoweringError::unsupported(
+                    super::super::Construct::Builtin,
+                    source,
+                )),
+        };
+        let bits = self.inst(
+            InstData::Load {
+                ty:    bits_type,
+                flags: InstFlags::default(),
+                align: Align::BYTE,
+                tag:   None,
+                addr:  address,
+            },
+            bits_type,
+        );
+        let width = bits_type.bits();
+        let sign_bit = 1_u128 << (width - 1);
+        let smallest_normal = 1_u128 << fraction_bits;
+        let infinity = (sign_bit - 1) & !(smallest_normal - 1);
+        let quiet = infinity | 1 << (fraction_bits - 1);
+        // A bit pattern of the format's width, which `iconst` truncates to it.
+        let constant = |this: &mut Self, value: u128| {
+            this.iconst(bits_type, i128::from_ne_bytes(value.to_ne_bytes()))
+        };
+        let magnitude_mask = constant(self, sign_bit - 1);
+        let magnitude = self.plain(Opcode::And, bits, magnitude_mask);
+        let zero_bits = constant(self, 0);
+        let negative = self.icmp(IntCC::Slt, bits, zero_bits);
+        let infinity_bits = constant(self, infinity);
+        let one = constant(self, 1);
+        let below = self.plain(Opcode::Isub, magnitude, one);
+        let subnormal_limit = constant(self, smallest_normal - 1);
+        let smallest = constant(self, smallest_normal);
+        let above_smallest = self.plain(Opcode::Isub, magnitude, smallest);
+        let normal_limit = constant(self, infinity - smallest_normal);
+        let quiet_bits = constant(self, quiet);
+        let classes = FpClasses {
+            zero: self.icmp(IntCC::Eq, magnitude, zero_bits),
+            subnormal: self.icmp(IntCC::Ult, below, subnormal_limit),
+            normal: self.icmp(IntCC::Ult, above_smallest, normal_limit),
+            infinite: self.icmp(IntCC::Eq, magnitude, infinity_bits),
+            nan: self.icmp(IntCC::Ugt, magnitude, infinity_bits),
+            quiet: self.icmp(IntCC::Uge, magnitude, quiet_bits),
+            negative,
+        };
+        let found = self.fpclass_test(&classes, mask);
+        Ok(self.extend(found, false, Type::I32))
+    }
+
+    /// `__builtin_isfpclass` of the x87 value stored at `address`: its
+    /// 64-bit significand, with the explicit integer bit on top, and then
+    /// its sign and 15-bit exponent. A canonical value is zero, subnormal
+    /// (exponent 0, integer bit clear), normal (integer bit set), infinite
+    /// or NaN (exponent all ones, integer bit set). The encodings the format
+    /// leaves unsupported (a nonzero exponent with the integer bit clear:
+    /// pseudo-NaN, pseudo-infinity, unnormal) and pseudo-denormals (exponent
+    /// 0, integer bit set) are in no class alone; whether a test holds for
+    /// them depends on the whole mask, as Clang tests them
+    /// ([`x87_unsupported_in`], [`x87_pseudo_denormal_in`]).
+    fn x87_fpclass(&mut self, address: Value, mask: u16) -> Value {
+        let load = |this: &mut Self, ty: Type, offset: u64| {
+            let addr = this.offset_address(address, offset);
+            this.inst(
+                InstData::Load {
+                    ty,
+                    flags: InstFlags::default(),
+                    align: Align::BYTE,
+                    tag: None,
+                    addr,
+                },
+                ty,
+            )
+        };
+        let significand = load(self, Type::I64, 0);
+        let sign_exponent = load(self, Type::I16, 8);
+        let exponent_mask = self.iconst(Type::I16, 0x7FFF);
+        let exponent = self.plain(Opcode::And, sign_exponent, exponent_mask);
+        let zero_exponent = self.iconst(Type::I16, 0);
+        let negative = self.icmp(IntCC::Slt, sign_exponent, zero_exponent);
+        let tiny = self.icmp(IntCC::Eq, exponent, zero_exponent);
+        let special = self.icmp(IntCC::Eq, exponent, exponent_mask);
+        let zero_significand = self.iconst(Type::I64, 0);
+        // The integer bit is the significand's top bit.
+        let integer = self.icmp(IntCC::Slt, significand, zero_significand);
+        let empty = self.icmp(IntCC::Eq, significand, zero_significand);
+        let one = self.iconst(Type::I64, 1);
+        let below = self.plain(Opcode::Isub, significand, one);
+        let fraction_limit = self.iconst(Type::I64, i64::MAX.into());
+        let fraction_only = self.icmp(IntCC::Ult, below, fraction_limit);
+        let one_exponent = self.iconst(Type::I16, 1);
+        let lowered = self.plain(Opcode::Isub, exponent, one_exponent);
+        let finite_limit = self.iconst(Type::I16, 0x7FFE);
+        let ordinary = self.icmp(IntCC::Ult, lowered, finite_limit);
+        let integer_only = self.iconst(Type::I64, i128::from(1_u64 << 63));
+        let bare = self.icmp(IntCC::Eq, significand, integer_only);
+        let payload = self.icmp(IntCC::Ugt, significand, integer_only);
+        let quiet_bits = self.iconst(Type::I64, i128::from(0xC000_0000_0000_0000_u64));
+        let quiet_significand = self.icmp(IntCC::Uge, significand, quiet_bits);
+        let classes = FpClasses {
+            zero: self.plain(Opcode::And, tiny, empty),
+            subnormal: self.plain(Opcode::And, tiny, fraction_only),
+            normal: self.plain(Opcode::And, ordinary, integer),
+            infinite: self.plain(Opcode::And, special, bare),
+            nan: self.plain(Opcode::And, special, payload),
+            quiet: self.plain(Opcode::And, special, quiet_significand),
+            negative,
+        };
+        let mut found = self.fpclass_test(&classes, mask);
+        let true_value = self.iconst(Type::I1, 1);
+        let fraction = self.plain(Opcode::Xor, integer, true_value);
+        let wide = self.plain(Opcode::Xor, tiny, true_value);
+        if x87_unsupported_in(mask) {
+            let unsupported = self.plain(Opcode::And, wide, fraction);
+            found = self.plain(Opcode::Or, found, unsupported);
+        }
+        if x87_pseudo_denormal_in(mask) {
+            let pseudo = self.plain(Opcode::And, tiny, integer);
+            found = self.plain(Opcode::Or, found, pseudo);
+        }
+        self.extend(found, false, Type::I32)
+    }
+
+    /// Whether a value of `classes` is in a class `mask` names. `nan` holds
+    /// for every NaN and `quiet` for a quiet one, and `quiet` implies `nan`;
+    /// each other class names both signs, which `negative` tells apart.
+    fn fpclass_test(&mut self, classes: &FpClasses, mask: u16) -> Value {
+        let true_value = self.iconst(Type::I1, 1);
+        let positive = self.plain(Opcode::Xor, classes.negative, true_value);
+        let mut found = self.iconst(Type::I1, 0);
+        let signaling = self.plain(Opcode::Xor, classes.quiet, true_value);
+        let signaling = self.plain(Opcode::And, classes.nan, signaling);
+        let nan = match mask & FPCLASS_NAN {
+            | FPCLASS_NAN => Some(classes.nan),
+            | FPCLASS_SIGNALING => Some(signaling),
+            | FPCLASS_QUIET => Some(classes.quiet),
+            | _ => None,
+        };
+        if let Some(nan) = nan {
+            found = self.plain(Opcode::Or, found, nan);
+        }
+        // Each sign's bit of zero, subnormal, normal and infinity: the
+        // positive ones count up from bit 6, the negative ones down from 5.
+        let signed = [
+            classes.zero,
+            classes.subnormal,
+            classes.normal,
+            classes.infinite,
+        ];
+        for (index, class) in signed.into_iter().enumerate() {
+            let tested = (mask >> (6 + index) & 1 != 0, mask >> (5 - index) & 1 != 0);
+            let holds = match tested {
+                | (true, true) => class,
+                | (true, false) => self.plain(Opcode::And, class, positive),
+                | (false, true) => self.plain(Opcode::And, class, classes.negative),
+                | (false, false) => continue,
+            };
+            found = self.plain(Opcode::Or, found, holds);
+        }
+        found
+    }
+
     /// An x87 value is signaling when it is a NaN with the quiet bit clear
     /// and the explicit integer bit set. Under every identity but Clang's,
     /// the encodings the format leaves unsupported, a nonzero exponent with
@@ -369,6 +565,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | FloatOperation::Copysign
             | FloatOperation::Fabs
             | FloatOperation::Issignaling
+            | FloatOperation::Isfpclass
+            | FloatOperation::Issubnormal
+            | FloatOperation::Iszero
             | FloatOperation::Compare(_) =>
                 return Err(LoweringError::missing("not a classification", source)),
         })
@@ -406,4 +605,91 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         );
         Ok((address, byte))
     }
+}
+
+/// The class bits of `__builtin_isfpclass`, which are Clang's `__FPCLASS_*`.
+const FPCLASS_SIGNALING: u16 = 0x001;
+const FPCLASS_QUIET: u16 = 0x002;
+const FPCLASS_NAN: u16 = FPCLASS_SIGNALING | FPCLASS_QUIET;
+const FPCLASS_INFINITE: u16 = 0x204;
+const FPCLASS_NORMAL: u16 = 0x108;
+const FPCLASS_SUBNORMAL: u16 = 0x090;
+const FPCLASS_ZERO: u16 = 0x060;
+const FPCLASS_POSITIVE_NORMAL: u16 = 0x100;
+const FPCLASS_ALL: u16 = 0x3FF;
+
+/// The class tests of one value, as `i1` values.
+struct FpClasses {
+    zero:      Value,
+    subnormal: Value,
+    normal:    Value,
+    infinite:  Value,
+    /// Any NaN.
+    nan:       Value,
+    /// A quiet NaN.
+    quiet:     Value,
+    negative:  Value,
+}
+
+/// The test Clang's `llvm.is.fpclass` performs instead of `mask`, and
+/// whether it inverts the result: the complement when that is one of the
+/// tests it finds simpler (`invertFPClassTestIfSimpler`, LLVM 23.1.5).
+fn simpler_fpclass_test(mask: u16) -> (u16, bool) {
+    let complement = !mask & FPCLASS_ALL;
+    let simpler = matches!(
+        complement,
+        FPCLASS_NAN
+            | FPCLASS_SIGNALING
+            | FPCLASS_QUIET
+            | FPCLASS_INFINITE
+            | 0x200
+            | 0x004
+            | FPCLASS_NORMAL
+            | 0x100
+            | 0x008
+            | FPCLASS_SUBNORMAL
+            | 0x080
+            | 0x010
+            | FPCLASS_ZERO
+            | 0x040
+            | 0x020
+            | 0x1F8
+            | 0x1C0
+            | 0x038
+            | 0x063
+            | 0x0F0
+            | 0x0F3
+    );
+    if simpler {
+        (complement, true)
+    } else {
+        (mask, false)
+    }
+}
+
+/// Whether Clang's `__builtin_isfpclass(x, mask)` holds for an x87 `x` the
+/// format leaves unsupported. Its integer expansion counts such a value a
+/// NaN only when it tests for both kinds of NaN, after inverting a test it
+/// finds simpler, as glibc's `isnan` does
+/// (`TargetLowering::expandIS_FPCLASS`, LLVM 23.1.5).
+fn x87_unsupported_in(mask: u16) -> bool {
+    let (test, inverted) = simpler_fpclass_test(mask);
+    (test & FPCLASS_NAN == FPCLASS_NAN) != inverted
+}
+
+/// Whether Clang's `__builtin_isfpclass(x, mask)` holds for an x87
+/// pseudo-denormal `x` at `-O0`. Its integer expansion counts one a NaN
+/// when it tests for both kinds of NaN, and finds its exponent zero when it
+/// tests for zero and subnormal both; but the tests it makes with an x87
+/// comparison, which reads a pseudo-denormal as the normal number it
+/// equals, see a normal number (`TargetLowering::expandIS_FPCLASS`, LLVM
+/// 23.1.5). Clang's `-O2` gives other answers for a few masks.
+fn x87_pseudo_denormal_in(mask: u16) -> bool {
+    const COMPARED: [u16; 8] = [0x003, 0x007, 0x203, 0x063, 0x0F3, 0x3FC, 0x39C, 0x30C];
+    if COMPARED.contains(&mask) {
+        return mask & FPCLASS_POSITIVE_NORMAL != 0;
+    }
+    let (test, inverted) = simpler_fpclass_test(mask);
+    let tiny = FPCLASS_ZERO | FPCLASS_SUBNORMAL;
+    (test & FPCLASS_NAN == FPCLASS_NAN || test & tiny == tiny) != inverted
 }

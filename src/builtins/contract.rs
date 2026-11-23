@@ -519,6 +519,19 @@ pub(crate) enum FloatOperation {
     /// C23's `issignaling`: a NaN whose quiet bit is clear, as GCC's and
     /// Clang's builtin. C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
     Issignaling,
+    /// Clang's `__builtin_isfpclass(x, mask)`: whether `x` is in any of the
+    /// classes the constant `mask` names, the bits of Clang's `__FPCLASS_*`
+    /// macros (`llvm.is.fpclass`): signaling and quiet NaN, negative
+    /// infinity, normal, subnormal and zero, then positive zero, subnormal,
+    /// normal and infinity. The operand comes first.
+    /// Clang extension: Clang Language Extensions, "`__builtin_isfpclass`".
+    Isfpclass,
+    /// Clang's `__builtin_issubnormal` and `__builtin_iszero`: whether the
+    /// operand is subnormal or zero, of either sign, which Clang tests as
+    /// `__builtin_isfpclass` does with that mask. C23's `issubnormal` and
+    /// `iszero`. C23: §7.12.3.9-§7.12.3.10, p. 241; PDF p. 254 (N3220).
+    Issubnormal,
+    Iszero,
     /// The comparison macros of C99 §7.12.14, pp. 240-242; PDF pp. 252-254:
     /// two real operands, at least one floating, compared in their common
     /// real type without raising "invalid" for quiet NaNs.
@@ -562,6 +575,15 @@ impl FloatCompare {
 
 impl FloatOperation {
     /// The index of the floating operand among the call's arguments.
+    /// The `__builtin_isfpclass` mask an operation with a fixed one tests.
+    pub(crate) const fn fixed_fpclass(self) -> Option<u16> {
+        match self {
+            | Self::Issubnormal => Some(0x090),
+            | Self::Iszero => Some(0x060),
+            | _ => None,
+        }
+    }
+
     pub(crate) const fn operand_index(self) -> usize {
         if matches!(self, Self::Fpclassify) {
             5

@@ -1029,6 +1029,51 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Value), A::value(C::Value)],
         2,
     ),
+    // Clang's `int __builtin_isfpclass(x, mask)`, for the Clang identities
+    // in every mode; GCC 14 has none.
+    // Clang extension: Clang Language Extensions, "`__builtin_isfpclass`".
+    descriptor(
+        Id::Isfpclass,
+        "__builtin_isfpclass",
+        B::Float(FloatOperation::Isfpclass, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value), A::value(C::Value)],
+        2,
+    ),
+    // Clang's `__builtin_issubnormal(x)` and `__builtin_iszero(x)`, for the
+    // Clang identities in every mode; GCC 14 has neither.
+    // Clang extension: Clang `Builtins.td`, `IsSubnormal` and `IsZero`.
+    descriptor(
+        Id::Issubnormal,
+        "__builtin_issubnormal",
+        B::Float(FloatOperation::Issubnormal, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
+        Id::Iszero,
+        "__builtin_iszero",
+        B::Float(FloatOperation::Iszero, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
     descriptor(
         Id::Issignaling,
         "__builtin_issignaling",
@@ -2561,7 +2606,10 @@ const fn descriptor(
                     NamingPolicy::Microsoft,
                 | _ => NamingPolicy::Reserved,
             },
-            clang_only: matches!(id, Id::Assume | Id::Unpredictable),
+            clang_only: matches!(
+                id,
+                Id::Assume | Id::Unpredictable | Id::Isfpclass | Id::Issubnormal | Id::Iszero
+            ),
         },
     }
 }

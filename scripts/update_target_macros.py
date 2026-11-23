@@ -31,7 +31,7 @@ def exclusion(name):
     if name.startswith(("__MEMORY_SCOPE_", "__OPENCL_MEMORY_SCOPE_")):
         return "Scoped atomic operations and memory scopes are not implemented."
     if name.startswith("__FPCLASS_"):
-        return "Floating classification intrinsics are not implemented."
+        return "The masks of __builtin_isfpclass follow the compiler identity; defined beside the identity macros."
     if name in {"__BITINT_MAXWIDTH__"}:
         return "The widest _BitInt follows the compiler identity; defined beside the identity macros."
     if name in {"__FXSR__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:

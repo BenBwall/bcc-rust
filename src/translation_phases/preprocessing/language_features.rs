@@ -1033,7 +1033,8 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 /// (`Target::predefined_macros`). `__bcc__` and its version are defined in
 /// every mode, `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the
 /// relocation model, and `__BITINT_MAXWIDTH__` the identity's widest
-/// `_BitInt`. They are ordinary macros, so `#undef` works as in
+/// `_BitInt`, and the Clang identities define the `__FPCLASS_*` masks of
+/// `__builtin_isfpclass`. They are ordinary macros, so `#undef` works as in
 /// Clang. The TCC identity on Linux claims TCC's own set instead
 /// ([`tcc_linux_macros`]).
 ///
@@ -1085,6 +1086,20 @@ pub(super) fn with_identity_macros<'a>(
         }
     }
     write_bcc_macros(&mut out);
+    // The class bits of `__builtin_isfpclass`, which only Clang has.
+    // Clang extension: Clang Language Extensions, "`__builtin_isfpclass`".
+    if matches!(
+        identity,
+        CompilerIdentity::Clang | CompilerIdentity::ClangCl
+    ) {
+        out.push_str(concat!(
+            "#define __FPCLASS_SNAN 0x0001\n#define __FPCLASS_QNAN 0x0002\n",
+            "#define __FPCLASS_NEGINF 0x0004\n#define __FPCLASS_NEGNORMAL 0x0008\n",
+            "#define __FPCLASS_NEGSUBNORMAL 0x0010\n#define __FPCLASS_NEGZERO 0x0020\n",
+            "#define __FPCLASS_POSZERO 0x0040\n#define __FPCLASS_POSSUBNORMAL 0x0080\n",
+            "#define __FPCLASS_POSNORMAL 0x0100\n#define __FPCLASS_POSINF 0x0200\n",
+        ));
+    }
     if identity == CompilerIdentity::Gcc {
         out.push_str(
             "#define __GNUC__ 14\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n",
