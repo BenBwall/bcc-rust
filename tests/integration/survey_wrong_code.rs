@@ -32,6 +32,12 @@
 //!   round as the rounding mode asks, raise "invalid" and saturate out of
 //!   range, and raise "inexact" for a discarded fraction (gcc.dg/bitint-28.c,
 //!   bitint-29.c, bitint-31.c).
+//!
+//! The LLVM test-suite survey under `--clang-mode` found more:
+//!
+//! - A GNU `x ?: y` whose tested value is complex passes both parts to its
+//!   result (UnitTests/conditional-gnu-ext.c), where lowering stopped with an
+//!   internal error.
 
 #[cfg(test)]
 #[expect(
@@ -952,6 +958,29 @@ mod tests {
         .concat();
         for identity in IDENTITIES {
             builds_on_every_back_end(identity, source, &["-std=c23", "-lm"], &expected);
+        }
+    }
+
+    #[test]
+    fn omitted_conditionals_keep_complex_values() {
+        let source = b"#include <stdio.h>\n\
+            static int calls;\n\
+            static _Complex int once(_Complex int z) { ++calls; return z; }\n\
+            static _Complex double pick(_Complex double a, _Complex double b) { return a ?: b; }\n\
+            int main(void) {\n\
+            _Complex int i = once(1 + 2i) ?: 7;\n\
+            _Complex int j = once(0) ?: 3 + 4i;\n\
+            _Complex float f = (_Complex float)0 ?: 5.0f;\n\
+            _Complex long double l = (_Complex long double)1.5i ?: 2;\n\
+            _Complex double d = pick(0, 6.5i);\n\
+            if (__imag__ pick(1i, 9) != 1) return 1;\n\
+            printf(\"%d %d %d %d %d %g %g %Lg %Lg %g %g\\n\", calls, __real__ i, __imag__ i,\n\
+            __real__ j, __imag__ j, __real__ f, __imag__ f, __real__ l, __imag__ l,\n\
+            __real__ d, __imag__ d);\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &[], "2 1 2 3 4 5 0 0 1.5 0 6.5\n");
         }
     }
 

@@ -126,6 +126,26 @@ fn gcc_conditionals_keep_complex_half_excess() {
     assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
 }
 
+/// A GNU `x ?: y` whose tested value is complex passes both parts to the
+/// merge, and GCC's `_Complex _Float16` passes its `f32` excess (the LLVM
+/// test-suite's UnitTests/conditional-gnu-ext.c).
+#[test]
+fn omitted_conditionals_pass_complex_parts() {
+    for ty in ["int", "float", "double", "long double", "_Float16"] {
+        let source =
+            format!("_Complex {ty} f(_Complex {ty} a, _Complex {ty} b) {{ return a ?: b; }}");
+        for identity in [CompilerIdentity::Clang, CompilerIdentity::Gcc] {
+            drop(lowered_as(&source, identity));
+        }
+    }
+    let source = "_Complex float f(_Complex _Float16 a, int c) { return (a * a) ?: c; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    // Clang rounds the product's parts and the converted `c` to `_Float16`.
+    assert_eq!(clang.matches("fptrunc.f16").count(), 3, "{clang}");
+}
+
 /// `_Complex _Float16` multiplies in `float _Complex` through `__mulsc3`
 /// and rounds both parts once, at the return.
 #[test]
