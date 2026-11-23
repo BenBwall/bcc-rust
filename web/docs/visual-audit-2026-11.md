@@ -6107,7 +6107,8 @@ is clean.
 Parts 15 and 16 taught the machine pointers to functions but left the lesson
 that would show them. A lesson needs its LLVM IR and line tables from a
 native bcc build with LLVM and its WebAssembly module from wasi-sdk, and
-twice the disk was too short for that build beside the site's. With about
+three times (Parts 15, 16 and 17) the disk was too short for that build
+beside the site's. With about
 18 GB free, this part adds the lesson "Callbacks: passing a function to a
 function" and checks it in every view. The work is on
 `agent/lesson-callbacks`.
@@ -6211,8 +6212,10 @@ names. It first checks that `$twice` has the type the instruction names,
 and traps if not; then it pops the arguments…", and it links the Tables
 concept beside Calls and frames. wasi-libc's `printf` calls its stream's
 write function the same way, so ten steps in the seven lessons that print
-now read "Call `$__stdout_write` through the table with …" too; no other
-step of theirs changed.
+now read the same way: seven "Call `$__stdout_write` through the table with
+…", and three, the flush of `stdout` when the program exits, "Call
+`$__stdio_write` through the table with …, `0`, `0`". No other step of
+theirs changed.
 
 ### How the artifacts were made
 
@@ -6233,7 +6236,7 @@ at `-O0` and `-O2`.
   modules do.
 - **The lesson walk.** Part 9's walk at 1440x900 light and 390x844 dark,
   on the deployed site (`main` at `0d5cf90f6`) and on CI's Pages build of
-  this branch at `6ae8af61f`: the 16 existing machine lessons' 1,571 notes
+  this branch at `6ae8af61f`: the 15 existing machine lessons' 1,571 notes
   are the same in title, lead, value flow, "why it matters" note and next
   step at both sizes. The new lesson walks 188 states with its current line
   and lead in view at each, and each but the last names the step that
@@ -6246,7 +6249,7 @@ at `-O0` and `-O2`.
   console error or warning.
 - **Contrast.** The notes' text measures 15.82:1 (light) and 13.34:1
   (dark); the WebAssembly step's explanation 10.59:1 and 9.40:1.
-- **Tests,** as `pages.yml` runs them: the engine's 160 and its clippy, the
+- **Tests,** as `pages.yml` runs them: the engine's 173 and its clippy, the
   site's (one new, that the lesson's `call_indirect` runs `$twice` twice
   and `$square` twice with the new text, and one extended, for the
   conversion's value flow; and the prerender's 2), the
@@ -6264,6 +6267,234 @@ at `-O0` and `-O2`.
 - **The function's type in that value flow**: the engine records no type
   on the conversion, so the chips read "twice → becomes → &twice" without
   "int (int)" and "int (*)(int)" beneath them, as the call's chips have.
-- Part 16's list stands: the lessons' opening comments, a function
-  returning a pointer to an object, static pointers to objects, hidden
-  names, and the listing's label for a pointer to a function.
+- Part 17's list stands, less the callbacks lesson: among others, the
+  lessons' opening comments, static pointers to objects, hiding a name with
+  a constant or a typedef name, the listing's label, and a lesson on the
+  three loops. Part 17 finished a function returning a pointer to an object
+  and hidden names, which Part 16's list carried.
+
+## Part 19: loops three ways, and the LLVM IR's block count (2026-11)
+
+Part 17 taught the machine `do` and `continue`, but no lesson used either:
+the corpus's `j01` to `j03` showed them only through Open .c. This part adds
+the lesson "Loops three ways: while, do and for", fixes the LLVM IR stage's
+count of basic blocks, which the review of Part 18 found too low, and
+corrects Part 18's record. The work is on `agent/site-part19`.
+
+### The lesson
+
+It ends Table 1's first part, after "Short-circuit evaluation", as lesson 6
+([`table1-1024-dark`](screenshots/part19/table1-1024-dark.png)). It computes
+one sum, 1 + 3, three times, and each loop skips 2 with `continue`:
+
+```c
+int a = 0;          // while
+int i = 0;
+while (i < 3) {
+    i++;
+    if (i == 2)
+        continue;
+    a += i;
+}
+
+int b = 0;          // do
+int j = 0;
+do {
+    j++;
+    if (j == 2)
+        continue;
+    b += j;
+} while (j < 3);
+
+int c = 0;          // for
+for (int k = 1; k <= 3; k++) {
+    if (k == 2)
+        continue;
+    c += k;
+}
+printf("%d %d %d\n", a, b, c);
+```
+
+(The comments here are shortened; the lesson's own say where each loop
+tests and where its `continue` goes.) A first draft put each loop in its own
+function and made four passes: 312 steps, more than any other lesson, so
+the loops moved into `main` and make three passes each. The run is 215
+steps, second to "Floating point" (230), and prints `4 4 4`. Every line
+takes at most 36 columns. The engine needed no change: Part 17's steps
+already say where each loop tests and where each `continue` goes.
+
+- **Note 47, `continue` in the while**: "`continue` skips the rest of this
+  pass through the while loop's body, so control goes straight to the
+  condition `i < 3`" (§6.8.6.2p2), with the note on C's three loops
+  ([`machine-whilecontinue-1366-dark`](screenshots/part19/machine-whilecontinue-1366-dark.png)).
+- **Note 80, "do: run the body before any test"**: "A do statement runs its
+  body first and tests `j < 3` only after it, so the body runs at least
+  once" (§6.8.5.2p1)
+  ([`machine-do-390-dark`](screenshots/part19/machine-do-390-dark.png)).
+  Notes 98 and 115, "Condition is true: run the body again", come after the
+  body, where the while's and the for's tests come before it.
+- **Note 110, `continue` in the do**: "…goes to the test `j < 3` after the
+  body".
+- **Note 176, `continue` in the for**: "…goes to the for statement's third
+  clause, `k++`, and then to the condition"; notes 177 to 179 then run
+  `k++` and jump back to the test
+  ([`machine-forcontinue-1440-light`](screenshots/part19/machine-forcontinue-1440-light.png)).
+
+### The three loops in the compiler views
+
+The same three shapes appear in every view. Clicking line 26, `} while (j
+< 3);`, lights up the do loop's test in each:
+
+- **bcc IR**: 17 basic blocks. The while's test block, `block1`, comes
+  first, and its `continue` block, `block3`, is `jump block1(v7, v3)`,
+  straight back to the test. The do's body, `block6`, comes first and its
+  test block, `block9`, last, with `brif v22, block6(v16, v20), block10`
+  back to the body (lines 41 to 43 for line 26). The for's `continue`
+  block, `block13`, jumps to `block15`, which runs `k++` and then jumps to
+  the test, `block11`
+  ([`compiler-bcc-ir-1440-light`](screenshots/part19/compiler-bcc-ir-1440-light.png)).
+- **LLVM IR**: the same 17 blocks as `br` instructions, with `; preds`
+  comments that name each block's predecessors: `block9:  ; preds =
+  %block7, %block8` is where the do's two paths through its body meet
+  ([`compiler-llvm-ir-1024-light`](screenshots/part19/compiler-llvm-ir-1024-light.png)).
+  At `-O2` bcc keeps the three loops but turns the do's and the for's `if
+  (…) continue;` into a `select`, so the do loop is one block that branches
+  to itself: 8 blocks.
+- **x86-64 assembly**: labels and jumps. The do's test is `cmpl $3, %eax`
+  and `jl .LBB0_5`, back to the body
+  ([`compiler-x86-64-assembly-1440-light`](screenshots/part19/compiler-x86-64-assembly-1440-light.png)).
+  The native back end also copies the while's and the for's test to the end
+  of each pass (`cmpl $3, %eax; jl .LBB0_2`), so in assembly all three
+  loops end a pass with a conditional jump back; the while's `continue`
+  still jumps to the test at the top, `je .LBB0_1`.
+- **WebAssembly**: in Clang's module the while and the for are each a
+  `block` around a `loop` whose test leaves with `br_if 1` and whose pass
+  ends with `br 0` back to the test; the do is a bare `loop` whose pass ends
+  with `br_if 0` back to the top
+  ([`wasm-clang-1366-light`](screenshots/part19/wasm-clang-1366-light.png)).
+  bcc's module builds the same tests from `if` and `br`
+  ([`wasm-bcc-390-dark`](screenshots/part19/wasm-bcc-390-dark.png)).
+
+The WebAssembly view's step for `loop` said "A C `for` or `while` loop
+becomes a `loop` whose body ends in a conditional branch back to the top".
+Unoptimized, neither compiler's module does that; only a do loop does. The
+step now reads "Without optimization, a C `while` or `for` loop tests its
+condition at the top of the `loop` and ends each pass with a `br` back to
+that test; a `do` loop tests at the bottom, so its pass ends in a
+conditional branch back to the top". That sentence is the one change to
+the other lessons' WebAssembly steps: every "Enter loop" step, in the
+lessons' loops and in the C library's, reads it now. A new site test steps
+the lesson's Clang module and checks its three `loop`s, six plain branches
+back (three passes of the while and of the for) and two taken `br_if`s
+back (the do's second and third passes), and its output.
+
+### The LLVM IR's block count
+
+The LLVM IR stage's "In this program" line, and the `-O0`/`-O2` comparison
+under it, counted a block only when its label line ended in `:`. LLVM
+writes `; preds = …` after the label of every block that another block
+branches to, so only each function's entry block was counted: the callbacks
+lesson read "27 instructions in 4 basic blocks" where its listing has 8.
+`Census::of` now takes a line whose first word ends in `:` and is followed
+by nothing or a comment as a label. The bcc IR's count was right: its
+labels never carry a comment.
+
+A new site test checks the count for every lesson at `-O0` and `-O2`, in
+bcc IR and in LLVM IR, against the listing's terminators (each basic block
+ends in exactly one), and pins the callbacks lesson's line: "Here the LLVM
+IR is 27 instructions in 8 basic blocks, with 1 stack slot and 3 loads or
+stores". In the browser the callbacks lesson reads that line, and the loops
+lesson reads 17 blocks at `-O0` and 8 at `-O2` in both IRs, at every size.
+
+What the LLVM IR stage now says, lesson by lesson (blocks at `-O0` / `-O2`;
+the instruction, stack slot and memory counts did not change):
+
+| Lesson | Before | After |
+| --- | --- | --- |
+| Objects, loops and calls | 2 / 2 | 6 / 5 |
+| Hello, world | 2 / 2 | 5 / 8 |
+| Names for values | 1 / 1 | 5 / 4 |
+| Recursion and frames | 2 / 2 | 4 / 4 |
+| Short-circuit evaluation | 1 / 1 | 14 / 8 |
+| Unsigned numbers wrap | 1 / 1 | 8 / 7 |
+| Signed overflow | 1 / 1 | 5 / 4 |
+| Floating point | 1 / 1 | 5 / 4 |
+| Pointers and arrays | 2 / 2 | 5 / 8 |
+| Walking a string with a pointer | 2 / 2 | 8 / 10 |
+| Callbacks | 4 / 4 | 8 / 13 |
+| Before the compiler: the preprocessor | 1 / 1 | 6 / 1 |
+
+The other six (Integer promotions, Bits and masks, Structs, Reading past
+the end, Uninitialized reads and From source to a running program) have
+one block per function and read as before. Where the two counts now differ,
+the comparison gains a line, "Basic blocks: 8 at -O0, 13 at -O2.", and its
+bars show the new counts; a count that falls also gets "Fewer blocks means
+simpler control flow."
+
+### Part 18's record
+
+Part 18 is corrected where the review of #440 found it wrong: three of the
+ten changed `printf` steps call `$__stdio_write`, the flush at exit, not
+`$__stdout_write`; there were 15 existing machine lessons, not 16; the
+engine's tests on the merged head number 173, not 160; its introduction
+counts three deferrals, not two; and its "Left for later" no longer lists
+a function returning a pointer to an object and hidden names, which Part 17
+finished.
+
+### How the artifacts were made
+
+As in Part 18: `web/pipeline/generate.sh` with a dev-profile bcc (`cargo
+build --bin bcc-rust`) and `web/wasm/generate.sh` with wasi-sdk 34 (clang
+23.1.0). Before the lesson was added, both scripts' `--check` passed on
+`main`, so they reproduce every existing lesson byte for byte; with it, `git
+status` showed only `web/pipeline/loops/` and `web/wasm/loops.wasm`.
+
+### Checks
+
+- **Agreement.** The machine, bcc's binary at `-O0` and `-O2`, bcc's
+  WebAssembly module and Clang's (each run under Node's WASI), and GCC 14
+  (`gcc -B …/gcc14…/14/ -std=c99 -pedantic -Wall -Wextra`, cc1 14.2.0, no
+  warnings) at `-O0` and `-O2` all print `4 4 4` and exit 0.
+- **The lesson walk.** Part 9's walk at 1440x900 light and 390x844 dark,
+  on the deployed site (`main` at `c6f91935d`) and on CI's Pages build of
+  this branch at `f30b3259f`: the 16 existing machine lessons' 1,759 notes
+  are the same in title, lead, value flow, "why it matters" note and next
+  step at both sizes. The new lesson walks 216 states with its current line
+  and lead in view at each but note 0, which has no current line in any
+  lesson. Neither build scrolled sideways or raised a page error. The
+  machine's notes are the walk; the summary counts above and the `loop`
+  step's sentence are the only intended changes elsewhere.
+- **The scenes.** On the same build, at 1440x900, 1366x768, 1024x768 and
+  390x844 in both themes, the machine reached notes 47, 80, 110 and 176;
+  the bcc IR, LLVM IR and assembly stages found the do loop's test with no
+  stop; and the WebAssembly view reached the do's `loop` with each
+  compiler. No sideways scroll, no console error or warning.
+- **Contrast.** The notes' text measures 15.82:1 (light) and 13.34:1
+  (dark); the WebAssembly step's explanation 10.59:1 and 9.40:1.
+- **Screen readers.** The lesson adds no control. Its card reads as the
+  others do, and in the third loop the cells under the head read "a, int,
+  4 bytes: 4" … "k, int, 4 bytes: 2, read by this step", one per object,
+  so `i`, `j` and `k` are told apart by name.
+- **Tests,** as `pages.yml` runs them: the engine's 173 and its clippy; the
+  site's 177 (two new: the block count and the loops lesson's WebAssembly)
+  and the prerender's 2; the WebAssembly stepper's 79; and the site's four
+  clippy runs, all clean. The site's tests also check that the lesson's
+  module and LLVM IR match its source. `rustfmt +nightly --check` reports
+  nothing on the changed lines, and `git diff --check` is clean. Both
+  generators' `--check` pass.
+
+### Left for later
+
+- **The assembly's copied tests**: the native back end's copy of a while's
+  or a for's test to the end of each pass is visible in the listing but
+  explained nowhere; the assembly stage could say so for a loop.
+- **The `loop` step at `-O2`**: the new sentence describes unoptimized
+  modules, which are all the WebAssembly view shows today.
+- **A `switch` in LLVM IR**: the census counts a `switch`'s case lines as
+  instructions. No lesson has one.
+- **`continue`'s explanation** still says "the next pass creates fresh
+  ones" when the blocks it left declared nothing (Part 17's nit).
+- Part 18's list stands: a dispatch table lesson and the function's type
+  in the conversion's value flow, with Part 17's list (the lessons' opening
+  comments, static pointers to objects, hiding a name with a constant or a
+  typedef name, the listing's label, and others).

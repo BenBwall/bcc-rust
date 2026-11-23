@@ -1653,7 +1653,7 @@ impl Census {
                     }
                 },
                 | Stage::Llvm => {
-                    if !line.starts_with(' ') && trimmed.ends_with(':') {
+                    if llvm_label(line) {
                         census.blocks += 1;
                     }
                     if trimmed.contains("= alloca") {
@@ -1700,6 +1700,17 @@ impl Census {
     }
 }
 
+/// Whether an LLVM IR line labels a basic block: `block0:`, or `block1:`
+/// followed by the comment LLVM writes after a block that other blocks
+/// branch to, `; preds = %block3, %block0`.
+fn llvm_label(line: &str) -> bool {
+    let (label, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+    label.len() > 1 && label.ends_with(':') && {
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with(';')
+    }
+}
+
 /// Precomputed LLVM IR for a bundled lesson, by its file stem, at `-O2` when
 /// `optimize`.
 pub fn precomputed_llvm(stem: &str, optimize: bool) -> Option<&'static str> {
@@ -1723,6 +1734,7 @@ pub fn precomputed_llvm(stem: &str, optimize: bool) -> Option<&'static str> {
         "callbacks",
         "recursion",
         "logic",
+        "loops",
         "structs",
         "promotion",
         "unsigned",
@@ -1759,6 +1771,7 @@ pub fn precomputed_llvm_lines(stem: &str, optimize: bool) -> Vec<LineOrigin> {
         "callbacks",
         "recursion",
         "logic",
+        "loops",
         "structs",
         "promotion",
         "unsigned",
@@ -1804,6 +1817,7 @@ pub fn precomputed_source(stem: &str) -> Option<&'static str> {
         | "strings" => include_str!("../pipeline/strings/source.c"),
         | "callbacks" => include_str!("../pipeline/callbacks/source.c"),
         | "logic" => include_str!("../pipeline/logic/source.c"),
+        | "loops" => include_str!("../pipeline/loops/source.c"),
         | "bits" => include_str!("../pipeline/bits/source.c"),
         | "floating" => include_str!("../pipeline/floating/source.c"),
         | "overflow" => include_str!("../pipeline/overflow/source.c"),

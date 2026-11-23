@@ -566,14 +566,29 @@ unsigned before it compares, and shifts `1u` into the top bit and out
 again, printing each result with `%u`, `%zu` and `%d`. Like the printf
 lesson it includes `<stdio.h>`.
 
-The lesson "Short-circuit evaluation: &&, || and ?:" (`demos/logic.c`),
-which ends the first part, searches an array for a 5 with `while (i < 3 &&
+The lesson "Short-circuit evaluation: &&, || and ?:" (`demos/logic.c`)
+searches an array for a 5 with `while (i < 3 &&
 scores[i] != 5)`: on the last test `i < 3` is 0, so `&&` settles the result
 and never reads `scores[3]`, which lies past the end. A `?:` then picks a
 null pointer over `&scores[i]`, a null test keeps `*found` from running, and
 a second `?:` chooses the text printf writes. Each test of a first operand
 is a step of its own, ending at a sequence point, and Figure 2 draws the
 operand it skips faint, on a dotted wire labelled "skipped". It includes
+`<stdio.h>`.
+
+The lesson "Loops three ways: while, do and for" (`demos/loops.c`), which
+ends the first part, computes one sum, 1 + 3, with each of C's loops, and
+skips 2 with `continue` in each. The machine's steps say where each loop
+tests its condition (`while` and `for` before each pass, `do` after it, so
+its body runs once before any test) and where each `continue` goes: to the
+test in `while` and `do`, and to the third clause, `k++`, in `for`. In bcc
+IR the difference is the shape of the blocks: `while`'s test block comes
+first and its `continue` jumps back to it; `do`'s body comes first and its
+test block last; `for`'s `continue` jumps to a block that runs `k++` and
+then jumps to the test. In Clang's WebAssembly module `while` and `for`
+test at the top of a `loop` and leave it with a `br_if`, while `do` ends
+its pass with a `br_if` back to the top; bcc's module builds the same tests
+from `if` and `br`. All three print 4, as GCC prints. It includes
 `<stdio.h>`.
 
 The lesson "Bits and masks" (`demos/bits.c`), after the unsigned lesson,

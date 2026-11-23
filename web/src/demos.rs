@@ -63,7 +63,7 @@ impl Part {
 
 /// The lessons, in reading order: each part's lessons together, the parts in
 /// the order of [`Part::ALL`].
-pub static DEMOS: [Demo; 18] = [
+pub static DEMOS: [Demo; 19] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -129,6 +129,19 @@ pub static DEMOS: [Demo; 18] = [
         path:    &[],
         name:    "logic.c",
         source:  include_str!("../demos/logic.c"),
+    },
+    Demo {
+        key:     "loops",
+        title:   "Loops three ways: while, do and for",
+        summary: "The same sum three times: while and for test before each pass and do after it, \
+                  and continue skips to the test, or in a for to its third clause first.",
+        topics:  &["while, do and for", "continue", "control flow"],
+        part:    Part::Objects,
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "loops.c",
+        source:  include_str!("../demos/loops.c"),
     },
     Demo {
         key:     "promotion",
