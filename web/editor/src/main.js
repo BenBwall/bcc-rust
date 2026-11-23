@@ -227,6 +227,11 @@ export function createEditor(host, options) {
   return new Editor(host, options);
 }
 
+/** Whether a view in `language` wraps long rows: all but the machine code. */
+function wrapsRows(language) {
+  return language === 'objdump' ? 'off' : 'on';
+}
+
 class Editor {
   constructor(host, options) {
     this.decorations = new Map();
@@ -288,7 +293,11 @@ class Editor {
       // than its line, a listing's two levels, past the instructions'
       // operands, and only a line's first row has a number, so it reads
       // as one line; the line links and their marks cover all its rows.
-      wordWrap: 'on',
+      // The machine code is the exception: a row is an offset, its bytes
+      // and their instruction side by side, and a row broken in two put an
+      // instruction's operands under its bytes, so the listing scrolls
+      // sideways in its frame instead (wrapsRows).
+      wordWrap: wrapsRows(options.language),
       wrappingIndent: options.readOnly ? 'deepIndent' : 'indent',
       // Rows break at spaces and punctuation, but not at a full stop, so
       // a number (`0.2`, `3.000000e-01`) or a name (`@.str.5`) stays
@@ -501,7 +510,10 @@ class Editor {
   setLanguage(language) {
     monaco.editor.setModelLanguage(this.editor.getModel(), language);
     // The machine-code listing numbers its lines with code offsets.
-    this.editor.updateOptions({ lineNumbers: language === 'objdump' ? 'off' : 'on' });
+    this.editor.updateOptions({
+      lineNumbers: language === 'objdump' ? 'off' : 'on',
+      wordWrap: wrapsRows(language),
+    });
   }
 
   /**
