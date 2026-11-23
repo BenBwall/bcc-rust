@@ -197,12 +197,16 @@ const asm = {
 };
 
 // The site's machine-code listing: `<main>:` headings, then an offset, the
-// encoded bytes, and the disassembled instruction.
+// encoded bytes, and the disassembled instruction. A jump's label is a line
+// of its own (`.LBB1_3:`), as in the assembly, and so is alignment padding
+// (`34  (12 bytes of padding)`).
 const objdump = {
   defaultToken: '',
   tokenizer: {
     root: [
       [/^<[^>]+>:/, 'function.name'],
+      [/^\.?[\w.$]+:/, 'label'],
+      [/^(\s*[0-9a-f]+)(\s+)(\(.*\))$/, ['comment.address', '', 'comment']],
       [
         new RegExp(`^(\\s*[0-9a-f]+)(\\s+)((?:[0-9a-f]{2} )*[0-9a-f]{2})(\\s+)(callq?)(\\s+)(${callee})`),
         ['comment.address', '', 'number.bytes', '', 'keyword.instruction', '', 'function.name'],

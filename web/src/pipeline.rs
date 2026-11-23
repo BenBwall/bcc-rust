@@ -1663,7 +1663,13 @@ impl Census {
                 },
                 | Stage::Asm =>
                     line.starts_with('\t') && !trimmed.starts_with('.') && !trimmed.ends_with(':'),
-                | Stage::MachineCode => line.starts_with(' '),
+                // An instruction's line, not a label's or padding's: an
+                // offset, then its bytes.
+                | Stage::MachineCode =>
+                    line.starts_with(' ')
+                        && trimmed.split_whitespace().nth(1).is_some_and(|byte| {
+                            byte.len() == 2 && byte.bytes().all(|b| b.is_ascii_hexdigit())
+                        }),
                 | Stage::Lines
                 | Stage::PpTokens
                 | Stage::Preprocessor
