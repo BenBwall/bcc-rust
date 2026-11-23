@@ -13182,11 +13182,26 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             (&["x.c", "-h"][..], "tcc: error: cannot parse -h here\n"),
             (&["-run"][..], "tcc: error: no input files\n"),
             (&["-c"][..], "tcc: error: no input files\n"),
+            // An option for the linker is no input; `-L` takes `x.c` as
+            // its directory.
+            (&["-Wl,-x"][..], "tcc: error: no input files\n"),
+            (&["-L", "x.c"][..], "tcc: error: no input files\n"),
         ] {
             let output = directory.bcc("--tcc-mode", args);
             assert_eq!(output.status.code(), Some(1), "{args:?}");
             assert_eq!(stderr(&output), message, "{args:?}");
         }
+        // A library is an input: TCC links it alone, which fails for want
+        // of `main` (bcc's own command line used to refuse it, status 2),
+        // and preprocesses nothing.
+        for args in [&["-lm"][..], &["-l", "x.c"], &["-run", "-lm"]] {
+            let output = directory.bcc("--tcc-mode", args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert!(stderr(&output).starts_with("tcc: error: "), "{args:?}");
+        }
+        let output = directory.bcc("--tcc-mode", &["-E", "-lm"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "");
         // No arguments print the help; `-v` alone the version; `-vv` alone
         // the version and the search directories; `-dumpmachine`, as `mob`.
         let output = directory.bcc("--tcc-mode", &[]);
