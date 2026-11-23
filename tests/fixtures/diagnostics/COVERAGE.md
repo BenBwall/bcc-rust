@@ -359,6 +359,19 @@ compiler: every line and status matches GCC 14 (`-std=gnu17`) byte for byte,
 and Clang 23.1.5 but for its spelling `'void *const[5]'`, which bcc spells
 with a space, as for every array type.
 
+GCC's discarded qualifiers (2026-11-23): `sema-discards-qualifiers-gcc`
+pins GCC 14's words, `return`, `initialization`, `assignment` or `passing
+argument N of 'f'` with `discards 'const' qualifier from pointer target
+type [-Wdiscarded-qualifiers]`, naming the lost qualifiers in GCC's order
+(`'const volatile'`, `'restrict'`), and its incompatible-pointer error where
+a deeper level differs (`char **` from `const char **`), for an ordinary
+function and `__builtin___clear_cache`, whose parameters are `void *` as in
+GCC and Clang; and no `-Wnon-literal-null-conversion`, which only Clang has,
+for `'\0'` or `1 - 1` as a pointer. Every warning and error line and the
+status match GCC 14; GCC's `note: expected 'char *' but argument is of type
+'const char *'` after an argument's diagnostic is not modelled, as for every
+argument conversion.
+
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for
 `__builtin_popcountg` and its siblings: signed, `bool`, enumerated,

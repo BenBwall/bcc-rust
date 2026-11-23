@@ -3334,17 +3334,7 @@ impl SemanticError {
             // group for all incompatible pointers.
             | (F::Gcc | F::Clang, SemanticErrorKind::PointerConstraint(group))
                 if self.name.is_some() =>
-            {
-                let option = if format == F::Gcc
-                    && group
-                        == crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes
-                {
-                    crate::configuration::DiagnosticGroup::IncompatiblePointerTypes.name()
-                } else {
-                    group.name()
-                };
-                return Some((arena.alloc_str(name), option));
-            },
+                return Some((arena.alloc_str(name), group.option_name(format))),
             // The builtin's own words for the argument it refuses, which
             // semantic analysis put together with the type
             // (`Analyzer::overflow_arguments`); no option controls them.
@@ -3473,7 +3463,7 @@ impl SemanticError {
         let name = if gcc_attributes(context, self.kind) {
             "attributes"
         } else {
-            group.name()?
+            group.option_name(context.configuration.diagnostic_format())?
         };
         if self.severity() != ErrorSeverity::Error
             || group.default_severity() != ErrorSeverity::Warning
@@ -3891,36 +3881,36 @@ impl ToDiagnostic for SemanticError {
             message
         };
         let group = self.kind.group();
-        let message =
-            if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
-                suffixed = true;
-                // GCC's option takes a level, and it says so.
-                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant)
-                    || (self.kind.group() == Some(crate::configuration::DiagnosticGroup::Format)
-                        && context.configuration.diagnostic_format()
-                            == crate::configuration::DiagnosticFormat::Gcc)
-                {
-                    "="
-                } else {
-                    ""
-                };
-                match self.promoted_option(context, arena) {
-                    | Some(option) => format_in!(arena, "{message} [{option}{level}]"),
-                    | None => format_in!(arena, "{message} [-W{group}{level}]"),
-                }
-            } else if self.severity() == ErrorSeverity::Error
-                && group == Some(crate::configuration::DiagnosticGroup::MainSpecifier)
-                && context.configuration.diagnostic_format()
-                    == crate::configuration::DiagnosticFormat::Gcc
-                && !context
-                    .configuration
-                    .pedantic_error(crate::configuration::DiagnosticGroup::MainSpecifier)
+        let format = context.configuration.diagnostic_format();
+        let message = if let Some(group) = group.and_then(|group| group.option_name(format)) {
+            suffixed = true;
+            // GCC's option takes a level, and it says so.
+            let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant)
+                || (self.kind.group() == Some(crate::configuration::DiagnosticGroup::Format)
+                    && context.configuration.diagnostic_format()
+                        == crate::configuration::DiagnosticFormat::Gcc)
             {
-                suffixed = true;
-                format_in!(arena, "{message} [-Werror]")
+                "="
             } else {
-                message
+                ""
             };
+            match self.promoted_option(context, arena) {
+                | Some(option) => format_in!(arena, "{message} [{option}{level}]"),
+                | None => format_in!(arena, "{message} [-W{group}{level}]"),
+            }
+        } else if self.severity() == ErrorSeverity::Error
+            && group == Some(crate::configuration::DiagnosticGroup::MainSpecifier)
+            && context.configuration.diagnostic_format()
+                == crate::configuration::DiagnosticFormat::Gcc
+            && !context
+                .configuration
+                .pedantic_error(crate::configuration::DiagnosticGroup::MainSpecifier)
+        {
+            suffixed = true;
+            format_in!(arena, "{message} [-Werror]")
+        } else {
+            message
+        };
         let msvc = self.msvc_message(context, arena);
         let (message, suffixed) = match (msvc, self.compiler_message(context, arena)) {
             | (Some((_, text)), _) | (None, Some((text, None))) => (text, false),

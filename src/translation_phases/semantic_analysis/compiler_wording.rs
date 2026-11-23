@@ -187,6 +187,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if format == DiagnosticFormat::Clang && group == DiagnosticGroup::PointerQualifiers {
             return self.clang_discarded_qualifiers_wording(site, target, from, source);
         }
+        if format == DiagnosticFormat::Gcc && group == DiagnosticGroup::PointerQualifiers {
+            return self.gcc_discarded_qualifiers_wording(site, target, from);
+        }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
             || !matches!(
@@ -346,6 +349,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.scratch,
                 "returning '{from_spelling}' from a function with result type '{to}' {suffix}"
             ),
+            | ConversionSite::Other => return None,
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
+    /// GCC's words for `-Wdiscarded-qualifiers` (`WARNING_FOR_QUALIFIERS` in
+    /// `convert_for_assignment`, GCC 14's `c/c-typeck.cc`): the conversion
+    /// as GCC names it at its site, then `discards 'const' qualifier from
+    /// pointer target type`, naming the qualifiers the value's pointed-to
+    /// type has and the target's lacks in GCC's order (`'_Atomic const
+    /// volatile'`), in one quote and with the singular `qualifier`.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.7.3p9, p. 109; PDF p. 121.
+    fn gcc_discarded_qualifiers_wording(
+        &mut self,
+        site: ConversionSite,
+        target: TypeId,
+        from: TypeId,
+    ) -> Option<StringCacheId> {
+        let lost = self.pointer_target(from)?.qualifiers & !self.pointer_target(target)?.qualifiers;
+        let mut qualifiers = ArenaString::new_in(self.scratch);
+        for (qualifier, spelling) in [
+            (TypeQualifiers::ATOMIC, "_Atomic"),
+            (TypeQualifiers::CONST, "const"),
+            (TypeQualifiers::VOLATILE, "volatile"),
+            (TypeQualifiers::RESTRICT, "restrict"),
+        ] {
+            if lost.contains(qualifier) {
+                if !qualifiers.is_empty() {
+                    qualifiers.push(' ');
+                }
+                qualifiers.push_str(spelling);
+            }
+        }
+        if qualifiers.is_empty() {
+            return None;
+        }
+        let suffix = crate::diagnostics::format_in!(
+            self.scratch,
+            "discards '{qualifiers}' qualifier from pointer target type"
+        );
+        let text = match site {
+            | ConversionSite::Initialization =>
+                crate::diagnostics::format_in!(self.scratch, "initialization {suffix}"),
+            | ConversionSite::Assignment =>
+                crate::diagnostics::format_in!(self.scratch, "assignment {suffix}"),
+            | ConversionSite::Argument { position, callee } => {
+                let callee = self.context.string_cache.at(callee?);
+                crate::diagnostics::format_in!(
+                    self.scratch,
+                    "passing argument {position} of '{callee}' {suffix}"
+                )
+            },
+            | ConversionSite::Return =>
+                crate::diagnostics::format_in!(self.scratch, "return {suffix}"),
             | ConversionSite::Other => return None,
         };
         Some(self.context.string_cache.intern(text))

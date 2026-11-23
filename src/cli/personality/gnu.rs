@@ -1673,6 +1673,14 @@ impl State<'_> {
             self.unrecognized.push(text.into());
             return true;
         }
+        // GCC's name for the group bcc knows by Clang's.
+        if let Some(prefix) = text.strip_suffix("discarded-qualifiers")
+            && matches!(prefix, "-W" | "-Wno-" | "-Werror=" | "-Wno-error=")
+        {
+            self.out
+                .push(format!("{prefix}incompatible-pointer-types-discards-qualifiers").into());
+            return true;
+        }
         if text.ends_with('=')
             && (text == "-Wno-error=" || !text.starts_with("-Wno-"))
             && knows(Compiler::Gcc, text)

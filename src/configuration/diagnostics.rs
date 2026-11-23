@@ -308,8 +308,13 @@ impl CompilerConfiguration {
                 | WarningOption::Error(false) => {},
             }
         }
+        // Clang's `-Wincompatible-pointer-types` holds the discarded
+        // qualifiers; GCC's `-Wdiscarded-qualifiers` is an option of its own.
         if group == DiagnosticGroup::IncompatiblePointerTypes {
-            self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option, clang);
+            if clang {
+                self.warning_options[DiagnosticGroup::PointerQualifiers as usize]
+                    .apply(option, clang);
+            }
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
                 .apply(option, clang);
         }
@@ -508,6 +513,9 @@ impl CompilerConfiguration {
             // GCC's `-Waddress` and Clang's group around
             // `-Wpointer-bool-conversion`, the part of them bcc reports.
             | "address" => self.with_pragma_group(DiagnosticGroup::PointerBoolConversion, class),
+            // GCC's name for the group bcc knows by Clang's.
+            | "discarded-qualifiers" if !clang =>
+                self.with_pragma_group(DiagnosticGroup::PointerQualifiers, class),
             | _ => DiagnosticGroup::parse(name)
                 .map_or(self, |group| self.with_pragma_group(group, class)),
         }
@@ -1095,6 +1103,25 @@ macro_rules! diagnostic_groups {
                 }
             }
 
+            /// The `-W` spelling a diagnostic in `format` names: GCC's own
+            /// where GCC 14 files the diagnostic under another option than
+            /// Clang (`-Wdiscarded-qualifiers` for
+            /// `-Wincompatible-pointer-types-discards-qualifiers`, and its
+            /// one `-Wincompatible-pointer-types` for function pointers
+            /// too), and otherwise [`Self::name`].
+            pub(crate) const fn option_name(
+                self,
+                format: super::DiagnosticFormat,
+            ) -> Option<&'static str> {
+                match (format, self) {
+                    | (super::DiagnosticFormat::Gcc, Self::PointerQualifiers) =>
+                        Some("discarded-qualifiers"),
+                    | (super::DiagnosticFormat::Gcc, Self::IncompatibleFunctionPointerTypes) =>
+                        Self::IncompatiblePointerTypes.name(),
+                    | _ => self.name(),
+                }
+            }
+
             const fn default(self) -> GroupDefault {
                 match self {
                     $(Self::$variant => GroupDefault::$default,)*
@@ -1119,7 +1146,9 @@ diagnostic_groups! {
     CompareDistinctPointerTypes => Some("compare-distinct-pointer-types"), Warning, true;
     IncompatiblePointerTypes => Some("incompatible-pointer-types"), Permerror, true;
     PointerSign => Some("pointer-sign"), Warning, true;
-    NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
+    /// Clang's warning about a null pointer constant that is not a literal
+    /// zero (`'\0'`, `1 - 1`); GCC has none.
+    NonLiteralNullConversion => Some("non-literal-null-conversion"), ClangWarning, false;
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
     /// GCC's `-Waddress`, which only its `-Wall` holds.
