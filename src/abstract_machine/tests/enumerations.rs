@@ -315,10 +315,8 @@ fn enumerations_and_switches_refuse_what_c_forbids() {
     }
     for source in [
         "int main(void) { switch (1) { int x; case 1: break; } return 0; }",
-        "int main(void) { switch (1) { case 1: { case 2: break; } } return 0; }",
         "int main(void) { switch (1) case 1: return 0; }",
         "enum e { A }; int main(void) { int A = 1; return A; }",
-        "int main(void) { continue; }",
     ] {
         let diagnostic = compile(source).expect_err(source);
         assert_ne!(

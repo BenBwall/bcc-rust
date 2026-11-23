@@ -12,6 +12,7 @@ use super::{
 };
 
 mod enumerations;
+mod jumps;
 
 fn run(source: &str) -> Session {
     let program = compile(source).expect("test source must compile");
@@ -5886,6 +5887,15 @@ fn the_limits_the_site_states_hold() {
              (*pick(void))(int)          { return f; } typedef int (*unary)(int); unary \
              again(void) { return f; } int main(void) {          struct ops s = {f}; struct ops \
              *p = &s; return s.apply(1) + p->apply(2) + pick()(3) +          again()(4); }",
+            // do, continue and goto; case labels anywhere in a switch's
+            // body; functions that return pointers to objects.
+            "int v[3] = {1, 2, 3}; int *at(int i) { return &v[i]; } int main(void) { int n = 0; \
+             int i = 0; do { i++; if (i == 2) continue; n += *at(i - 1); } while (i < 3); for \
+             (;;) { if (n > 0) goto out; } out: switch (n) { case 0: { case 4: n += 10; } } \
+             return n; }",
+            // A pointer to a pointer returned.
+            "int x = 4; int *p; int **at(void) { return &p; } int main(void) { p = &x; return \
+             **at(); }",
         ]
     {
         let session = run(source);
@@ -5924,13 +5934,9 @@ fn the_limits_the_site_states_hold() {
         assert_eq!(session.state().status, status, "{source}");
     }
     for source in [
-        "int main(void) { do {} while (0); return 0; }",
-        "int main(void) { while (1) { continue; } return 0; }",
-        "int main(void) { switch (0) { case 0: { case 1: break; } } return 0; }",
         "union u { int x; }; int main(void) { return 0; }",
         "void f(void) {} int main(void) { return 0; }",
         "static int f(void) { return 0; } int main(void) { return f(); }",
-        "int x; int *f(void) { return &x; } int main(void) { return 0; }",
         "#include <stdio.h>\nint main(void) { int (*p)(const char *) = puts; return 0; }",
         "int x; int *p = &x; int main(void) { return 0; }",
         "int f(void) { return 1; } int x = f(); int main(void) { return x; }",
@@ -5940,6 +5946,8 @@ fn the_limits_the_site_states_hold() {
         "int main(void) { int i = 0; if (i++ + i) {} return 0; }",
         "int main(void) { int i = 0; i = i++; return i; }",
         "#include <string.h>\nint main(void) { return 0; }",
+        "int main(void) { switch (1) { int x; case 1: return 0; } return 0; }",
+        "void *f(void) { return 0; } int main(void) { return 0; }",
     ] {
         let _diagnostic = compile(source).expect_err(source);
     }
@@ -6543,9 +6551,10 @@ fn small_review_fixes_say_what_happens() {
 /// The corpus of small beginner programs under `web/docs/corpus/`, one per
 /// construct, and what the machine makes of each: every program runs to its
 /// end
-/// those whose behavior C leaves undefined (`u…`), which stop there, and
+/// those whose behavior C leaves undefined (`u…`), which stop there,
 /// those whose result depends on an order C leaves open (`o…`), which stop
-/// rather than choose one.
+/// rather than choose one, and those that read an indeterminate value
+/// (`x…`), which stop there without calling it more than C does.
 #[test]
 fn the_corpus_of_beginner_programs_runs() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/docs/corpus");
@@ -6572,7 +6581,7 @@ fn the_corpus_of_beginner_programs_runs() {
         }
         let expected = match name.as_bytes().first() {
             | Some(b'u') => "undefined_behavior",
-            | Some(b'o') => "error",
+            | Some(b'o' | b'x') => "error",
             | _ => "finished",
         };
         assert_eq!(

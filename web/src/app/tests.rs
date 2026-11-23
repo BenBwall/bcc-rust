@@ -298,3 +298,68 @@ fn the_listing_marks_a_function_a_member_points_to() {
         .collect();
     assert_eq!(marks, [(1, Some(String::from("s.apply →")))]);
 }
+
+// A goto's steps mark its label in the listing, with where the goto is
+// before it, from the first block it leaves to its jump; and Figure 2
+// draws where the jump goes.
+#[cfg(feature = "worker")]
+#[test]
+fn the_listing_marks_the_label_a_goto_jumps_to() {
+    use crate::machine::Machine;
+    let mut machine = Machine::default();
+    let mut snapshot = machine.load(include_str!("../../docs/corpus/j04_goto_out.c").to_owned());
+    while !snapshot.event.summary.starts_with("`goto done;` leaves") {
+        assert_eq!(goto_mark(&snapshot), None, "{}", snapshot.event.title);
+        snapshot = machine.step().expect("the run reaches the goto");
+    }
+    let mut steps = 0;
+    while snapshot.event.label.is_some() {
+        let mark = goto_mark(&snapshot).expect("a goto's step marks its label");
+        assert_eq!(
+            (mark.start_line, mark.start_column, mark.end_column),
+            (12, 1, 6)
+        );
+        assert_eq!(mark.before.as_deref(), Some("goto, line 8 →"));
+        assert_eq!(
+            mark.hover.as_deref(),
+            Some("The goto on line 8 jumps ahead to this label")
+        );
+        assert_eq!(mark.inline_class.as_deref(), Some("jump-target"));
+        steps += 1;
+        if snapshot.event.title.starts_with("goto `done`") {
+            let flow: Vec<&str> = snapshot
+                .event
+                .flow
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect();
+            assert_eq!(flow, ["goto done", "jumps to", "done: line 12"]);
+        }
+        snapshot = machine.step().expect("the run goes on");
+    }
+    // The if's block, the inner loop's body and for statement, the outer
+    // loop's body and for statement, then the jump.
+    assert_eq!(steps, 6);
+    assert_eq!(goto_mark(&snapshot), None);
+}
+
+// A goto on its label's line says which way it jumps from where it is on
+// the line, not from the line alone.
+#[cfg(feature = "worker")]
+#[test]
+fn the_listing_says_a_goto_on_its_labels_line_jumps_back() {
+    use crate::machine::Machine;
+    let mut machine = Machine::default();
+    let mut snapshot = machine.load(
+        "int main(void) {\n    int n = 0;\nloop: n++; if (n < 3) goto loop;\n    return n;\n}\n"
+            .to_owned(),
+    );
+    while !snapshot.event.title.starts_with("goto `loop`") {
+        snapshot = machine.step().expect("the run reaches the goto");
+    }
+    let mark = goto_mark(&snapshot).expect("the goto's step marks its label");
+    assert_eq!(
+        mark.hover.as_deref(),
+        Some("The goto on line 3 jumps back to this label")
+    );
+}

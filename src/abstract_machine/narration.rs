@@ -8,6 +8,7 @@
 mod enumerations;
 mod floating;
 mod functions;
+mod jumps;
 mod upcoming;
 
 use std::{
@@ -27,6 +28,7 @@ pub(super) use floating::{
     floating_constant,
     floating_precision,
 };
+pub(super) use jumps::left_by_continue;
 
 use super::{
     clauses::{
@@ -144,6 +146,9 @@ pub(super) enum Topic {
     Enumeration,
     Switch,
     Typedef,
+    Loops,
+    Jump,
+    Hiding,
 }
 
 impl Topic {
@@ -482,6 +487,24 @@ impl Topic {
                  separate blocks: after the jump, execution runs straight on through the next \
                  labels until a break. Forgetting a break, so one case falls through into the \
                  next, is a classic bug, which is why compilers can warn about it.",
+            | Self::Loops =>
+                "C has three loops. while tests its condition before each pass, so its body may \
+                 never run; do tests after each pass, so its body runs at least once; for puts a \
+                 loop's start, test and step on one line. In any of them, break leaves the loop at \
+                 once, and continue skips the rest of one pass and goes on to the next test.",
+            | Self::Jump =>
+                "goto jumps to a label anywhere in its function. Jumping around freely makes code \
+                 hard to follow, so C programs mostly use loops, break and continue, and keep goto \
+                 for leaving several nested loops at once or for one cleanup point at a function's \
+                 end. A jump never suspends the rules for objects: leaving a block ends its \
+                 objects' lifetimes, and jumping into a block, past an initializer, leaves the \
+                 object without its initial value.",
+            | Self::Hiding =>
+                "A block may declare a name that an enclosing block, or the file, already uses. \
+                 Inside the inner block the name means the inner object, which hides the outer one \
+                 until the inner block ends; the outer object still exists and keeps its value. \
+                 Using the wrong one by mistake is easy, so compilers can warn about it (GCC's \
+                 -Wshadow).",
             | Self::Typedef =>
                 "A typedef gives a type a second name, such as `celsius` for double or `string` \
                  for char *, so a declaration can say what a value means rather than how it is \
@@ -807,6 +830,9 @@ fn lowered(text: &str) -> String {
 /// titled by what went wrong, from the paragraph that makes it undefined.
 pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     let dangling = diagnostic.clause == Some(&clauses::LIFETIME);
+    // A read of a value that reaching a declaration again made
+    // indeterminate, after the program had stored one (C99 §6.8p3).
+    let forgotten = diagnostic.clause == Some(&clauses::DECLARATION_REACHED);
     let (title, summary, explanation, topic) = match diagnostic.kind {
         | "undefined_behavior" => {
             let (title, summary) = undefined(diagnostic);
@@ -836,10 +862,14 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         ),
         | "indeterminate" => (
             "Read of an indeterminate value",
-            String::from(
-                "The read would use a value the program never set, so the result could differ \
-                 from run to run and between compilers.",
-            ),
+            String::from(if forgotten {
+                "The program stored a value in this object earlier, but reaching its declaration \
+                 again, with no initializer, made the value indeterminate once more, so the result \
+                 could differ from run to run and between compilers."
+            } else {
+                "The read would use a value the program never set, so the result could differ from \
+                 run to run and between compilers."
+            }),
             String::from(
                 "An indeterminate value is either an unspecified value or a trap representation, \
                  a bit pattern that is no value at all, and reading a trap representation is \
@@ -934,6 +964,11 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     if diagnostic.kind == "indeterminate" && !dangling {
         event.clauses.push(clauses::TRAP_REPRESENTATION);
     }
+    // Using a pointer to an object whose lifetime has ended, as a block's
+    // object after the block, is undefined (C99 §J.2).
+    if diagnostic.kind == "indeterminate" && dangling {
+        event.clauses.push(clauses::DANGLING_USE);
+    }
     match diagnostic.undefined {
         | Some(Undefined::QuotientOverflow) => event.clauses.push(clauses::QUOTIENT),
         | Some(Undefined::SignedOverflow) => event.clauses.push(clauses::UNSIGNED_WRAP),
@@ -945,6 +980,7 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             .clauses
             .extend([clauses::CONVERSIONS, clauses::VARIADIC_TYPES]),
         | Some(Undefined::StringLiteralWrite) => event.clauses.push(clauses::STRING_LITERAL),
+        | Some(Undefined::DanglingPointer) => event.clauses.push(clauses::DANGLING_USE),
         | _ => {},
     }
     match topic {
@@ -1098,6 +1134,12 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: use after lifetime",
             "The object no longer exists, and C gives no meaning to using it; its memory may \
              already hold another object.",
+        ),
+        | Some(Undefined::DanglingPointer) => (
+            "Undefined behavior: use of a dangling pointer",
+            "The pointer pointed to an object of a call that has returned. When that object's \
+             lifetime ended, the pointer's value became indeterminate, and C gives no meaning to \
+             using it.",
         ),
         | Some(Undefined::OnePastEnd) => (
             "Undefined behavior: access one past the end",
@@ -1699,13 +1741,13 @@ impl Machine {
             let _ = write!(
                 text,
                 " {whose}, {}, is an enumeration, {}. So {holder} may hold any value of that \
-                 type; C does not check that it holds one of {}.",
+                 type; C does not check that it holds {}.",
                 enumeration.name,
                 enumerations::compatible_text(enumeration),
                 if constants.len() == 1 {
-                    format!("its constant, {}", constants[0])
+                    format!("its only constant, {}", constants[0])
                 } else {
-                    format!("the constants {}", list_words(&constants))
+                    format!("one of the constants {}", list_words(&constants))
                 },
             );
             cited.push(clauses::ENUMERATED_TYPE);
@@ -5171,6 +5213,18 @@ impl Machine {
                 "the first branch is skipped; with no else, the if statement is done",
                 "the if branch is skipped",
                 clauses::IF_STATEMENT,
+            ),
+            | ("do", true) => (
+                "true: run the body again",
+                "the body runs again",
+                "the body runs again",
+                clauses::DO_STATEMENT,
+            ),
+            | ("do", false) => (
+                "false: leave the loop",
+                "the loop ends",
+                "the loop ends",
+                clauses::DO_STATEMENT,
             ),
             | (_, true) => (
                 "true: run the loop body",

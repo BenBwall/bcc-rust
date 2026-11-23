@@ -2,8 +2,9 @@
 //! evaluates its controlling expression once, promotes it, and jumps to the
 //! label whose constant matches it; execution then runs on through the
 //! statements after that label, past any later labels, until a `break` or
-//! the end of the body. The subset compiles a switch whose body is a block
-//! with its labels directly inside it, the form nearly every program uses.
+//! the end of the body. The subset compiles a switch whose body is a block;
+//! its labels may be anywhere inside it, nested in its blocks and
+//! statements, and a jump to a nested one enters the blocks around it.
 //!
 //! C99: §6.8.4.2 paragraphs 1-5, p. 134; PDF p. 146.
 //! C99: §6.8.6.3 paragraphs 1-2, p. 138; PDF p. 150.
@@ -17,12 +18,12 @@ use super::{
         Diagnostic,
         Op,
         Skipped,
-        SourceRange,
         Type,
     },
     parser::{
         Breakable,
         Parser,
+        SwitchLabels,
     },
 };
 
@@ -60,8 +61,7 @@ impl Parser<'_> {
         )?;
         if !self.at("{") {
             return Err(self.error(
-                "a switch body in this subset is a block, `{ … }`, with its case labels directly \
-                 inside it",
+                "a switch body in this subset is a block, `{ … }`, with its case labels inside it",
             ));
         }
         // The body is a block, but one that declares nothing directly
@@ -69,67 +69,15 @@ impl Parser<'_> {
         self.position += 1;
         self.scope += 1;
         self.open_breakable("switch");
-        let mut cases: Vec<Case> = Vec::new();
-        let mut default = None;
-        let mut labelled = false;
-        // The instruction a run of labels after a statement starts with,
-        // which execution reaches only by falling through to them.
-        let mut past: Option<usize> = None;
+        self.switches.push(SwitchLabels {
+            cases: Vec::new(),
+            default: None,
+            promoted,
+            blocks: self.blocks.len(),
+        });
         while !self.at("}") {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
-            }
-            if self.at("case") {
-                let label = self.current();
-                let falls = !labelled && (!cases.is_empty() || default.is_some());
-                self.past_labels(&mut past, falls, label.range)?;
-                self.position += 1;
-                let constant = self.expression(0)?;
-                let written = self.expressions[constant].range;
-                let value =
-                    self.constant_integer(constant, "a case label", &clauses::CASE_LABELS)?;
-                // C99 §6.8.4.2p5: the constant converts to the promoted
-                // type of the controlling expression.
-                let value = promoted.convert(value);
-                if let Some(earlier) = cases.iter().find(|case| case.value == value) {
-                    return Err(Diagnostic::constraint(
-                        combined(label.range, written),
-                        &format!(
-                            "this case label has the value {value}, like the case label on line \
-                             {}: no two case labels of one switch may have the same value (C99 \
-                             §6.8.4.2p3)",
-                            earlier.range.line
-                        ),
-                        &clauses::CASE_LABELS,
-                    ));
-                }
-                self.expect(":")?;
-                self.extend_past_labels(past);
-                cases.push(Case {
-                    value,
-                    range: combined(label.range, written),
-                    target: self.code.len(),
-                });
-                labelled = true;
-                continue;
-            }
-            if self.at("default") {
-                let label = self.current();
-                let falls = !labelled && (!cases.is_empty() || default.is_some());
-                self.past_labels(&mut past, falls, label.range)?;
-                self.position += 1;
-                if default.is_some() {
-                    return Err(Diagnostic::constraint(
-                        label.range,
-                        "a switch has at most one default label (C99 §6.8.4.2p3)",
-                        &clauses::CASE_LABELS,
-                    ));
-                }
-                self.expect(":")?;
-                self.extend_past_labels(past);
-                default = Some(self.code.len());
-                labelled = true;
-                continue;
             }
             if self.current().text.starts_with('#') {
                 return Err(self.error(
@@ -137,30 +85,24 @@ impl Parser<'_> {
                      #include <stdio.h> at file scope",
                 ));
             }
-            if self.at_declaration() {
-                return Err(self.error(
-                    "declare objects in a block of their own inside the switch, as in `case 1: { \
-                     int x = 0; … }`: a switch jumps past declarations written directly in its \
-                     body",
-                ));
+            if self.at_declaration() && !self.at_named_label() {
+                return Err(self.switch_declaration());
             }
             self.statement()?;
-            labelled = false;
-        }
-        if labelled {
-            return Err(Diagnostic::new(
-                "syntax",
-                self.current().range,
-                "a label is followed by a statement; write `break;` (or an empty statement, `;`) \
-                 after the last label",
-            ));
         }
         self.position += 1;
         let end = self.code.len();
-        let targets: Vec<usize> = cases
+        let labels = self.switches.pop().unwrap_or(SwitchLabels {
+            cases: Vec::new(),
+            default: None,
+            promoted,
+            blocks: 0,
+        });
+        let targets: Vec<usize> = labels
+            .cases
             .iter()
-            .map(|case| case.target)
-            .chain(default)
+            .map(|case| case.landing.target)
+            .chain(labels.default.as_ref().map(|landing| landing.target))
             .collect();
         self.mark_skipped(&targets, end);
         self.close_breakable();
@@ -173,31 +115,130 @@ impl Parser<'_> {
             ..
         } = &mut self.code[dispatch].op
         {
-            *slots = cases;
-            *slot = default;
+            *slots = labels.cases;
+            *slot = labels.default;
             *exit = end;
         }
         Ok(())
     }
 
-    /// Before a case or default label at `label`: when execution `falls`
-    /// to it from the statement before it, which follows an earlier label,
-    /// the instruction that shows it running on past the label. The
-    /// switch's jump to the label lands past that instruction. A run of
-    /// labels shares one, from the first.
-    ///
-    /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
-    fn past_labels(
+    /// The error for a declaration directly in a switch's block, which
+    /// the switch's jump passes.
+    fn switch_declaration(&self) -> Diagnostic {
+        self.error(
+            "declare objects in a block of their own inside the switch, as in `case 1: { int x = \
+             0; … }`: a switch jumps past declarations written directly in its body",
+        )
+    }
+
+    /// The `case` or `default` label here, of the innermost switch, which
+    /// a run of labels starting with `falls` follows: when execution falls
+    /// to the run from the statement before it, its first case or default
+    /// label adds the instruction `past` that shows it running on past
+    /// them. A label anywhere in the switch's body, however deeply nested,
+    /// is the switch's (C99 §6.8.4.2p2-3); its jump enters the blocks
+    /// between.
+    pub(super) fn case_label(
         &mut self,
-        past: &mut Option<usize>,
         falls: bool,
-        label: SourceRange,
+        past: &mut Option<usize>,
     ) -> Result<(), Diagnostic> {
-        if falls {
+        let label = self.current();
+        let Some(blocks) = self.switches.last().map(|switch| switch.blocks) else {
+            return Err(Diagnostic::constraint(
+                label.range,
+                "a case or default label belongs inside a switch statement (C99 §6.8.1p2)",
+                &clauses::LABEL_PLACE,
+            ));
+        };
+        if falls && past.is_none() {
             *past = Some(self.code.len());
-            self.emit(Op::PastLabels(0), label)?;
+            self.emit(Op::PastLabels(0), label.range)?;
+        }
+        self.position += 1;
+        let case = if label.text == "case" {
+            let constant = self.expression(0)?;
+            let written = self.expressions[constant].range;
+            let value = self.constant_integer(constant, "a case label", &clauses::CASE_LABELS)?;
+            Some((value, combined(label.range, written)))
+        } else {
+            None
+        };
+        let Some(switch) = self.switches.last() else {
+            return Ok(());
+        };
+        match case {
+            | Some((value, range)) => {
+                // C99 §6.8.4.2p5: the constant converts to the promoted
+                // type of the controlling expression.
+                let value = switch.promoted.convert(value);
+                if let Some(earlier) = switch.cases.iter().find(|case| case.value == value) {
+                    return Err(Diagnostic::constraint(
+                        range,
+                        &format!(
+                            "this case label has the value {value}, like the case label on line \
+                             {}: no two case labels of one switch may have the same value (C99 \
+                             §6.8.4.2p3)",
+                            earlier.range.line
+                        ),
+                        &clauses::CASE_LABELS,
+                    ));
+                }
+                self.expect(":")?;
+                self.extend_past_labels(*past);
+                let landing = self.landing(blocks);
+                if let Some(switch) = self.switches.last_mut() {
+                    switch.cases.push(Case {
+                        value,
+                        range,
+                        landing,
+                    });
+                }
+            },
+            | None => {
+                if switch.default.is_some() {
+                    return Err(Diagnostic::constraint(
+                        label.range,
+                        "a switch has at most one default label (C99 §6.8.4.2p3)",
+                        &clauses::CASE_LABELS,
+                    ));
+                }
+                self.expect(":")?;
+                self.extend_past_labels(*past);
+                let landing = self.landing(blocks);
+                if let Some(switch) = self.switches.last_mut() {
+                    switch.default = Some(landing);
+                }
+            },
         }
         Ok(())
+    }
+
+    /// Whether the innermost switch has a label already, so that
+    /// execution can reach a later one from the statement before it.
+    pub(super) fn switch_labelled(&self) -> bool {
+        self.switches
+            .last()
+            .is_some_and(|switch| !switch.cases.is_empty() || switch.default.is_some())
+    }
+
+    /// The error for a declaration right after a run of labels, where C
+    /// wants a statement.
+    pub(super) fn labelled_declaration(&self) -> Diagnostic {
+        if self
+            .switches
+            .last()
+            .is_some_and(|switch| switch.blocks == self.blocks.len())
+        {
+            return self.switch_declaration();
+        }
+        Diagnostic::new(
+            "syntax",
+            self.current().range,
+            "a label is followed by a statement, not a declaration: put the declaration in a \
+             block of its own, `{ … }`, or write an empty statement, `;`, after the label (C99 \
+             §6.8.1p1)",
+        )
     }
 
     /// Count the label just read in the run of labels' instruction `past`,
@@ -275,32 +316,13 @@ impl Parser<'_> {
         self.expect(";")
     }
 
-    /// The error for a `case` or `default` label anywhere but directly in
-    /// a switch's body.
-    pub(super) fn misplaced_label(&self) -> Diagnostic {
-        if self
-            .breakables
-            .iter()
-            .any(|breakable| breakable.statement == "switch")
-        {
-            return self.error(
-                "a case or default label nested inside another statement of the switch's body is \
-                 outside this subset; write each label directly in the switch's block",
-            );
-        }
-        Diagnostic::constraint(
-            self.current().range,
-            "a case or default label belongs inside a switch statement (C99 §6.8.1p2)",
-            &clauses::LABEL_PLACE,
-        )
-    }
-
     /// Begin a switch's or a loop's body, which a `break` leaves.
     pub(super) fn open_breakable(&mut self, statement: &'static str) {
         self.breakables.push(Breakable {
             statement,
             blocks: self.blocks.len(),
             breaks: Vec::new(),
+            continues: Vec::new(),
         });
     }
 

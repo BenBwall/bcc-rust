@@ -33,7 +33,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 60] = [
+pub static TERMS: [Term; 62] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -543,6 +543,27 @@ pub static TERMS: [Term; 60] = [
                      labels until a break.",
         clause:     "6.8.4.2p5",
         page:       146,
+    },
+    Term {
+        id:         "goto",
+        name:       "goto",
+        phrases:    &["goto"],
+        definition: "A statement, goto name;, that jumps to the statement labeled name: anywhere \
+                     in the same function, earlier or later. Leaving a block by the jump ends \
+                     its objects' lifetimes; jumping into one begins them, but runs no \
+                     initializer.",
+        clause:     "6.8.6.1p2",
+        page:       149,
+    },
+    Term {
+        id:         "continue",
+        name:       "continue",
+        phrases:    &["continue statement", "continue"],
+        definition: "A statement, continue;, that ends the current pass through a loop's body: a \
+                     while or do statement tests its condition next, and a for statement runs \
+                     its third clause first. Unlike break, it does not leave the loop.",
+        clause:     "6.8.6.2p2",
+        page:       150,
     },
     Term {
         id:         "pointer-arithmetic",

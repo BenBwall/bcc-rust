@@ -277,7 +277,7 @@ impl Machine {
         range: SourceRange,
         promoted: i128,
         matched: Option<&Case>,
-        default: Option<usize>,
+        default: bool,
     ) -> Event {
         let written = snippet(&program.source, range);
         let label = matched.map(|case| snippet(&program.source, case.range));
@@ -294,7 +294,7 @@ impl Machine {
                     matched.map_or(0, |case| case.range.line)
                 ),
             ),
-            | (None, Some(_)) => (
+            | (None, true) => (
                 format!("switch on {promoted}: no case matches, jump to `default`"),
                 String::from("no case label matches, so control jumps to the `default` label"),
                 format!(
@@ -303,7 +303,7 @@ impl Machine {
                      body."
                 ),
             ),
-            | (None, None) => (
+            | (None, false) => (
                 format!("switch on {promoted}: no case matches, skip the body"),
                 String::from(
                     "no case label matches and there is no default, so none of the body runs",
@@ -409,14 +409,15 @@ pub(in crate::abstract_machine) fn break_statement(
 }
 
 /// Execution reached the `count` labels at `range` from the statement
-/// before them, so it runs on past them: a label only marks a place a
-/// switch can jump to.
+/// before them, or, when `first` in a block, from the block's entry, so it
+/// runs on past them: a label only marks a place a switch can jump to.
 ///
 /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
 pub(in crate::abstract_machine) fn past_labels(
     range: SourceRange,
     source: &str,
     count: usize,
+    first: bool,
 ) -> Event {
     let labels = snippet(source, range);
     let (phrase, pronoun) = if count == 1 {
@@ -424,19 +425,30 @@ pub(in crate::abstract_machine) fn past_labels(
     } else {
         ("the labels", "them")
     };
+    let before = if first {
+        format!(
+            "Execution has entered the block that `{labels}` begins, and no break left the switch"
+        )
+    } else {
+        format!("The statement before `{labels}` has finished, and no break left the switch")
+    };
     noted(
         explained(
             Event::new(EventKind::Jump, range, format!("Run on past `{labels}`")),
             &format!(
-                "The statement before `{labels}` has finished, and no break came, so execution \
-                 runs on past {phrase} into the statements after {pronoun}."
+                "{before}, so execution runs on past {phrase} into the statements after {pronoun}."
             ),
             &format!(
                 "A case or default label only marks a place the switch can jump to; it does not \
-                 alter the flow of control. Execution that reaches {phrase} from the statement \
-                 before, as here, continues across {pronoun} into the statements that follow, \
-                 whatever value the switch compared. This is called falling through. A `break;` \
-                 before {phrase} would have left the switch instead."
+                 alter the flow of control. Execution that reaches {phrase} from {}, as here, \
+                 continues across {pronoun} into the statements that follow, whatever value the \
+                 switch compared. This is called falling through. A `break;` before {phrase} \
+                 would have left the switch instead.",
+                if first {
+                    "the start of its block"
+                } else {
+                    "the statement before"
+                }
             ),
             &[clauses::LABELS_FLOW, clauses::SWITCH_JUMP],
         ),
