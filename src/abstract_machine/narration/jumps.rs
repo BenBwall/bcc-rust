@@ -437,7 +437,7 @@ impl Machine {
         let held = match before {
             | Value::Indeterminate if lost => String::from(
                 "it held no value: the value stored in it earlier became indeterminate when \
-                 execution last reached this declaration",
+                 execution reached this declaration on an earlier pass",
             ),
             | Value::Indeterminate => String::from("it held no value yet"),
             | Value::Array(_) | Value::Struct { .. } =>

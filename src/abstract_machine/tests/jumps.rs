@@ -515,7 +515,7 @@ fn a_value_a_declaration_made_indeterminate_stays_lost_until_a_store() {
     assert!(
         third.contains(
             "it held no value: the value stored in it earlier became indeterminate when execution \
-             last reached this declaration"
+             reached this declaration on an earlier pass"
         ),
         "{third}"
     );
@@ -834,4 +834,36 @@ fn an_unnamed_parameter_and_a_single_constant_are_said_exactly() {
         "{}",
         declared.event.explanation
     );
+}
+
+#[test]
+fn every_later_pass_says_an_earlier_pass_lost_the_value() {
+    // A store on the first pass, then three jumps back: the fourth pass
+    // must not say the previous pass lost the value, which it already
+    // held none of (C99 §6.8p3).
+    let states = stepped(
+        "int main(void) {\n    int n = 0;\nagain:;\n    int k;\n    if (n == 3) return k;\n    if \
+         (n == 0) k = 4;\n    n++;\n    goto again;\n}\n",
+    );
+    let passes: Vec<_> = states
+        .iter()
+        .filter(|state| {
+            state.event.kind == EventKind::Declare
+                && state
+                    .event
+                    .summary
+                    .starts_with("A goto went back over this declaration")
+        })
+        .collect();
+    assert_eq!(passes.len(), 3);
+    for pass in &passes[1..] {
+        let text = &pass.event.explanation;
+        assert!(
+            text.contains(
+                "became indeterminate when execution reached this declaration on an earlier pass"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("last reached"), "{text}");
+    }
 }

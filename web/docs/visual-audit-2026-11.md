@@ -6049,7 +6049,8 @@ whole structure. So the first program stops with "a value was stored in `k`
 earlier, but execution then reached the declaration of `k` on line 4
 again…", citing §6.8p3, and its third declaration step says "it held no
 value: the value stored in it earlier became indeterminate when execution
-last reached this declaration… so it still holds none". The copy's member
+reached this declaration on an earlier pass… so it still holds none" (round
+3 dropped "last", which was false from the fourth pass on). The copy's member
 gets the usual "nothing has been stored in `s.a` yet", and the copy's own
 step already says "Indeterminate members are copied as they are"
 (§6.2.6.1p6). A new engine test runs a store and then two jumps back; a
