@@ -33,6 +33,7 @@ mod library;
 mod locale;
 mod math;
 mod posix;
+mod powi;
 mod quad;
 mod stdio;
 mod strings;
@@ -238,6 +239,7 @@ impl Host for DefaultHost<'_> {
         HOST_FUNCTIONS.contains(&name)
             || complex::provides(name)
             || complex::basic_provides(name)
+            || powi::provides(name)
             || checked::provides(name)
             || library::signature(name).is_some()
     }
@@ -357,6 +359,9 @@ impl DefaultHost<'_> {
             return Err(UbKind::StreamOrientation.into());
         }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
+            return result;
+        }
+        if let Some(result) = powi::call(call) {
             return result;
         }
         if let Some(result) = math::call(
