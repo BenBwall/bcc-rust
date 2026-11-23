@@ -341,7 +341,7 @@ the table.
 | `return` copies the value out; the address of an automatic local would dangle | note on a frame's end | §6.2.4p2, §6.8.6.4p3 | Holds | |
 | A hexadecimal digit is four bits, `010` is 8, `0755` packs three 3-bit groups | note on bases | §6.4.4.1p3-4 | Holds | |
 | `x & 1` is 1 exactly when x is odd; `2 & 1` is 0 and `2 && 1` is 1; `&` evaluates both operands | note on bitwise operators | §6.5.10p4, §6.5.13p3; GCC, Clang, bcc | Holds (for a negative x, on two's complement machines, which x86-64 and WebAssembly are) | |
-| `&&` and `||` go left to right with a sequence point, unlike `+` | note on `&&` and `||` | §6.5.13p4, §6.5.14p4, §6.5p3 | Holds | |
+| `&&` and `\|\|` go left to right with a sequence point, unlike `+` | note on `&&` and `\|\|` | §6.5.13p4, §6.5.14p4, §6.5p3 | Holds | |
 | `c ? 1 : 2.5` is a double | note on `?:` | §6.5.15p5 | Holds | |
 | Arguments have no order and no sequence point between them; in `int a = 1, b = a + 1;` b is 2 | note on the comma operator | §6.5.2.2p10, §6.8p3 | Holds | |
 | A call through a null pointer, or a pointer cast to the wrong type, "and a compiled program usually crashes there" | note on pointers to functions | `c30`: the null call crashes at `-O0` under all three and at `-O2` under GCC, but exits 44 under Clang and 0 under bcc at `-O2`; `c31`: the wrong type prints 21 (GCC `-O2`: a different garbage double each run), never crashes | **Over-promised** | The first usually crashes without optimization; the second often runs on, with caller and callee disagreeing about the arguments and result |
