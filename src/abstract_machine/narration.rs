@@ -1321,7 +1321,7 @@ impl Machine {
                          block declares no objects of its own, so no lifetimes begin here.",
                         sentence_case(what)
                     ),
-                    &cited,
+                    cited,
                 ),
                 Topic::Scope,
             );
