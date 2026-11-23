@@ -1,0 +1,103 @@
+=== c29_enum_type
+[GCC -O0] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+[GCC -O2] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+[CLANG -O0] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+[CLANG -O2] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+[BCC -O0] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+[BCC -O2] plain=unsigned:1 int:0 negative=unsigned:0 int:1| exit=0
+=== c30_null_call
+[GCC -O0] Segmentation fault| exit=139
+[GCC -O2] Segmentation fault| exit=139
+[CLANG -O0] Segmentation fault| exit=139
+[CLANG -O2] exit=44
+[BCC -O0] Segmentation fault| exit=139
+[BCC -O2] exit=0
+=== c31_wrong_type_call
+[GCC -O0] 21| exit=0
+    web/docs/claims/c31_wrong_type_call.c:5:27: warning: cast between incompatible function types from ‘int (*)(int)’ to ‘double (*)(double)’ [-Wcast-function-type]
+[GCC -O2] 4.01244e+77| exit=0
+    web/docs/claims/c31_wrong_type_call.c:5:27: warning: cast between incompatible function types from ‘int (*)(int)’ to ‘double (*)(double)’ [-Wcast-function-type]
+    web/docs/claims/c31_wrong_type_call.c:6:5: warning: array subscript ‘double[0]’ is partly outside array bounds of ‘int[1]’ [-Warray-bounds=]
+[CLANG -O0] 21| exit=0
+    1 warning generated.
+    web/docs/claims/c31_wrong_type_call.c:5:27: warning: cast from 'int (*)(int)' to 'double (*)(double)' converts to incompatible function type [-Wcast-function-type-mismatch]
+[CLANG -O2] 21| exit=0
+    1 warning generated.
+    web/docs/claims/c31_wrong_type_call.c:5:27: warning: cast from 'int (*)(int)' to 'double (*)(double)' converts to incompatible function type [-Wcast-function-type-mismatch]
+[BCC -O0] 21| exit=0
+[BCC -O2] 21| exit=0
+=== c32_static_init
+[GCC -O0] exit=1
+[GCC -O2] exit=1
+[CLANG -O0] exit=1
+[CLANG -O2] exit=1
+[BCC -O0] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+[BCC -O2] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+=== c32b_static_init_variable
+[GCC -O0] (did not compile)
+    web/docs/claims/c32b_static_init_variable.c:3:9: error: initializer element is not constant
+[GCC -O2] (did not compile)
+    web/docs/claims/c32b_static_init_variable.c:3:9: error: initializer element is not constant
+[CLANG -O0] (did not compile)
+    1 error generated.
+    web/docs/claims/c32b_static_init_variable.c:3:9: error: initializer element is not a compile-time constant
+[CLANG -O2] (did not compile)
+    1 error generated.
+    web/docs/claims/c32b_static_init_variable.c:3:9: error: initializer element is not a compile-time constant
+[BCC -O0] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+[BCC -O2] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+=== c33_static_init_call
+[GCC -O0] (did not compile)
+    web/docs/claims/c33_static_init_call.c:2:9: error: initializer element is not constant
+[GCC -O2] (did not compile)
+    web/docs/claims/c33_static_init_call.c:2:9: error: initializer element is not constant
+[CLANG -O0] (did not compile)
+    1 error generated.
+    web/docs/claims/c33_static_init_call.c:2:9: error: initializer element is not a compile-time constant
+[CLANG -O2] (did not compile)
+    1 error generated.
+    web/docs/claims/c33_static_init_call.c:2:9: error: initializer element is not a compile-time constant
+[BCC -O0] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+[BCC -O2] (did not compile)
+    1 error generated.
+    error: static-storage initializer requires a constant expression
+=== c34_fallthrough
+[GCC -O0] exit=3
+    web/docs/claims/c34_fallthrough.c:6:11: warning: this statement may fall through [-Wimplicit-fallthrough=]
+[GCC -O2] exit=3
+    web/docs/claims/c34_fallthrough.c:6:11: warning: this statement may fall through [-Wimplicit-fallthrough=]
+[CLANG -O0] exit=3
+[CLANG -O2] exit=3
+[BCC -O0] exit=3
+[BCC -O2] exit=3
+=== c35_shadow
+[GCC -O0] exit=1
+[GCC -O2] exit=1
+[CLANG -O0] exit=1
+[CLANG -O2] exit=1
+[BCC -O0] exit=1
+[BCC -O2] exit=1
+=== c36_function_pointer_value
+[GCC -O0] 96916933833033| exit=0
+[GCC -O2] 104014938816896| exit=0
+[CLANG -O0] 109842487583120| exit=0
+[CLANG -O2] 107303614243164| exit=0
+[BCC -O0] 93950383908624| exit=0
+[BCC -O2] 96901780485824| exit=0
+=== c37_call_order
+[GCC -O0] 11|ba1 1| exit=0
+[GCC -O2] 11|ba1 1| exit=0
+[CLANG -O0] 1|ab1 1| exit=0
+[CLANG -O2] 1|ab1 1| exit=0
+[BCC -O0] 1|ab1 1| exit=0
+[BCC -O2] 1|ab1 1| exit=0
