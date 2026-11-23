@@ -5893,6 +5893,9 @@ fn the_limits_the_site_states_hold() {
              int i = 0; do { i++; if (i == 2) continue; n += *at(i - 1); } while (i < 3); for \
              (;;) { if (n > 0) goto out; } out: switch (n) { case 0: { case 4: n += 10; } } \
              return n; }",
+            // A pointer to a pointer returned.
+            "int x = 4; int *p; int **at(void) { return &p; } int main(void) { p = &x; return \
+             **at(); }",
         ]
     {
         let session = run(source);

@@ -2699,7 +2699,7 @@ fn About() -> impl IntoView {
                          one, at file or block scope; subtracting two pointers into one array and ordering two \
                          pointers into one object (p - q, p < q); file-scope and static objects, whose initializers may be constant expressions \
                          such as 1 << 3, string literals or the names of functions; functions that return a number, \
-                         an enumeration, a structure, or a pointer to one of these objects or to a function, called \
+                         an enumeration, a structure, or a pointer to one of these objects, to a pointer or to a function, called \
                          anywhere in an expression; pointers to functions, kept in variables, tables, parameters and structure members, called \
                          as fp(x), (*fp)(x), s.f(x) or p->f(x), compared and tested for null; assignments, compound \
                          assignments, ++ and -- anywhere in an expression, as in x = y = 0, *p++ = c or while ((c = \
