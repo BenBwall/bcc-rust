@@ -964,6 +964,11 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     if diagnostic.kind == "indeterminate" && !dangling {
         event.clauses.push(clauses::TRAP_REPRESENTATION);
     }
+    // Using a pointer to an object whose lifetime has ended, as a block's
+    // object after the block, is undefined (C99 §J.2).
+    if diagnostic.kind == "indeterminate" && dangling {
+        event.clauses.push(clauses::DANGLING_USE);
+    }
     match diagnostic.undefined {
         | Some(Undefined::QuotientOverflow) => event.clauses.push(clauses::QUOTIENT),
         | Some(Undefined::SignedOverflow) => event.clauses.push(clauses::UNSIGNED_WRAP),
