@@ -294,7 +294,7 @@ pub struct Object {
     pub parameter: bool,
     /// Whether this is the array of a string literal, named as written.
     pub literal:   bool,
-    /// Size in bytes on x86-64.
+    /// Size in bytes on x86-64 Linux.
     #[serde(default)]
     pub size:      usize,
     pub value:     Value,

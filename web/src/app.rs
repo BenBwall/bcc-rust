@@ -2690,7 +2690,7 @@ fn About() -> impl IntoView {
                     <p>
                         "The engine runs a bounded subset of C, the part the lessons use: the integer types from char \
                          to unsigned long long, written in decimal, octal or hexadecimal, and the three floating \
-                         types, at their x86-64 sizes; enumerations and their constants, usable wherever C takes a \
+                         types, at their x86-64 Linux sizes; enumerations and their constants, usable wherever C takes a \
                          constant, such as a case label or an array's size; the arithmetic, shift, bitwise, \
                          comparison and logical operators, with && and || stopping as soon as they know the result, \
                          ?: and the comma operator; pointers to numbers, chars, structures or other pointers; arrays \
