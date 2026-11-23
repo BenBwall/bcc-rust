@@ -286,10 +286,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(|mask| u16::try_from(mask).ok())
             .filter(|&mask| mask <= 0x3FF);
         if mask.is_none() {
-            self.compiler_refusal(
-                &format!("argument value {value} is outside the valid range [0, 1023]"),
-                call.source_vectors,
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "argument value {value} is outside the valid range [0, 1023]"
             );
+            self.compiler_refusal(text, call.source_vectors);
         }
         mask
     }
@@ -300,7 +301,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// positive zero, subnormal, normal and infinity (6 to 9). A NaN is read
     /// as it stands, so that rounding does not quiet it; every other class
     /// from the value in `operand`'s format.
-    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 22-23; PDF pp. 34-35.
+    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 23-24; PDF pp. 35-36.
     fn fpclass_constant(&self, info: ExpressionInfo<'tu>, operand: TypeId) -> Option<u16> {
         let signaling = self.signaling_constant(info, operand)?;
         let (sign, positive) = if self.binary128_type(operand) {

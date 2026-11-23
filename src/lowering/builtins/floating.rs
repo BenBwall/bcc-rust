@@ -222,7 +222,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// magnitude bits order the classes of an IEEE format: zero, subnormal
     /// below the smallest normal's encoding, normal below infinity's, then
     /// NaN, quiet from the quiet bit up.
-    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 22-23; PDF pp. 34-35.
+    /// C99: §5.2.4.2.2 paragraphs 2-4, pp. 23-24; PDF pp. 35-36.
     /// Clang extension: Clang Language Extensions, "`__builtin_isfpclass`".
     pub(in crate::lowering) fn isfpclass(
         &mut self,

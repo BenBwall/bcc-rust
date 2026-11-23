@@ -529,7 +529,7 @@ pub(crate) enum FloatOperation {
     /// Clang's `__builtin_issubnormal` and `__builtin_iszero`: whether the
     /// operand is subnormal or zero, of either sign, which Clang tests as
     /// `__builtin_isfpclass` does with that mask. C23's `issubnormal` and
-    /// `iszero` (§7.12.3.9 and §7.12.3.10, N3220).
+    /// `iszero`. C23: §7.12.3.9-§7.12.3.10, p. 241; PDF p. 254 (N3220).
     Issubnormal,
     Iszero,
     /// The comparison macros of C99 §7.12.14, pp. 240-242; PDF pp. 252-254:
