@@ -8491,6 +8491,107 @@ mod tests {
         );
     }
 
+    /// clang-cl reads its `/clang:` options after the others as a Clang
+    /// command line of their own: an empty one is nothing, an option's bare
+    /// name takes its values from the next ones (refused, before the
+    /// warnings, where they are missing), and an option Clang does not take
+    /// is ignored with clang-cl's warning, at the severity the main command
+    /// line's warning options give it. None of them reaches bcc's own
+    /// command line unless bcc reads it there, where `/clang:-ffoo` used to
+    /// stop clap (status 2). Each row is checked against clang-cl 23.1.5,
+    /// the pinned Clang's, where it is present.
+    #[test]
+    fn clang_cl_reads_its_clang_options_as_clang_cl_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        let warning = |argument: &str| {
+            format!(
+                "clang-cl: warning: unknown argument ignored in clang-cl: '{argument}' \
+                 [-Wunknown-argument]\n"
+            )
+        };
+        let missing = |option: &str, count: &str| {
+            format!("clang-cl: error: argument to '{option}' is missing (expected {count})\n")
+        };
+        let unused = "clang-cl: warning: argument unused during compilation: '-shared' \
+                      [-Wunused-command-line-argument]\n";
+        let rows: &[(&[&str], String, i32)] = &[
+            (&["/clang:-ffoo"], warning("-ffoo"), 0),
+            (&["/clang:-mfoo=1"], warning("-mfoo=1"), 0),
+            (&["/clang:--bogus"], warning("--bogus"), 0),
+            (
+                &["/clang:-ffoo", "/clang:-ffoo"],
+                warning("-ffoo").repeat(2),
+                0,
+            ),
+            (&["/clang:"], String::new(), 0),
+            (&["/clang:-Xclang"], missing("-Xclang", "1 value"), 1),
+            (&["/clang:-target"], missing("-target", "1 value"), 1),
+            (
+                &["/clang:-sectcreate", "/clang:a"],
+                missing("-sectcreate", "3 values"),
+                1,
+            ),
+            (
+                &["/clang:-ffoo", "/clang:-o"],
+                [missing("-o", "1 value"), warning("-ffoo")].concat(),
+                1,
+            ),
+            (
+                &["/clang:-ffoo", "-fbar"],
+                [warning("-fbar"), warning("-ffoo")].concat(),
+                0,
+            ),
+            (&["/w", "/clang:-ffoo"], String::new(), 0),
+            (&["/clang:-w", "/clang:-ffoo"], warning("-ffoo"), 0),
+            (
+                &["/WX", "/clang:-ffoo"],
+                "clang-cl: error: unknown argument ignored in clang-cl: '-ffoo' \
+                 [-Werror,-Wunknown-argument]\n"
+                    .into(),
+                1,
+            ),
+            (
+                &["/clang:-fbuiltin-"],
+                "clang-cl: warning: unknown argument ignored in clang-cl '-fbuiltin-'; did you \
+                 mean '-fbuiltin'? [-Wunknown-argument]\n"
+                    .into(),
+                0,
+            ),
+            (&["/clang:-D", "/clang:X", "/clang:-O2"], String::new(), 0),
+            (&["/clang:-dM"], String::new(), 0),
+            (&["/clang:-shared"], unused.into(), 0),
+            // Bare, an option neither clang-cl nor bcc knows is ignored,
+            // and one of Clang's takes its value from the next argument.
+            (&["--bogus"], warning("--bogus"), 0),
+            (&["-ffoo"], warning("-ffoo"), 0),
+            (&["-Xclang"], missing("-Xclang", "1 value"), 1),
+        ];
+        let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/llvm/bin/clang");
+        for (options, expected, status) in rows {
+            let mut args = vec!["/c", "/Fo:a.obj", "a.c"];
+            args.extend(*options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(&stderr(&output), expected, "{options:?}");
+            assert_eq!(output.status.code(), Some(*status), "{options:?}");
+            if clang.exists() {
+                let reference = Command::new(&clang)
+                    .arg("--driver-mode=cl")
+                    .args(&args)
+                    .current_dir(&directory.0)
+                    .output()
+                    .unwrap();
+                let text = stderr(&reference).replace("clang: ", "clang-cl: ");
+                assert_eq!(&text, expected, "clang-cl {options:?}");
+                assert_eq!(
+                    reference.status.code(),
+                    Some(*status),
+                    "clang-cl {options:?}"
+                );
+            }
+        }
+    }
+
     /// The GCC-style options clang-cl ignores bcc ignores too, rather than
     /// honoring them: `-ffreestanding` leaves the hosted environment,
     /// `-std=c11` the C17 default and `-funsafe-math-optimizations` the

@@ -325,6 +325,26 @@ fn clang_complains_about_warning_options_in_its_own_words() {
 }
 
 #[test]
+fn personalities_learn_how_bccs_command_line_reads_an_option() {
+    for (options, stage, reading) in [
+        (&["-O2"][..], "-c", OptionReading::Read),
+        (&["-o", "x.obj"], "-c", OptionReading::Read),
+        (&["-D", "X"], "-c", OptionReading::Read),
+        (&["-funsigned-char"], "-c", OptionReading::Read),
+        // bcc's own option, which writes what `-c` would.
+        (&["--emit=ir"], "-c", OptionReading::Conflicts),
+        (&["-dM"], "-E", OptionReading::Read),
+        (&["-dM"], "-c", OptionReading::Inert),
+        (&["-shared"], "-c", OptionReading::Conflicts),
+        (&["-ffoo"], "-c", OptionReading::Refused),
+        (&["--bogus"], "-c", OptionReading::Refused),
+        (&["-Xclang", "-O2"], "-c", OptionReading::Refused),
+    ] {
+        assert_eq!(read_options(options, stage), reading, "{options:?} {stage}");
+    }
+}
+
+#[test]
 #[expect(
     clippy::disallowed_types,
     reason = "Startup argv tests use owned OS strings as clap does."

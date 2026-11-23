@@ -15,6 +15,10 @@
 //! ignores with the warning `unknown argument ignored in clang-cl`, are
 //! frozen from the pinned Clang's clang-cl and from icx-cl 2026.2.0 in
 //! `options/clang-cl-unknown.list` and `options/icx-cl-unknown.list`.
+//!
+//! The options Clang's own driver takes besides its `-W`, `-f` and `-m`
+//! flags, and those whose bare name takes the next arguments as values,
+//! are frozen from the pinned Clang in `options/clang-driver.list`.
 
 /// Which compiler's names to look in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -211,6 +215,50 @@ pub(super) fn cl_unknown_option(argument: &str, intel: bool) -> Option<ClUnknown
     Some(ClUnknown { nearest })
 }
 
+/// How Clang's own driver reads an argument that starts with `-`, as its
+/// option table (LLVM's `OptTable`) matches it with every Clang option
+/// visible, which is how clang-cl reads its `/clang:` options.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClangOption {
+    /// The argument is the whole option: a flag, or an option with its
+    /// value joined (`-DX`, `-std=c11`).
+    Whole,
+    /// The bare name of an option that takes this many values from the
+    /// next arguments (`-Xclang`, `-o`, `-sectcreate`).
+    TakesNext(usize),
+}
+
+/// How the pinned Clang's driver reads `argument`, one that starts with
+/// `-`, or `None` if it takes no such option and so ignores it with
+/// clang-cl's warning `unknown argument ignored in clang-cl`. Its front end
+/// reads every `-W` option, warning about those it does not know; the `-f`
+/// and `-m` flags are the ones [`knows`] names. The bare name of an option
+/// with separate values takes them even where the option also joins one
+/// (`-o`, `-D`); an entry that joins a value matches any argument it
+/// begins.
+pub(super) fn clang_option(argument: &str) -> Option<ClangOption> {
+    let mut known = argument.starts_with("-W") || knows(Compiler::Clang, argument);
+    for line in include_str!("options/clang-driver.list")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+    {
+        let mut words = line.split(' ');
+        let (Some(kind), Some(name)) = (words.next(), words.next()) else {
+            continue;
+        };
+        match kind {
+            | "separate" if name == argument => {
+                let count = words.next().and_then(|count| count.parse().ok());
+                return Some(ClangOption::TakesNext(count.unwrap_or(1)));
+            },
+            | "flag" => known |= name == argument,
+            | "joined" => known |= argument.starts_with(name),
+            | _ => {},
+        }
+    }
+    known.then_some(ClangOption::Whole)
+}
+
 /// The Levenshtein distance between `a` and `b`, in bytes, as LLVM's
 /// `StringRef::edit_distance` counts it with replacements allowed.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -313,6 +361,35 @@ mod tests {
             nearest("-ffreestanding", true).as_deref(),
             Some("-Qfreestanding")
         );
+    }
+
+    #[test]
+    fn clang_reads_its_options_values_as_its_option_table_does() {
+        for (argument, read) in [
+            ("-Xclang", Some(ClangOption::TakesNext(1))),
+            ("-o", Some(ClangOption::TakesNext(1))),
+            ("-D", Some(ClangOption::TakesNext(1))),
+            ("-target", Some(ClangOption::TakesNext(1))),
+            ("-mllvm", Some(ClangOption::TakesNext(1))),
+            ("-sectcreate", Some(ClangOption::TakesNext(3))),
+            ("-DX=1", Some(ClangOption::Whole)),
+            ("-ofile.o", Some(ClangOption::Whole)),
+            ("-std=c11", Some(ClangOption::Whole)),
+            ("-O2", Some(ClangOption::Whole)),
+            ("-c", Some(ClangOption::Whole)),
+            ("-ffreestanding", Some(ClangOption::Whole)),
+            ("-mavx2", Some(ClangOption::Whole)),
+            ("-Wno-such-warning", Some(ClangOption::Whole)),
+            ("--target=x86_64-linux-gnu", Some(ClangOption::Whole)),
+            // Clang takes none of these.
+            ("-ffoo", None),
+            ("-mfoo", None),
+            ("--bogus", None),
+            ("-cfoo", None),
+            ("-Xclangx", None),
+        ] {
+            assert_eq!(clang_option(argument), read, "{argument}");
+        }
     }
 
     #[test]

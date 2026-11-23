@@ -129,6 +129,50 @@ fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
     run_driver(&args, &matches).map_err(|error| driver::report_error(&args, error))
 }
 
+/// How bcc's own command line reads an option a driver personality would
+/// pass it, with its values, beside the stage option of the step
+/// (`-c`, `-E`), as clap decides, so that a personality hands bcc only
+/// arguments its parser takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OptionReading {
+    /// bcc reads it.
+    Read,
+    /// bcc knows it, and refuses it beside the stage (`-shared` beside
+    /// `-c`).
+    Conflicts,
+    /// bcc knows it only beside another stage (`-dM` beside `-E`).
+    Inert,
+    /// bcc does not take it.
+    Refused,
+}
+
+/// How bcc's command line reads `options` beside `stage` ([`OptionReading`]).
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap reads its arguments as owned strings."
+)]
+fn read_options(options: &[&str], stage: &str) -> OptionReading {
+    use clap::error::ErrorKind;
+    let arguments = std::iter::once("bcc-rust")
+        .chain(options.iter().copied())
+        .chain([stage, "--input=", "--"])
+        .map(std::ffi::OsString::from);
+    let Ok(arguments) = normalize_language_arguments(arguments) else {
+        return OptionReading::Refused;
+    };
+    match Cli::command().try_get_matches_from(arguments) {
+        | Ok(_) => OptionReading::Read,
+        | Err(error) => match error.kind() {
+            | ErrorKind::ArgumentConflict => OptionReading::Conflicts,
+            | ErrorKind::MissingRequiredArgument => OptionReading::Inert,
+            | ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => OptionReading::Read,
+            | _ => OptionReading::Refused,
+        },
+    }
+}
+
 /// Runs bcc's driver on the parsed command line.
 fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> {
     if let Some(option) = args.unsupported_relocation_flag() {

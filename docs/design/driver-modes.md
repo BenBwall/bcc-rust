@@ -1507,6 +1507,43 @@ Clang does: `/clang:-ffreestanding` makes the environment freestanding,
 and `/fp:fast /clang:-fno-fast-math` gives up `/fp:fast`, where a bare
 `-fno-fast-math` keeps it.
 
+clang-cl parses the `/clang:` arguments after all the others as a Clang
+command line of their own, with every Clang option visible
+(`Driver::BuildCompilation`), and the personality reads them the same way,
+with the options the pinned Clang's driver takes frozen in
+`personality/options/clang-driver.list` by
+`scripts/update_driver_options.py --clang-driver --options-td`:
+
+- An empty one is nothing, and one that does not start with `-` (or is
+  `-`) is an input (`/clang:b.c`).
+- An option's bare name takes its values from the next `/clang:`
+  arguments (`/clang:-D /clang:X`, `/clang:-sectcreate` takes three).
+  Without them it is clang-cl's `argument to '-Xclang' is missing
+  (expected 1 value)`, status 1, reported before the warnings below.
+- An option Clang does not take (`/clang:-ffoo`, `/clang:--bogus`) is
+  ignored with `unknown argument ignored in clang-cl` and the option
+  clang-cl suggests, after those of the main command line, whose warning
+  options decide its severity as above.
+- bcc reads an option its own command line takes beside the step's `-c`
+  or `-E`; `-fsyntax-only`, `-c` and `-E` are `/Zs`, `/c` and `/E`, and
+  `-###` prints the version and runs nothing. An option the step leaves
+  unused is dropped, with Clang's `argument unused during compilation:
+  '-shared'` where bcc's command line refuses it beside the step, and
+  silently where it only needs another stage (`-dM` without `-E`). Any
+  other Clang option bcc does not implement is treated as the Clang
+  personality treats it (`'-Xclang -O2' is not supported`), so no `/clang:`
+  option reaches bcc's command line unread.
+
+A bare `-` option that neither clang-cl's lists nor bcc's command line
+knows is ignored the same way (`--bogus`), and a bare Clang option takes
+its values from the next arguments (`-Xclang` alone is the missing-value
+error). Until the ignored GCC optimization flags are listed
+(`-fgcse`), clang-cl's `optimization flag '-fgcse' is not supported` for
+`/clang:-fgcse` comes out as the unknown-argument warning; other
+remaining differences are `/clang:-Wl,`, which Clang hands the linker and
+bcc's front end calls an unknown warning option, and `/clang:-E`, `-v` and
+`-help`, which print bcc's text.
+
 The warning is clang-cl's, byte for byte: `clang-cl: warning: unknown
 argument ignored in clang-cl: '-fsigned-char' [-Wunknown-argument]`, or
 with the option clang-cl's option table finds one edit away, `unknown

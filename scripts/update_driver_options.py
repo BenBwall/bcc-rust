@@ -22,6 +22,13 @@ not take. --clang-cl-unknown asks the pinned Clang's clang-cl about each
 option the GCC and Clang lists name, and --icx-cl asks the icx-cl given; they
 write only those lists. Their options come from the frozen GCC and Clang
 lists, GCC's other `--help` options and Clang's `--autocomplete=-`.
+
+clang-cl hands its `/clang:` options to Clang's own option table, where an
+option may take its value from the next arguments. --clang-driver asks the
+pinned Clang's driver about every option `--autocomplete=-`, GCC's `--help`
+and the `Options.td` given with --options-td name, and writes the options it
+takes besides its `-W`, `-f` and `-m` flags, and those that take a separate
+value; it writes only that list.
 """
 import argparse
 from pathlib import Path
@@ -250,6 +257,81 @@ def cl_unknown_options(driver, label, option, candidates):
     )
 
 
+MISSING_VALUE = re.compile(r"argument to '(?P<name>.*)' is missing \(expected (?P<count>\d+) values?\)")
+TD_SPELLING = re.compile(r'<\[((?:"-{1,2}",?\s*)+)\],\s*"([^"]+)"')
+
+
+def clang_driver_options(gcc, options_td):
+    """The options the pinned Clang's own driver takes (Clang's option table,
+    as `Driver::ParseArgStrings` reads it without clang-cl's visibility), as
+    `KIND NAME` lines, besides the `-W`, `-f` and `-m` flags the other lists
+    name: a `flag` is the name alone, a `joined` option takes text after its
+    name, and `separate N` names one whose bare name takes the next N
+    arguments as its values, which the `-f` and `-m` options among them are
+    listed for too. An option that is both is listed twice. The candidates
+    are `--autocomplete=-`, which leaves out the aliases (`-target`), the
+    spellings in `Options.td` and GCC's options."""
+    import concurrent.futures
+    import tempfile
+
+    result = subprocess.run([str(CLANG), "--autocomplete=-"], capture_output=True, text=True, check=True)
+    names = {line.split("\t", 1)[0].strip() for line in result.stdout.splitlines()}
+    for match in TD_SPELLING.finditer(Path(options_td).read_text()):
+        for prefix in re.findall(r'"(-{1,2})"', match.group(1)):
+            names.add(prefix + match.group(2))
+    names.update(gcc_options(gcc))
+    names = sorted(
+        name
+        for name in names
+        if name.startswith("-")
+        and len(name) > 1
+        and not name.startswith("-W")
+        and not name.startswith(("-cc1", "--driver-mode"))
+        and " " not in name
+    )
+
+    with tempfile.TemporaryDirectory() as scratch:
+        directory = Path(scratch)
+        (directory / "a.c").write_text("int main(void) { return 0; }\n")
+
+        def unknown(argument):
+            result = subprocess.run(
+                [str(CLANG), "-###", "-c", str(directory / "a.c"), argument],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                timeout=60,
+            )
+            refused = (f"unknown argument: '{argument}'", f"unknown argument '{argument}';")
+            return any(text in result.stderr for text in refused), result.stderr
+
+        def survey(name):
+            refused, stderr = unknown(name)
+            lines = []
+            for match in MISSING_VALUE.finditer(stderr):
+                if match.group("name") == name:
+                    lines.append(f"separate {name} {match.group('count')}")
+            if name.startswith(("-f", "-m")):
+                return lines
+            if not lines and not refused:
+                lines.append(f"flag {name}")
+            if not refused or lines:
+                joined, _ = unknown(f"{name}Zq")
+                if not joined:
+                    lines = [line for line in lines if not line.startswith("flag ")]
+                    lines.append(f"joined {name}")
+            return lines
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(survey, names))
+    lines = sorted({line for entry in results for line in entry}, key=lambda line: (line.split(" ")[1], line))
+    return (
+        "# pinned Clang's driver: its options besides the -W, -f and -m flags, and those taking separate values; "
+        "regenerate with scripts/update_driver_options.py --clang-driver --options-td\n"
+        + "".join(f"{line}\n" for line in lines)
+    )
+
+
 def unknown_option_candidates(gcc):
     """Every option name GCC or the pinned Clang lists, a value cut off at
     its `=`: the frozen `-f` and `-m` lists, GCC's other options from its
@@ -301,9 +383,18 @@ def main():
         help="survey the options the pinned Clang's clang-cl ignores as unknown",
     )
     parser.add_argument("--icx-cl", help="an icx-cl to survey the same way, as --clang-cl-unknown does")
+    parser.add_argument(
+        "--clang-driver",
+        action="store_true",
+        help="survey the options the pinned Clang's driver takes (needs --options-td)",
+    )
     args = parser.parse_args()
     files = {}
-    if args.clang_cl_unknown or args.icx_cl:
+    if args.clang_driver:
+        if not args.options_td:
+            parser.error("--clang-driver needs --options-td")
+        files["clang-driver.list"] = clang_driver_options(args.gcc, args.options_td)
+    elif args.clang_cl_unknown or args.icx_cl:
         # A survey of its own, against the frozen GCC and Clang lists.
         candidates = unknown_option_candidates(args.gcc)
         if args.clang_cl_unknown:

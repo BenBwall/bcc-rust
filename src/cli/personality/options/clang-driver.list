@@ -1,0 +1,870 @@
+# pinned Clang's driver: its options besides the -W, -f and -m flags, and those taking separate values; regenerate with scripts/update_driver_options.py --clang-driver --options-td
+flag -###
+separate --CLASSPATH 1
+joined --CLASSPATH=
+flag --all-warnings
+joined --amdgpu-arch-tool=
+flag --analyze
+flag --analyzer-no-default-checks
+joined --analyzer-output
+separate --analyzer-output 1
+flag --ansi
+flag --assemble
+separate --assert 1
+joined --assert=
+joined --autocomplete=
+separate --bootclasspath 1
+joined --bootclasspath=
+separate --classpath 1
+joined --classpath=
+flag --combine
+flag --comments
+flag --comments-in-macros
+flag --compile
+separate --config 1
+joined --config-system-dir=
+joined --config-user-dir=
+joined --config=
+flag --constant-cfstrings
+flag --coverage
+separate --cstdlib 1
+joined --cstdlib=
+flag --cuda-compile-host-device
+flag --cuda-device-only
+joined --cuda-feature=
+joined --cuda-gpu-arch=
+flag --cuda-host-only
+joined --cuda-include-ptx=
+flag --cuda-noopt-device-debug
+flag --cuda-path-ignore-env
+joined --cuda-path=
+flag --debug
+joined --debug=
+separate --define-macro 1
+joined --define-macro=
+flag --dependencies
+joined --dxv-path=
+separate --dyld-prefix 1
+joined --dyld-prefix=
+joined --embed-dir=
+flag --emit-extension-symbol-graphs
+flag --emit-static-lib
+separate --encoding 1
+joined --encoding=
+flag --end-no-unused-arguments
+flag --entry
+separate --extdirs 1
+joined --extdirs=
+flag --extra-warnings
+joined --extract-api-ignores=
+joined --fmultilib-flag=
+separate --for-linker 1
+joined --for-linker=
+separate --force-link 1
+joined --force-link=
+joined --gcc-install-dir=
+joined --gcc-toolchain=
+joined --gcc-triple=
+flag --gpu-bundle-output
+joined --gpu-instrument-lib=
+joined --gpu-max-threads-per-block=
+flag --gpu-use-aux-triple-only
+flag --help
+flag --help-hidden
+joined --hip-device-lib-path=
+joined --hip-device-lib=
+flag --hip-link
+joined --hip-path=
+joined --hip-version=
+joined --hipspv-pass-plugin=
+flag --hipstdpar
+flag --hipstdpar-interpose-alloc
+joined --hipstdpar-path=
+joined --hipstdpar-prim-path=
+joined --hipstdpar-thrust-path=
+joined --imacros
+separate --imacros 1
+joined --imacros=
+joined --include
+separate --include 1
+joined --include-barrier
+joined --include-directory
+separate --include-directory 1
+joined --include-directory-after
+separate --include-directory-after 1
+joined --include-directory-after=
+joined --include-directory=
+joined --include-prefix
+separate --include-prefix 1
+joined --include-prefix=
+joined --include-with-prefix
+separate --include-with-prefix 1
+joined --include-with-prefix-after
+separate --include-with-prefix-after 1
+joined --include-with-prefix-after=
+joined --include-with-prefix-before
+separate --include-with-prefix-before 1
+joined --include-with-prefix-before=
+joined --include-with-prefix=
+joined --include=
+separate --language 1
+joined --language=
+joined --ld-path=
+joined --libclc-lib=
+joined --libomptarget-amdgcn-bc-path=
+joined --libomptarget-amdgpu-bc-path=
+joined --libomptarget-nvptx-bc-path=
+joined --libomptarget-spirv-bc-path=
+separate --library-directory 1
+joined --library-directory=
+separate --mhwdiv 1
+joined --mhwdiv=
+joined --multi-lib-config=
+joined --no-cuda-gpu-arch=
+joined --no-cuda-include-ptx=
+flag --no-cuda-noopt-device-debug
+flag --no-cuda-version-check
+flag --no-default-config
+flag --no-gpu-bundle-output
+flag --no-integrated-cpp
+flag --no-line-commands
+flag --no-offload-add-rpath
+joined --no-offload-arch=
+flag --no-offload-compress
+flag --no-offload-inc
+flag --no-offload-new-driver
+flag --no-offloadlib
+flag --no-pedantic
+flag --no-standard-includes
+flag --no-standard-libraries
+separate --no-system-header-prefix 1
+joined --no-system-header-prefix=
+flag --no-undefined
+flag --no-warnings
+flag --no-wasm-opt
+flag --no-xcselect
+joined --nvptx-arch-tool=
+flag --offload-add-rpath
+joined --offload-arch-tool=
+joined --offload-arch=
+flag --offload-compress
+joined --offload-compression-level=
+flag --offload-device-only
+flag --offload-host-device
+flag --offload-host-only
+flag --offload-inc
+joined --offload-jobs=
+flag --offload-link
+flag --offload-new-driver
+joined --offload-targets=
+joined --offload=
+flag --offloadlib
+flag --optimize
+joined --optimize=
+separate --output 1
+separate --output-class-directory 1
+joined --output-class-directory=
+joined --output=
+separate --param 1
+joined --param=
+flag --pass-exit-codes
+flag --pedantic
+flag --pedantic-errors
+flag --pipe
+flag --precompile
+flag --precompile-reduced-bmi
+separate --prefix 1
+joined --prefix=
+flag --preprocess
+flag --pretty-sgf
+flag --print-diagnostic-categories
+flag --print-diagnostic-options
+flag --print-effective-triple
+flag --print-enabled-extensions
+separate --print-file-name 1
+joined --print-file-name=
+flag --print-libgcc-file-name
+flag --print-library-module-manifest-path
+flag --print-missing-file-dependencies
+flag --print-multi-directory
+flag --print-multi-flags-experimental
+flag --print-multi-lib
+flag --print-multi-os-directory
+flag --print-multiarch
+separate --print-prog-name 1
+joined --print-prog-name=
+flag --print-resource-dir
+flag --print-rocm-search-dirs
+flag --print-runtime-dir
+flag --print-search-dirs
+flag --print-supported-cpus
+flag --print-supported-extensions
+flag --print-target-triple
+flag --print-targets
+joined --product-name=
+flag --profile
+joined --ptxas-path=
+flag --relocatable-pch
+separate --resource 1
+joined --resource=
+joined --rocm-device-lib-path=
+joined --rocm-path=
+joined --rsp-quoting=
+separate --rtlib 1
+joined --rtlib=
+flag --save-stats
+joined --save-stats=
+flag --save-temps
+joined --save-temps=
+separate --serialize-diagnostics 1
+flag --shared
+flag --signed-char
+separate --specs 1
+joined --specs=
+joined --spirv-val-path=
+joined --ssaf-compilation-unit-id=
+joined --ssaf-extract-summaries=
+flag --ssaf-include-local-entities
+flag --ssaf-list-extractors
+flag --ssaf-list-formats
+joined --ssaf-tu-summary-file=
+flag --start-no-unused-arguments
+flag --static
+separate --std 1
+joined --std=
+separate --stdlib 1
+joined --stdlib=
+flag --sycl-link
+joined --symbol-graph-dir=
+separate --sysroot 1
+joined --sysroot=
+separate --system-header-prefix 1
+joined --system-header-prefix=
+flag --target-help
+joined --target=
+flag --trace-includes
+flag --traditional
+flag --traditional-cpp
+flag --trigraphs
+separate --undefine-macro 1
+joined --undefine-macro=
+flag --unsigned-char
+joined --unwindlib=
+flag --user-dependencies
+flag --verbose
+flag --verify-debug-info
+flag --version
+joined --vfsoverlay
+separate --vfsoverlay 1
+flag --via-file-asm
+joined --warn-
+joined --warn-=
+joined --warning-suppression-mappings=
+flag --wasm-opt
+flag --write-dependencies
+flag --write-user-dependencies
+joined -A
+separate -A 1
+joined -A-
+joined -B
+separate -B 1
+flag -C
+flag -CC
+joined -D
+separate -D 1
+flag -E
+flag -EB
+flag -EL
+joined -F
+separate -F 1
+joined -G
+separate -G 1
+joined -G=
+flag -H
+joined -I
+separate -I 1
+joined -I-
+flag -K
+joined -L
+separate -L 1
+flag -M
+flag -MD
+joined -MF
+separate -MF 1
+flag -MG
+joined -MJ
+separate -MJ 1
+flag -MM
+flag -MMD
+flag -MP
+joined -MQ
+separate -MQ 1
+joined -MT
+separate -MT 1
+flag -MV
+flag -Mach
+joined -O
+joined -O0
+joined -O4
+joined -ObjC
+joined -ObjC++
+joined -Ofast
+joined -Og
+joined -Os
+joined -Oz
+flag -P
+flag -Q
+flag -Qn
+flag -Qunused-arguments
+flag -Qy
+joined -R
+joined -Rpass-analysis=
+joined -Rpass-missed=
+joined -Rpass=
+flag -S
+joined -T
+separate -T 1
+joined -U
+separate -U 1
+joined -V
+separate -V 1
+flag -X
+separate -Xanalyzer 1
+joined -Xarch_
+separate -Xarch_ 1
+joined -Xarch_device
+separate -Xarch_device 1
+joined -Xarch_host
+separate -Xarch_host 1
+separate -Xassembler 1
+separate -Xclang 1
+joined -Xclang=
+separate -Xclangas 1
+joined -Xclangas=
+flag -Xcompiler
+separate -Xcuda-fatbinary 1
+separate -Xcuda-ptxas 1
+separate -Xlinker 1
+separate -Xmicrosoft-visualc-tools-root 1
+separate -Xmicrosoft-visualc-tools-version 1
+separate -Xmicrosoft-windows-sdk-root 1
+separate -Xmicrosoft-windows-sdk-version 1
+separate -Xmicrosoft-windows-sys-root 1
+joined -Xoffload-compiler
+separate -Xoffload-compiler 1
+joined -Xoffload-linker
+separate -Xoffload-linker 1
+separate -Xopenmp-target 1
+joined -Xopenmp-target=
+separate -Xopenmp-target= 1
+flag -Xparser
+separate -Xpreprocessor 1
+joined -Xthinlto-distributor=
+flag -Z
+flag -Z-Xlinker-no-demangle
+flag -Z-reserved-lib-cckext
+flag -Z-reserved-lib-stdc++
+separate -Zlinker-input 1
+separate -alias_list 1
+flag -all_load
+separate -allowable_client 1
+flag -ansi
+separate -arch 1
+flag -arch_errors_fatal
+separate -arch_only 1
+joined -b
+separate -b 1
+joined -bind_at_load
+joined -building-pch-with-obj
+joined -bundle
+joined -bundle_loader
+separate -bundle_loader 1
+flag -c
+flag -canonical-prefixes
+joined -ccc-
+joined -ccc-gcc-name
+separate -ccc-gcc-name 1
+joined -ccc-install-dir
+separate -ccc-install-dir 1
+joined -ccc-print-bindings
+joined -ccc-print-phases
+flag -cl-denorms-are-zero
+joined -cl-ext=
+flag -cl-fast-relaxed-math
+flag -cl-finite-math-only
+flag -cl-fp32-correctly-rounded-divide-sqrt
+flag -cl-kernel-arg-info
+flag -cl-mad-enable
+flag -cl-no-signed-zeros
+flag -cl-no-stdinc
+flag -cl-opt-disable
+flag -cl-single-precision-constant
+joined -cl-std=
+flag -cl-strict-aliasing
+flag -cl-uniform-work-group-size
+flag -cl-unsafe-math-optimizations
+flag -clangir-disable-passes
+flag -clangir-disable-verifier
+flag -clangir-enable-idiom-recognizer
+flag -clangir-lib-opt
+joined -clangir-lib-opt=
+joined -client_name
+separate -client_name 1
+flag -combine
+joined -compatibility_version
+separate -compatibility_version 1
+flag -coverage
+flag -cpp-precomp
+joined -cuid=
+joined -current_version
+separate -current_version 1
+joined -cxx-isystem
+separate -cxx-isystem 1
+joined -d
+joined -dA
+joined -dD
+joined -dE
+joined -dI
+joined -dM
+joined -darwin-target-variant
+separate -darwin-target-variant 1
+joined -darwin-target-variant-sdk-version=
+joined -darwin-target-variant-triple
+separate -darwin-target-variant-triple 1
+joined -dead_strip
+joined -debug-forward-template-params
+joined -debug-info-kind=
+joined -debug-info-macro
+joined -debug-info-macro-expansion-loc
+joined -debugger-tuning=
+joined -default-function-attr
+joined -dependency-dot
+separate -dependency-dot 1
+joined -dependency-file
+separate -dependency-file 1
+joined -detailed-preprocessing-record
+joined -diagnostic-log-file
+joined -disable-O0-optnone
+joined -disable-lifetime-markers
+joined -disable-llvm-optzns
+joined -disable-llvm-passes
+joined -disable-llvm-verifier
+joined -disable-objc-default-synthesize-properties
+joined -disable-pragma-debug-crash
+joined -disable-red-zone
+joined -discard-value-names
+joined -dsym-dir
+separate -dsym-dir 1
+joined -dump-coverage-mapping
+joined -dump-deserialized-decls
+joined -dump-minimization-hints=
+joined -dump-raw-tokens
+joined -dump-tokens
+joined -dumpbase
+joined -dumpbase-ext
+joined -dumpdir
+separate -dumpdir 1
+joined -dumpmachine
+joined -dumpspecs
+joined -dumpversion
+joined -dwarf-debug-flags
+joined -dwarf-debug-producer
+joined -dwarf-explicit-import
+joined -dwarf-ext-refs
+joined -dwarf-version=
+joined -dylib_file
+separate -dylib_file 1
+joined -dylinker
+joined -dylinker_install_name
+separate -dylinker_install_name 1
+joined -dynamic
+joined -dynamiclib
+separate -e 1
+flag -emit-ast
+flag -emit-cir
+flag -emit-interface-stubs
+flag -emit-llvm
+flag -emit-merged-ifs
+flag -emit-symbol-graph
+separate -exported_symbols_list 1
+flag -extract-api
+separate -fdebug-compilation-dir 1
+separate -fexperimental-openacc-macro-override 1
+separate -filelist 1
+separate -fmodule-implementation-of 1
+separate -fmodules-user-build-path 1
+separate -fnew-alignment 1
+separate -force_load 1
+separate -framework 1
+separate -ftrapv-handler 1
+flag -g
+flag -g0
+flag -g1
+flag -g2
+flag -g3
+flag -gcall-site-info
+flag -gcodeview
+flag -gcodeview-command-line
+flag -gcodeview-ghash
+joined -gcoff
+joined -gcoff1
+joined -gcoff2
+joined -gcoff3
+flag -gcolumn-info
+flag -gdbx
+flag -gdwarf
+flag -gdwarf-2
+flag -gdwarf-3
+flag -gdwarf-4
+flag -gdwarf-5
+flag -gdwarf-6
+flag -gdwarf-aranges
+flag -gdwarf32
+flag -gdwarf64
+flag -gembed-source
+separate -gen-cdb-fragment-path 1
+flag -gen-reproducer
+joined -gen-reproducer=
+flag -gfull
+flag -ggdb
+flag -ggdb0
+flag -ggdb1
+flag -ggdb2
+flag -ggdb3
+flag -ggnu-pubnames
+flag -ginline-line-tables
+flag -gkey-instructions
+flag -gline-directives-only
+flag -gline-tables-only
+flag -glldb
+flag -gmlt
+flag -gmodules
+flag -gno-call-site-info
+flag -gno-codeview-command-line
+flag -gno-codeview-ghash
+flag -gno-column-info
+flag -gno-embed-source
+flag -gno-gnu-pubnames
+flag -gno-inline-line-tables
+flag -gno-key-instructions
+flag -gno-modules
+flag -gno-omit-unreferenced-methods
+flag -gno-pubnames
+flag -gno-record-command-line
+flag -gno-record-gcc-switches
+flag -gno-simple-template-names
+flag -gno-split-dwarf
+flag -gno-strict-dwarf
+flag -gno-structor-decl-linkage-names
+flag -gno-template-alias
+flag -gomit-unreferenced-methods
+flag -gpubnames
+flag -gpulibc
+flag -grecord-command-line
+flag -grecord-gcc-switches
+flag -gsce
+flag -gsimple-template-names
+flag -gsplit-dwarf
+joined -gsplit-dwarf=
+joined -gstabs
+joined -gstabs+
+flag -gstrict-dwarf
+flag -gstructor-decl-linkage-names
+flag -gtemplate-alias
+flag -gtoggle
+flag -gused
+joined -gvms
+joined -gxcoff
+joined -gxcoff+
+flag -gz
+joined -gz=
+joined -headerpad_max_install_names
+flag -help
+flag -hlsl-all-resources-bound
+separate -hlsl-entry 1
+joined -iapinotes-modules
+separate -iapinotes-modules 1
+flag -ibuiltininc
+joined -idirafter
+separate -idirafter 1
+joined -iframework
+separate -iframework 1
+joined -iframeworkwithsysroot
+separate -iframeworkwithsysroot 1
+flag -ignore-pch
+joined -imacros
+separate -imacros 1
+separate -image_base 1
+separate -imultilib 1
+joined -include
+separate -include 1
+joined -include-pch
+separate -include-pch 1
+separate -init 1
+joined -inline-asm=
+separate -install_name 1
+flag -integrated-as
+joined -interface-stub-version=
+separate -interface-stub-version= 1
+joined -iprefix
+separate -iprefix 1
+joined -iquote
+separate -iquote 1
+joined -isysroot
+separate -isysroot 1
+joined -isystem
+separate -isystem 1
+joined -isystem-after
+separate -isystem-after 1
+joined -ivfsoverlay
+separate -ivfsoverlay 1
+joined -iwithprefix
+separate -iwithprefix 1
+joined -iwithprefixbefore
+separate -iwithprefixbefore 1
+joined -iwithsysroot
+separate -iwithsysroot 1
+flag -keep_private_externs
+joined -l
+separate -l 1
+joined -lang-asm
+joined -lazy_framework
+separate -lazy_framework 1
+joined -lazy_library
+separate -lazy_library 1
+joined -lifetime-safety-lifetimebound-macro=
+joined -lifetime-safety-max-cfg-blocks=
+joined -llvm-verify-each
+joined -load
+joined -load-bool-from-mem=
+joined -loader-replaceable-function=
+separate -meabi 1
+separate -mllvm 1
+separate -mmlir 1
+separate -module-dependency-dir 1
+separate -mthread-model 1
+separate -multiply_defined 1
+separate -multiply_defined_unused 1
+flag -no-canonical-prefixes
+flag -no-cpp-precomp
+flag -no-hip-rt
+flag -no-integrated-as
+flag -no-integrated-cpp
+flag -no-pedantic
+flag -no-pie
+flag -no-pthread
+flag -no-use-spirv-backend
+flag -no_dead_strip_inits_and_terms
+flag -nobuiltininc
+flag -nocudainc
+flag -nocudalib
+flag -nodefaultlibs
+flag -nodriverkitlib
+flag -nofixprebinding
+flag -nogpuinc
+flag -nogpulib
+flag -nogpulibc
+flag -nohipwrapperinc
+flag -nolibc
+flag -nolibsycl
+flag -nomultidefs
+flag -nopie
+flag -noprebind
+flag -noprofilelib
+flag -noseglinkedit
+flag -nostartfiles
+flag -nostdinc
+flag -nostdinc++
+flag -nostdlib
+flag -nostdlib++
+flag -nostdlibinc
+joined -o
+separate -o 1
+joined -objc-isystem
+joined -objcxx-isystem
+joined -object
+joined -object-file-name
+separate -object-file-name 1
+joined -object-file-name=
+joined -opt-record-file
+joined -opt-record-format
+joined -opt-record-passes
+flag -p
+joined -pagezero_size
+separate -pagezero_size 1
+flag -pass-exit-codes
+flag -pedantic
+flag -pedantic-errors
+flag -pg
+flag -pie
+flag -pipe
+flag -prebind
+flag -prebind_all_twolevel_modules
+flag -preload
+flag -print-diagnostic-options
+flag -print-effective-triple
+flag -print-enabled-extensions
+joined -print-file-name=
+flag -print-ivar-layout
+flag -print-libgcc-file-name
+flag -print-library-module-manifest-path
+flag -print-multi-directory
+flag -print-multi-flags-experimental
+flag -print-multi-lib
+flag -print-multi-os-directory
+flag -print-multiarch
+joined -print-prog-name=
+flag -print-resource-dir
+flag -print-rocm-search-dirs
+flag -print-runtime-dir
+flag -print-search-dirs
+flag -print-supported-cpus
+flag -print-supported-extensions
+flag -print-target-triple
+flag -print-targets
+flag -private_bundle
+flag -pthread
+flag -pthreads
+flag -r
+flag -rdynamic
+separate -read_only_relocs 1
+joined -reexport-l
+separate -reexport_framework 1
+joined -reexport_library
+separate -reexport_library 1
+flag -regcall4
+flag -relocatable-pch
+flag -remap
+flag -res-may-alias
+separate -resource-dir 1
+joined -resource-dir=
+flag -rewrite-legacy-objc
+flag -rewrite-objc
+separate -rpath 1
+joined -rtlib=
+flag -s
+flag -save-stats
+joined -save-stats=
+flag -save-temps
+joined -save-temps=
+separate -sectalign 3
+separate -sectcreate 3
+separate -sectobjectsymbols 2
+separate -sectorder 3
+joined -seg1addr
+separate -seg1addr 1
+separate -seg_addr_table 1
+separate -seg_addr_table_filename 1
+separate -segaddr 2
+separate -segcreate 3
+flag -seglinkedit
+separate -segprot 3
+joined -segs_read_
+joined -segs_read_only_addr
+separate -segs_read_only_addr 1
+joined -segs_read_write_addr
+separate -segs_read_write_addr 1
+separate -serialize-diagnostics 1
+flag -shared
+flag -shared-libasan
+flag -shared-libgcc
+flag -shared-libsan
+flag -single_module
+separate -specs 1
+joined -specs=
+flag -startfiles
+flag -static
+flag -static-libasan
+flag -static-libclosure
+flag -static-libgcc
+flag -static-libgfortran
+flag -static-libsan
+flag -static-libstdc++
+flag -static-openmp
+flag -static-pie
+joined -std-default=
+joined -std=
+joined -std=c++0x
+joined -std=c++1y
+joined -std=c++1z
+joined -std=c++23
+joined -std=c++2a
+joined -std=c11
+joined -std=c17
+joined -std=c18
+joined -std=c1x
+joined -std=c2x
+joined -std=c89
+joined -std=c90
+joined -std=c99
+joined -std=c9x
+joined -std=gnu++0x
+joined -std=gnu++1y
+joined -std=gnu++1z
+joined -std=gnu++23
+joined -std=gnu++2a
+joined -std=gnu11
+joined -std=gnu17
+joined -std=gnu18
+joined -std=gnu1x
+joined -std=gnu2x
+joined -std=gnu89
+joined -std=gnu90
+joined -std=gnu99
+joined -std=gnu9x
+joined -std=iso9899:1990
+joined -std=iso9899:199409
+joined -std=iso9899:1999
+joined -std=iso9899:199x
+joined -std=iso9899:2011
+joined -std=iso9899:2017
+joined -std=iso9899:2018
+flag -stdlib
+joined -stdlib++-isystem
+separate -stdlib++-isystem 1
+joined -stdlib=
+joined -sub_library
+separate -sub_library 1
+joined -sub_umbrella
+separate -sub_umbrella 1
+joined -sycl-std=
+flag -t
+separate -target 1
+flag -time
+flag -traditional
+flag -traditional-cpp
+flag -trigraphs
+flag -twolevel_namespace
+flag -twolevel_namespace_hints
+joined -u
+separate -u 1
+joined -umbrella
+separate -umbrella 1
+joined -undef
+joined -undefined
+separate -undefined 1
+joined -unexported_symbols_list
+separate -unexported_symbols_list 1
+joined -unoptimized-cfg
+joined -unwindlib=
+joined -use-spirv-backend
+flag -v
+separate -validator-version 1
+flag -verify-pch
+joined -vfsoverlay
+separate -vfsoverlay 1
+flag -via-file-asm
+flag -w
+joined -weak-l
+separate -weak_framework 1
+separate -weak_library 1
+separate -weak_reference_mismatches 1
+flag -whatsloaded
+flag -why_load
+flag -whyload
+separate -working-directory 1
+joined -working-directory=
+joined -x
+separate -x 1
+joined -y
+separate -z 1

@@ -61,6 +61,7 @@ use super::{
     known::{
         self,
         ClOption,
+        ClangOption,
     },
     unimplemented::{
         Treatment,
@@ -71,7 +72,9 @@ use super::{
 use crate::{
     backend::llvm::operand,
     cli::{
+        OptionReading,
         arguments::implements_language_option,
+        read_options,
         warning_options,
     },
     target::{
@@ -101,6 +104,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     };
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
+    let mut clang_arguments: Vec<&str> = Vec::new();
     let mut clang_options: Vec<OsString> = Vec::new();
     // clang-cl's `-m` and `-march=` options in order, for how vectors travel.
     let mut x86_options: Vec<&str> = Vec::new();
@@ -257,8 +261,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // input; with one they reach bcc's driver.
         state.verbose |= clang_cl && matches!(text, "-v" | "-###");
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
-            // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
-            clang_options.extend(front_end_option(clang));
+            // `/clang:OPTION` gives clang-cl a Clang option, read below.
+            clang_arguments.push(clang);
             continue;
         }
         if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
@@ -284,34 +288,32 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 return Err(MainError::Reported(1));
             }
         } else if clang_cl && text.starts_with('-') {
-            // clang-cl also takes Clang's options; bcc reads most of them, and
-            // treats the rest as its Clang personality does.
-            if text.starts_with("-m") {
-                x86_options.push(text);
-            }
-            if text == "-fsyntax-only" {
-                state.syntax_only = true;
-            } else if text == "-fms-compatibility" {
-                // clang-cl's default, which bcc's Microsoft mode already
-                // follows.
-            } else if (text.starts_with("-f") || text.starts_with("-m"))
-                && !implements_language_option(text)
-            {
-                match treatment(text, crate::target::Target::WindowsMsvc) {
-                    // This target is x86-64, so an x86 option is never for the
-                    // wrong one.
-                    | Treatment::Ignore | Treatment::WrongTarget => {},
-                    | Treatment::Warn(why) =>
-                        invocation.warning(format_args!("'{text}' is ignored: {why}")),
-                    | Treatment::Reject(why) => state.command_line_error(
-                        invocation,
-                        None,
-                        format_args!("'{text}' is not supported: {why}"),
-                    ),
+            // clang-cl also takes Clang's options, with the values an
+            // option's bare name takes from the next arguments; it ignores
+            // an option neither it nor bcc knows.
+            let mut words = vec![text];
+            if let Some(ClangOption::TakesNext(count)) = known::clang_option(text) {
+                words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
+                if words.len() <= count {
+                    state.missing_values(invocation, text, count);
+                    continue;
                 }
-            } else {
-                state.bcc.extend(front_end_option(text));
+            } else if known::clang_option(text).is_none()
+                && read_options(&[text], "-c") == OptionReading::Refused
+            {
+                if state.unknown_argument(
+                    invocation,
+                    unknown_argument,
+                    text,
+                    &known::ClUnknown { nearest: None },
+                ) {
+                    return Err(MainError::Reported(1));
+                }
+                continue;
             }
+            let mut bcc = std::mem::take(&mut state.bcc);
+            state.clang_option(invocation, &words, false, &mut x86_options, &mut bcc);
+            state.bcc = bcc;
         } else {
             // An option clang-cl knows takes its value from the next
             // argument after its bare name (`/vctoolsdir /opt/vc`), which
@@ -337,6 +339,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 );
             }
         }
+    }
+    if state.read_clang_arguments(
+        invocation,
+        &clang_arguments,
+        unknown_argument,
+        &mut x86_options,
+        &mut clang_options,
+    ) {
+        return Err(MainError::Reported(1));
     }
     if state.all_c {
         for source in &mut state.sources {
@@ -463,6 +474,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         keep_going: !clang_cl,
         ..Plan::default()
     };
+    if clang_cl && state.dry_run {
+        plan.steps.push(Step::Print {
+            text:   version::verbose(invocation.personality, target),
+            stderr: true,
+        });
+        return Ok(plan);
+    }
     if state.sources.is_empty() {
         // clang-cl refuses a command line without inputs, as Clang does.
         // `cl` alone prints its usage to stdout after its banner; with
@@ -1016,6 +1034,9 @@ struct State {
     nologo:                  bool,
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
+    /// clang-cl's `-###`, which prints its version, and the commands it
+    /// would run, even with inputs, and runs none.
+    dry_run:                 bool,
     ignore_include_variable: bool,
     /// clang-cl's `/imsvc` directories, in order.
     imsvc:                   Vec<OsString>,
@@ -1073,6 +1094,7 @@ impl Default for State {
             stdc:                    false,
             nologo:                  false,
             verbose:                 false,
+            dry_run:                 false,
             ignore_include_variable: false,
             imsvc:                   Vec::new(),
             standard:                "c17",
@@ -1695,6 +1717,179 @@ impl State {
                 true,
             );
         }
+    }
+}
+
+impl State {
+    /// Reads clang-cl's `/clang:` options `arguments`, which its driver
+    /// parses after all the others as a command line of their own, with
+    /// Clang's options visible (`Driver::BuildCompilation`): an empty one is
+    /// nothing, one that does not start with `-` (or is `-`) an input; an
+    /// option's bare name takes its values from the next ones, and the
+    /// driver refuses one left without them before it warns, in order,
+    /// about the options Clang does not take, which it ignores as unknown
+    /// (`-ffoo`) at the severity of the main command line's warning
+    /// options. bcc reads the other options as [`State::clang_option`]
+    /// says, into `out`. Returns whether a fatal error stopped the command
+    /// line.
+    fn read_clang_arguments<'a>(
+        &mut self,
+        invocation: &Invocation,
+        arguments: &[&'a str],
+        severity: DriverSeverity,
+        x86_options: &mut Vec<&'a str>,
+        out: &mut Vec<OsString>,
+    ) -> bool {
+        let mut options = Vec::new();
+        let mut rest = arguments;
+        while let Some((&argument, after)) = rest.split_first() {
+            let count = match known::clang_option(argument) {
+                | Some(ClangOption::TakesNext(count)) => count,
+                | _ => 0,
+            };
+            if after.len() < count {
+                self.missing_values(invocation, argument, count);
+                break;
+            }
+            options.push(&rest[..=count]);
+            rest = &after[count..];
+        }
+        for words in options {
+            let text = words[0];
+            if text.is_empty() {
+                continue;
+            }
+            if text == "-" || !text.starts_with('-') {
+                self.sources.push(Source::new(OsStr::new(text), false));
+                continue;
+            }
+            if known::clang_option(text).is_none() {
+                // Clang's option table suggests a near option as clang-cl's
+                // does (`-fbuiltin-`; did you mean `-fbuiltin`?).
+                let unknown = known::cl_unknown_option(text, false)
+                    .unwrap_or(known::ClUnknown { nearest: None });
+                if self.unknown_argument(invocation, severity, text, &unknown) {
+                    return true;
+                }
+                continue;
+            }
+            self.clang_option(invocation, words, true, x86_options, out);
+        }
+        false
+    }
+
+    /// Reads `words`, a Clang option clang-cl takes and its values, bare or
+    /// (`given`) after `/clang:`, into `out`. `-fsyntax-only` is `/Zs`,
+    /// `-c` and `-E` are `/c` and `/E`, `-###` prints the version, and the
+    /// warning options go to bcc's front end ([`front_end_option`]).
+    /// bcc reads any other option its own command line takes beside the
+    /// step's stage ([`read_options`]), except a bare `-f` or `-m` option
+    /// it does not implement; it drops one the stage leaves unused, and
+    /// treats the rest as its Clang personality treats an option it does
+    /// not implement, so none reaches bcc's command line, which would
+    /// refuse it.
+    fn clang_option<'a>(
+        &mut self,
+        invocation: &Invocation,
+        words: &[&'a str],
+        given: bool,
+        x86_options: &mut Vec<&'a str>,
+        out: &mut Vec<OsString>,
+    ) {
+        let text = words[0];
+        if words.len() == 1 {
+            if text.starts_with("-m") {
+                x86_options.push(text);
+            }
+            match text {
+                | "-fsyntax-only" => {
+                    self.syntax_only = true;
+                    return;
+                },
+                // Clang's stages that are also `cl`'s, `/c` and `/E`.
+                | "-c" | "-E" => {
+                    _ = self.option(invocation, &text[1..], &mut std::iter::empty());
+                    return;
+                },
+                // clang-cl prints its version and the commands it would run,
+                // and runs none; bcc prints the version.
+                | "-###" => {
+                    self.verbose = true;
+                    self.dry_run = true;
+                    return;
+                },
+                // clang-cl's default, which bcc's Microsoft mode already
+                // follows.
+                | "-fms-compatibility" => return,
+                | "--no-warnings" => {
+                    out.extend(front_end_option(text));
+                    return;
+                },
+                | _ if text.starts_with("-W") => {
+                    out.extend(front_end_option(text));
+                    return;
+                },
+                | _ => {},
+            }
+        }
+        let flag = words.len() == 1 && (text.starts_with("-f") || text.starts_with("-m"));
+        let stage = if self.preprocess.is_some() {
+            "-E"
+        } else {
+            "-c"
+        };
+        let reading = if flag && !given {
+            if implements_language_option(text) {
+                OptionReading::Read
+            } else {
+                OptionReading::Refused
+            }
+        } else {
+            read_options(words, stage)
+        };
+        let shown = words.join(" ");
+        match reading {
+            | OptionReading::Read => {
+                out.extend(words.iter().copied().map(OsString::from));
+                return;
+            },
+            // Clang's driver warns about an option no job it runs reads
+            // (`-shared` without a link), and says nothing of one its
+            // compiler takes and ignores (`-dM` without `-E`).
+            | OptionReading::Conflicts => {
+                invocation.warning(format_args!(
+                    "argument unused during compilation: '{shown}' \
+                     [-Wunused-command-line-argument]"
+                ));
+                return;
+            },
+            | OptionReading::Inert => return,
+            | OptionReading::Refused => {},
+        }
+        match treatment(text, crate::target::Target::WindowsMsvc) {
+            // This target is x86-64, so an x86 option is never for the
+            // wrong one.
+            | Treatment::Ignore | Treatment::WrongTarget => {},
+            | Treatment::Warn(why) =>
+                invocation.warning(format_args!("'{shown}' is ignored: {why}")),
+            | Treatment::Reject(why) => self.command_line_error(
+                invocation,
+                None,
+                format_args!("'{shown}' is not supported: {why}"),
+            ),
+        }
+    }
+
+    /// Refuses `option`, whose bare name takes `count` values from the next
+    /// arguments, where too few follow, in Clang's words: `argument to
+    /// '-Xclang' is missing (expected 1 value)`.
+    fn missing_values(&mut self, invocation: &Invocation, option: &str, count: usize) {
+        let plural = if count == 1 { "" } else { "s" };
+        self.command_line_error(
+            invocation,
+            None,
+            format_args!("argument to '{option}' is missing (expected {count} value{plural})"),
+        );
     }
 }
 
