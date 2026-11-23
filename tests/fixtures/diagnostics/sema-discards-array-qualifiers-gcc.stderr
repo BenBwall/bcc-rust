@@ -1,0 +1,36 @@
+sema-discards-array-qualifiers-gcc.c: In function 'ret':
+sema-discards-array-qualifiers-gcc.c:15:30: warning: return discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   15 | int (*ret(void))[3] { return cpa; }
+      |                              ^~~
+sema-discards-array-qualifiers-gcc.c: In function 'f':
+sema-discards-array-qualifiers-gcc.c:17:17: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   17 |   int (*a)[3] = cpa;
+      |                 ^~~
+sema-discards-array-qualifiers-gcc.c:18:5: warning: assignment discards 'const volatile' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   18 |   a = cvpa;
+      |     ^
+sema-discards-array-qualifiers-gcc.c:19:8: warning: passing argument 1 of 'take' discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   19 |   take(cpa);
+      |        ^~~
+sema-discards-array-qualifiers-gcc.c:20:20: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   20 |   int (*b)[2][3] = cpb;
+      |                    ^~~
+sema-discards-array-qualifiers-gcc.c:21:18: warning: initialization discards 'restrict' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   21 |   int *(*c)[3] = rpa;
+      |                  ^~~
+sema-discards-array-qualifiers-gcc.c:22:17: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   22 |   int (*d)[3] = tpa;
+      |                 ^~~
+sema-discards-array-qualifiers-gcc.c:23:13: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   23 |   void *e = cpa;
+      |             ^~~
+sema-discards-array-qualifiers-gcc.c:24:9: warning: passing argument 1 of 'takev' discards 'const volatile' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   24 |   takev(cvpa);
+      |         ^~~~
+sema-discards-array-qualifiers-gcc.c:25:17: error: initialization discards 'const' qualifier from pointer target type [-Werror=discarded-qualifiers]
+   25 |   int (*g)[3] = cv;
+      |                 ^~
+sema-discards-array-qualifiers-gcc.c:26:23: error: initialization discards 'const volatile' qualifier from pointer target type [-Werror=discarded-qualifiers]
+   26 |   const int (*h)[3] = cvv;
+      |                       ^~~
+cc1: some warnings being treated as errors

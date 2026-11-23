@@ -131,6 +131,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | DiagnosticGroup::IncompatibleFunctionPointerTypes
                         | DiagnosticGroup::PointerSign
                         | DiagnosticGroup::PointerQualifiers
+                        | DiagnosticGroup::DiscardedArrayQualifiers
                 )
         ) {
             return None;

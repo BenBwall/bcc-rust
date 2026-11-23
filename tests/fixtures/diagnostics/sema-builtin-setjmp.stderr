@@ -54,6 +54,22 @@ error: function call has the wrong number of arguments
    |
    = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
 
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+  --> sema-builtin-setjmp.c:11:23
+   |
+11 |     __builtin_longjmp(words, 1);
+   |                       ^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+  --> sema-builtin-setjmp.c:12:22
+   |
+12 |     __builtin_setjmp(&words);
+   |                      ^^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
 warning: implicit conversion from `long long` to `int` changes value from 4294967297 to 1 [-Wconstant-conversion]
   --> sema-builtin-setjmp.c:13:31
    |
@@ -62,4 +78,4 @@ warning: implicit conversion from `long long` to `int` changes value from 429496
    |
    = note: C99 §6.3.1.3p3: the conversion to a signed type that cannot represent the value is implementation-defined; bcc, GCC and Clang reduce it modulo 2^N
 
-7 errors and 1 warning generated.
+9 errors and 1 warning generated.

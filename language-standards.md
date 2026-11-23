@@ -2930,7 +2930,17 @@ and Windows MSVC, in `c89`, `gnu89`, `iso9899:199409`, `c99`, `gnu99`, `c11`,
 
 `-Wdiscarded-qualifiers` is a GCC spelling, not a Clang or bcc alias. bcc
 warns about unsupported warning groups and continues, as Clang does.
-Use `-Wincompatible-pointer-types-discards-qualifiers` instead.
+Use `-Wincompatible-pointer-types-discards-qualifiers` instead. The GCC
+personality (`--gcc-mode`) reads GCC's spelling as this group, as its
+`#pragma GCC diagnostic` does under GCC's rules, and GCC's diagnostic format
+names it (`discards 'const' qualifier from pointer target type
+[-Wdiscarded-qualifiers]`); there, unlike Clang's,
+`-Wno-incompatible-pointer-types` leaves it on. A qualifier lost from a
+pointed-to array's elements (`int (*)[3]` from `const int (*)[3]`) is GCC's
+own `-Wdiscarded-array-qualifiers` there, in the same words, which
+`-Wdiscarded-qualifiers` does not reach; from C23 on it is a pedantic
+warning that `-pedantic-errors` makes an error. Clang knows neither GCC
+option and reports both conversions in this group.
 Clang warns about the option itself with
 `unknown warning option '-Wdiscarded-qualifiers'; did you mean '-Wignored-qualifiers'?`
 in `[-Wunknown-warning-option]`; it does not select a pointer diagnostic group.

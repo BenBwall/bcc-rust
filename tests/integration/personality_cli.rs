@@ -2560,6 +2560,137 @@ mod tests {
         }
     }
 
+    /// GCC's `-Wdiscarded-qualifiers`, by that name on the command line and
+    /// in a pragma, controls the warning GCC 14 gives a conversion that
+    /// drops a pointed-to type's qualifiers, which GCC's
+    /// `-Wincompatible-pointer-types` does not reach. Each row was checked
+    /// against GCC 14.
+    #[test]
+    fn gcc_reads_its_discarded_qualifiers_option() {
+        let directory = Directory::new();
+        let warning = "c.c:2:18: warning: passing argument 1 of 'f' discards 'const' qualifier \
+                       from pointer target type [-Wdiscarded-qualifiers]\n";
+        let error = "c.c:2:18: error: passing argument 1 of 'f' discards 'const' qualifier from \
+                     pointer target type [-Werror=discarded-qualifiers]\n";
+        let pedantic = "c.c:2:18: error: passing argument 1 of 'f' discards 'const' qualifier \
+                        from pointer target type [-Wdiscarded-qualifiers]\n";
+        for (options, pragma, expected, status) in [
+            (&[][..], "", warning, 0),
+            (&["-Wno-discarded-qualifiers"], "", "", 0),
+            (&["-Wno-incompatible-pointer-types"], "", warning, 0),
+            (&["-Werror=discarded-qualifiers"], "", error, 1),
+            (&["-pedantic-errors"], "", pedantic, 1),
+            // GCC's `-w` silences a pedantic warning, though not a permerror.
+            (&["-pedantic-errors", "-w"], "", "", 0),
+            (
+                &["-Werror", "-Wno-error=discarded-qualifiers"],
+                "",
+                warning,
+                0,
+            ),
+            (
+                &[],
+                "#pragma GCC diagnostic ignored \"-Wdiscarded-qualifiers\"\n",
+                "",
+                0,
+            ),
+        ] {
+            directory.write(
+                "c.c",
+                &format!("{pragma}void f(char *);\nvoid g(void) {{ f((const char *)0); }}\n"),
+            );
+            let mut args = vec!["-fsyntax-only", "-fno-diagnostics-show-caret", "c.c"];
+            args.extend(options);
+            let output = directory.bcc("--gcc-mode", &args);
+            let mut text = String::new();
+            for line in stderr(&output)
+                .lines()
+                .filter(|line| line.contains("warning:") || line.contains("error:"))
+            {
+                text.push_str(line);
+                text.push('\n');
+            }
+            assert_eq!(text, expected, "{options:?} {pragma:?}");
+            assert_eq!(output.status.code(), Some(status), "{options:?} {pragma:?}");
+        }
+    }
+
+    /// GCC 14 files a qualifier lost from a pointed-to array's elements
+    /// under `-Wdiscarded-array-qualifiers`, which `-Wdiscarded-qualifiers`
+    /// does not reach, and makes it a pedantic warning from C23 on, which
+    /// `-pedantic-errors` makes an error and `-w` still silences. Each row
+    /// was checked against GCC 14 (`-std=c2x` for C23).
+    #[test]
+    fn gcc_files_array_qualifiers_under_their_own_option() {
+        let directory = Directory::new();
+        let line = |severity: &str, option: &str| {
+            format!(
+                "c.c:2:30: {severity}: initialization discards 'const' qualifier from pointer \
+                 target type [{option}]\n"
+            )
+        };
+        let warning = line("warning", "-Wdiscarded-array-qualifiers");
+        let werror = line("error", "-Werror=discarded-array-qualifiers");
+        let pedantic = line("error", "-Wdiscarded-array-qualifiers");
+        for (options, pragma, expected, status) in [
+            (&[][..], "", warning.as_str(), 0),
+            (&["-Wno-discarded-qualifiers"], "", &warning, 0),
+            (&["-Werror=discarded-qualifiers"], "", &warning, 0),
+            (&["-Werror=incompatible-pointer-types"], "", &warning, 0),
+            (&["-Wno-discarded-array-qualifiers"], "", "", 0),
+            (&["-Werror=discarded-array-qualifiers"], "", &werror, 1),
+            (&["-Werror"], "", &werror, 1),
+            (
+                &["-Werror", "-Wno-error=discarded-array-qualifiers"],
+                "",
+                &warning,
+                0,
+            ),
+            (&["-pedantic-errors"], "", &warning, 0),
+            (&["-std=c2x", "-pedantic-errors"], "", &pedantic, 1),
+            (&["-std=gnu2x", "-pedantic-errors"], "", &pedantic, 1),
+            (
+                &[
+                    "-std=c2x",
+                    "-pedantic-errors",
+                    "-Wno-error=discarded-array-qualifiers",
+                ],
+                "",
+                &warning,
+                0,
+            ),
+            (&["-std=c2x", "-pedantic-errors", "-w"], "", "", 0),
+            (&["-std=c2x", "-pedantic"], "", &warning, 0),
+            (
+                &[],
+                "#pragma GCC diagnostic ignored \"-Wdiscarded-array-qualifiers\"\n",
+                "",
+                0,
+            ),
+        ] {
+            directory.write(
+                "c.c",
+                &format!(
+                    "{pragma}void g(void);\nvoid g(void) {{ int (*p)[3] = (const int (*)[3])0; \
+                     (void)p; }}\n"
+                ),
+            );
+            let mut args = vec!["-fsyntax-only", "-fno-diagnostics-show-caret", "c.c"];
+            args.extend(options);
+            let output = directory.bcc("--gcc-mode", &args);
+            let mut text = String::new();
+            for line in stderr(&output)
+                .lines()
+                .filter(|line| line.contains("warning:") || line.contains("error:"))
+            {
+                text.push_str(line);
+                text.push('\n');
+            }
+            assert_eq!(text, expected, "{options:?} {pragma:?}");
+            assert_eq!(output.status.code(), Some(status), "{options:?} {pragma:?}");
+        }
+    }
+
     /// GCC 14's `-Wshift-negative-value` is off by default, and `-Wextra`
     /// (or `-Werror=extra`) enables it from C99 on in either order, as a
     /// warning; its own option, `-Werror=`

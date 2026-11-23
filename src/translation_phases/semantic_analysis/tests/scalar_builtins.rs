@@ -709,23 +709,53 @@ fn builtin_spellings_respect_function_typedef_and_enumerator_bindings() {
     );
 }
 
-/// GCC's `int __builtin_setjmp(void *)` takes any object pointer, and the
-/// value of `void __builtin_longjmp(void *, int)` must be an integer
+/// GCC's `int __builtin_setjmp(void *)` takes any object pointer, Clang's
+/// `int __builtin_setjmp(void **)` only a pointer to `void *`, and the
+/// value of `void __builtin_longjmp(BUFFER, int)` must be an integer
 /// constant that is 1 after conversion to `int`, as GCC and Clang require;
 /// one the conversion changes gets Clang's `-Wconstant-conversion`.
 /// GNU extension: GCC manual, "Nonlocal Gotos".
 #[test]
 fn builtin_longjmp_values_must_be_the_constant_one() {
     let prefix = "void *b[5]; long words[5]; void f(int n){";
-    for call in [
-        "__builtin_longjmp(b,1)",
-        "__builtin_longjmp(words,'\\1')",
-        "__builtin_longjmp(&words,1L)",
-        "int r = __builtin_setjmp(words) + __builtin_setjmp(&b)",
+    let gcc = crate::configuration::CompilerConfiguration::default()
+        .with_gnu_extensions(true)
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc);
+    for (call, gcc_only) in [
+        ("__builtin_longjmp(b,1)", false),
+        ("__builtin_longjmp(b,'\\1')", false),
+        (
+            "int r = __builtin_setjmp(b) + __builtin_setjmp((void **)0)",
+            false,
+        ),
+        ("__builtin_longjmp(words,'\\1')", true),
+        ("__builtin_longjmp(&words,1L)", true),
+        (
+            "int r = __builtin_setjmp(words) + __builtin_setjmp(&b)",
+            true,
+        ),
     ] {
-        with_source(&format!("{prefix}{call};}}"), |context, unit| {
+        let source = format!("{prefix}{call};}}");
+        with_configuration(&source, gcc, |context, unit| {
             let errors = context.take_pending_errors();
             assert_eq!(unit.errors, 0, "{call}: {errors:?}");
+        });
+        // Clang's identity refuses the others as incompatible pointers.
+        with_source(&source, |context, unit| {
+            let errors = context.take_pending_errors();
+            let refused = errors.iter().any(|error| {
+                matches!(
+                    error,
+                    TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::PointerConstraint(
+                            crate::configuration::DiagnosticGroup::IncompatiblePointerTypes
+                        ),
+                        ..
+                    })
+                )
+            });
+            assert_eq!(refused, gcc_only, "{call}: {errors:?}");
+            assert_eq!(unit.errors != 0, gcc_only, "{call}: {errors:?}");
         });
     }
     for (call, converted) in [

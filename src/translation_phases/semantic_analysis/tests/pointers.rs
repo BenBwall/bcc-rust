@@ -416,6 +416,43 @@ fn array_element_qualifiers_belong_to_pointer_targets() {
     }
 }
 
+/// GCC 14 files a qualifier lost from a pointed-to array's elements apart,
+/// under `-Wdiscarded-array-qualifiers`, while a qualified `void` target
+/// stays `-Wdiscarded-qualifiers`; Clang reports both in one group.
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn gcc_files_lost_array_element_qualifiers_apart() {
+    use DiagnosticGroup as G;
+
+    use crate::configuration::CompilerIdentity;
+    let declarations = "int (*pa)[3]; const int (*cpa)[3]; const int (*cpb)[2][3]; int \
+                        (*pb)[2][3]; void *v; const void *cv; int *p; const int *cp;";
+    for (body, gcc) in [
+        ("pa = cpa;", G::DiscardedArrayQualifiers),
+        ("pb = cpb;", G::DiscardedArrayQualifiers),
+        ("v = cpa;", G::DiscardedArrayQualifiers),
+        ("pa = cv;", G::PointerQualifiers),
+        ("p = cp;", G::PointerQualifiers),
+    ] {
+        for (identity, group) in [
+            (CompilerIdentity::Gcc, gcc),
+            (CompilerIdentity::Clang, G::PointerQualifiers),
+        ] {
+            let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_identity(identity);
+            assert_groups(
+                &format!("{declarations} void t(void) {{ {body} }}"),
+                configuration,
+                &[group],
+            );
+        }
+    }
+}
+
 #[test]
 #[expect(
     clippy::disallowed_macros,

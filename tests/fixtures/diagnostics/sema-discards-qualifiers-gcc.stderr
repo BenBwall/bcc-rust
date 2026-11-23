@@ -1,0 +1,35 @@
+sema-discards-qualifiers-gcc.c: In function 'ret':
+sema-discards-qualifiers-gcc.c:13:26: warning: return discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   13 | char *ret(void) { return cs; }
+      |                          ^~
+sema-discards-qualifiers-gcc.c: In function 'f':
+sema-discards-qualifiers-gcc.c:15:13: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   15 |   char *a = cs;
+      |             ^~
+sema-discards-qualifiers-gcc.c:16:5: warning: assignment discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   16 |   a = cs;
+      |     ^
+sema-discards-qualifiers-gcc.c:17:8: warning: passing argument 1 of 'take' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   17 |   take(cs);
+      |        ^~
+sema-discards-qualifiers-gcc.c:18:14: error: initialization of 'char **' from incompatible pointer type 'const char **' [-Wincompatible-pointer-types]
+   18 |   char **b = css;
+      |              ^~~
+sema-discards-qualifiers-gcc.c:19:5: error: assignment to 'char **' from incompatible pointer type 'const char **' [-Wincompatible-pointer-types]
+   19 |   b = css;
+      |     ^
+sema-discards-qualifiers-gcc.c:20:9: error: passing argument 1 of 'take2' from incompatible pointer type [-Wincompatible-pointer-types]
+   20 |   take2(css);
+      |         ^~~
+sema-discards-qualifiers-gcc.c:21:12: warning: initialization discards 'volatile' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   21 |   int *c = vi;
+      |            ^~
+sema-discards-qualifiers-gcc.c:23:9: warning: passing argument 1 of 'take3' discards 'const volatile' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   23 |   take3(cvi);
+      |         ^~~
+sema-discards-qualifiers-gcc.c:24:13: warning: initialization discards 'restrict' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   24 |   int **e = ri;
+      |             ^~
+sema-discards-qualifiers-gcc.c:25:27: warning: passing argument 1 of '__builtin___clear_cache' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   25 |   __builtin___clear_cache(cs, a);
+      |                           ^~

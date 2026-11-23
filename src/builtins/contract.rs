@@ -132,6 +132,13 @@ pub(crate) enum SignatureType {
     /// A pointer to the target's `__builtin_va_list` object, `char **` on
     /// Windows (Microsoft `__va_start`).
     VaListPointer,
+    /// The buffer of `__builtin_setjmp` and `__builtin_longjmp`: `void *`
+    /// under GCC's rules, as GCC 14's `builtins.def` types it, and `void **`
+    /// under Clang's, as Clang 23's `Builtins.td` does, so that Clang's
+    /// identities refuse a pointer to anything but `void *` as Clang does.
+    /// GNU extension: GCC manual, "Nonlocal Gotos";
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>.
+    JumpBuffer,
     /// `FILE *`, naming the program's own `<stdio.h>` typedef.
     /// C99: §7.19.1p2, p. 262; PDF p. 274.
     File,

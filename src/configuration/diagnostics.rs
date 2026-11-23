@@ -308,8 +308,13 @@ impl CompilerConfiguration {
                 | WarningOption::Error(false) => {},
             }
         }
+        // Clang's `-Wincompatible-pointer-types` holds the discarded
+        // qualifiers; GCC's `-Wdiscarded-qualifiers` is an option of its own.
         if group == DiagnosticGroup::IncompatiblePointerTypes {
-            self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option, clang);
+            if clang {
+                self.warning_options[DiagnosticGroup::PointerQualifiers as usize]
+                    .apply(option, clang);
+            }
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
                 .apply(option, clang);
         }
@@ -508,6 +513,9 @@ impl CompilerConfiguration {
             // GCC's `-Waddress` and Clang's group around
             // `-Wpointer-bool-conversion`, the part of them bcc reports.
             | "address" => self.with_pragma_group(DiagnosticGroup::PointerBoolConversion, class),
+            // GCC's name for the group bcc knows by Clang's.
+            | "discarded-qualifiers" if !clang =>
+                self.with_pragma_group(DiagnosticGroup::PointerQualifiers, class),
             | _ => DiagnosticGroup::parse(name)
                 .map_or(self, |group| self.with_pragma_group(group, class)),
         }
@@ -918,17 +926,18 @@ impl CompilerConfiguration {
                 | None => group.default_severity(),
             }
         };
-        // GCC makes a pedantic warning an error before `-w` can silence
-        // it, though not one of its preprocessor's (`-Wnormalized`);
-        // Clang's `-w` silences it first.
+        // GCC makes a pedantic permerror an error before `-w` can silence
+        // it, though its `-w` silences every other warning first, a
+        // pedantic one included (`diagnostic_context::report_diagnostic`
+        // in GCC 14's `diagnostic.cc` inhibits `DK_WARNING` and
+        // `DK_PEDWARN`, not `DK_PERMERROR`); Clang's `-w` silences it first.
         let gcc = self.identity == super::CompilerIdentity::Gcc;
         let pedantic = self.pedantic_error(group);
-        let preprocessor = group == DiagnosticGroup::PedanticNormalized;
         // Clang 23's `-w` also silences its default-error
         // `-Wargument-outside-range`, though not `-Wint-conversion` or
         // `-Wincompatible-function-pointer-types`.
         if self.suppress_warnings
-            && !(gcc && pedantic && !preprocessor)
+            && !(gcc && pedantic && group.default() == GroupDefault::Permerror)
             && (default == ErrorSeverity::Warning || group == DiagnosticGroup::ArgumentOutsideRange)
         {
             return None;
@@ -982,12 +991,14 @@ impl CompilerConfiguration {
     /// permerrors warnings whatever `-pedantic-errors` says.
     /// GCC's C89 implicit int and `-Wmain`, and Clang's implicitly declared
     /// library function, are pedantic warnings as well, in their compilers
-    /// only.
+    /// only, and so is GCC's discarded array qualifier from C23 on.
     pub(crate) fn pedantic_error(self, group: DiagnosticGroup) -> bool {
         let promoted = group.pedantic_promoted()
             || match group {
                 | DiagnosticGroup::ImplicitInt | DiagnosticGroup::Main =>
                     self.identity == super::CompilerIdentity::Gcc,
+                | DiagnosticGroup::DiscardedArrayQualifiers =>
+                    self.standard() >= super::CStandard::C23,
                 | DiagnosticGroup::ImplicitLibraryFunction =>
                     self.identity.rules() == super::RuleSet::Clang,
                 | _ => false,
@@ -1095,6 +1106,25 @@ macro_rules! diagnostic_groups {
                 }
             }
 
+            /// The `-W` spelling a diagnostic in `format` names: GCC's own
+            /// where GCC 14 files the diagnostic under another option than
+            /// Clang (`-Wdiscarded-qualifiers` for
+            /// `-Wincompatible-pointer-types-discards-qualifiers`, and its
+            /// one `-Wincompatible-pointer-types` for function pointers
+            /// too), and otherwise [`Self::name`].
+            pub(crate) const fn option_name(
+                self,
+                format: super::DiagnosticFormat,
+            ) -> Option<&'static str> {
+                match (format, self) {
+                    | (super::DiagnosticFormat::Gcc, Self::PointerQualifiers) =>
+                        Some("discarded-qualifiers"),
+                    | (super::DiagnosticFormat::Gcc, Self::IncompatibleFunctionPointerTypes) =>
+                        Self::IncompatiblePointerTypes.name(),
+                    | _ => self.name(),
+                }
+            }
+
             const fn default(self) -> GroupDefault {
                 match self {
                     $(Self::$variant => GroupDefault::$default,)*
@@ -1119,7 +1149,9 @@ diagnostic_groups! {
     CompareDistinctPointerTypes => Some("compare-distinct-pointer-types"), Warning, true;
     IncompatiblePointerTypes => Some("incompatible-pointer-types"), Permerror, true;
     PointerSign => Some("pointer-sign"), Warning, true;
-    NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
+    /// Clang's warning about a null pointer constant that is not a literal
+    /// zero (`'\0'`, `1 - 1`); GCC has none.
+    NonLiteralNullConversion => Some("non-literal-null-conversion"), ClangWarning, false;
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
     /// GCC's `-Waddress`, which only its `-Wall` holds.
@@ -1143,6 +1175,12 @@ diagnostic_groups! {
     Nonnull => Some("nonnull"), Warning, false;
     PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;
     PointerQualifiers => Some("incompatible-pointer-types-discards-qualifiers"), Warning, true;
+    /// GCC: a conversion that loses a qualifier of a pointed-to array's
+    /// elements (`int (*)[3]` from `const int (*)[3]`), which GCC 14 files
+    /// under an option of its own; a pedantic warning from C23 on, where the
+    /// array itself has its elements' qualifiers (`WARNING_FOR_QUALIFIERS`
+    /// in `convert_for_assignment`, GCC 14's `c/c-typeck.cc`).
+    DiscardedArrayQualifiers => Some("discarded-array-qualifiers"), Warning, false;
     /// GCC's `-Wincompatible-pointer-types` holds it.
     IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Permerror, true;
     IntConversion => Some("int-conversion"), Permerror, true;
@@ -1690,6 +1728,7 @@ impl DiagnosticGroup {
                 | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul
                 | Self::SwitchOutsideRange
+                | Self::DiscardedArrayQualifiers
         )
     }
 

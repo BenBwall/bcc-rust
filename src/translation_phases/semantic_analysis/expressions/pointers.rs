@@ -958,10 +958,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Immediate qualifiers are a qualifier diagnostic only if the
                 // unqualified types are compatible; unrelated types stay
-                // errors.
-                if self.pointer_compatible(to, from, true)
-                    || self.targets_without_qualifiers(to, from)
-                {
+                // errors. A difference in a deeper level's qualifiers is
+                // Clang's nested qualifier diagnostic, and GCC's
+                // incompatible pointer types (`char **` from `const char
+                // **`). C99: §6.7.5.1 paragraph 2, p. 115; PDF p. 127.
+                let gcc = self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc;
+                let nested = !gcc && self.targets_without_qualifiers(to, from);
+                if self.pointer_compatible(to, from, true) || nested {
+                    // GCC files a qualifier lost from an array's elements
+                    // under an option of its own. C99: §6.7.3 paragraph 8,
+                    // p. 109; PDF p. 121.
+                    if gcc && matches!(self.types.nodes[from.index], TypeKind::Array(..)) {
+                        return Some(DiagnosticGroup::DiscardedArrayQualifiers);
+                    }
                     return Some(DiagnosticGroup::PointerQualifiers);
                 }
                 if self.pointer_signedness(to, from) {

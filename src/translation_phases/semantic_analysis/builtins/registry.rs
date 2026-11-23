@@ -72,6 +72,16 @@ impl Analyzer<'_, '_, '_> {
                 let list = self.builtin_va_list();
                 self.types.intern(TypeKind::Pointer(list))
             },
+            | SignatureType::JumpBuffer => {
+                let void = self.types.scalar(Scalar::Void);
+                let mut buffer = self.types.intern(TypeKind::Pointer(void));
+                if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Clang
+                {
+                    buffer = self.types.intern(TypeKind::Pointer(buffer));
+                }
+                buffer
+            },
             | SignatureType::File => self.file_parameter(),
             | SignatureType::Vector(scalar, count) => self.signature_vector(scalar, count),
             | SignatureType::VectorPointer(scalar, count, constant) => {

@@ -346,8 +346,46 @@ GCC's non-local gotos (2026-10-27): `sema-builtin-setjmp.c` pins the
 conversion to `int`, as GCC and Clang require; GCC also accepts a converted
 `1.0`) for a variable, 2, 0 and a floating constant, an integer buffer, and
 wrong argument counts, and Clang's `-Wconstant-conversion` for
-`4294967297LL`, which converts to 1. `int[5]` and `int (*)[5]` buffers are accepted, since GCC
-types the buffer `void *` (Clang's `void **` rejects them).
+`4294967297LL`, which converts to 1. It runs under Clang's identity, whose
+`void **` buffer refuses `int[5]` and `int (*)[5]`.
+
+The jump buffer by identity (2026-11-23): `sema-builtin-jump-buffer-gcc`
+and `-clang` pass the same buffers, `void *[5]`, `void **`, a null pointer,
+`void *const[5]`, `const void **`, `char[64]`, `volatile char[64]`, `const
+int *`, `struct S *`, `long[5]`, `int **`, a function, its address and an
+integer, to `__builtin_longjmp` and `__builtin_setjmp`. GCC 14 types the
+buffer `void *` and Clang 23.1.5 `void **`, and each identity follows its
+compiler: every line and status matches GCC 14 (`-std=gnu17`) byte for byte,
+and Clang 23.1.5 but for its spelling `'void *const[5]'`, which bcc spells
+with a space, as for every array type.
+
+GCC's discarded qualifiers (2026-11-23): `sema-discards-qualifiers-gcc`
+pins GCC 14's words, `return`, `initialization`, `assignment` or `passing
+argument N of 'f'` with `discards 'const' qualifier from pointer target
+type [-Wdiscarded-qualifiers]`, naming the lost qualifiers in GCC's order
+(`'const volatile'`, `'restrict'`), and its incompatible-pointer error where
+a deeper level differs (`char **` from `const char **`), for an ordinary
+function and `__builtin___clear_cache`, whose parameters are `void *` as in
+GCC and Clang; and no `-Wnon-literal-null-conversion`, which only Clang has,
+for `'\0'` or `1 - 1` as a pointer. Every warning and error line and the
+status match GCC 14; GCC's `note: expected 'char *' but argument is of type
+'const char *'` after an argument's diagnostic is not modelled, as for every
+argument conversion.
+
+GCC's discarded array qualifiers (2026-11-23):
+`sema-discards-array-qualifiers-gcc` pins GCC 14's
+`-Wdiscarded-array-qualifiers` for a qualifier lost from a pointed-to
+array's elements, in `-Wdiscarded-qualifiers`' words at each site (return,
+initialization, assignment, argument, to `void *` too, through a typedef, a
+two-dimensional array and a lost `restrict`), with GCC's
+`-Wno-discarded-qualifiers -Werror=discarded-qualifiers` in bcc's spelling
+of that group, which leave it a warning; a pointed-to `const void` stays
+`-Wdiscarded-qualifiers`, an error there.
+`sema-discards-array-qualifiers-gcc-c23` pins the same warning as an error
+under C23's `-pedantic-errors`. Every warning and error line and the status
+match GCC 14 (`-std=c2x` for C23); GCC's `note: expected` after an
+argument's diagnostic is not modelled, and neither is its `-Wpedantic`
+error for pointers to arrays with different qualifiers before C23.
 
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for
