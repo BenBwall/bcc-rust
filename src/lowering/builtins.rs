@@ -918,6 +918,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | CommonBuiltin::GenericBit(operation) =>
                 self.generic_bit(operation, instance, &items[..count], source)?,
+            | CommonBuiltin::Float(crate::builtins::FloatOperation::Isfpclass, _) => {
+                let mask = instance.operands[1]
+                    .integer
+                    .and_then(|mask| u16::try_from(mask.value).ok())
+                    .ok_or_else(|| {
+                        LoweringError::missing("an fpclass mask is not constant", source)
+                    })?;
+                let operand = instance.operation_type.ok_or_else(|| {
+                    LoweringError::missing("a floating builtin has no operand type", source)
+                })?;
+                let value = self.value(items[0], source)?;
+                Operand::Value(self.isfpclass(value, operand, mask, source)?)
+            },
             | CommonBuiltin::Float(operation, _) => self.floating_builtin(
                 operation,
                 &items[..count],

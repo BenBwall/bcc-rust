@@ -60,6 +60,75 @@ mod tests {
         matches_the_claimed_compiler("float_comparisons.c");
     }
 
+    /// Clang's `__builtin_isfpclass`, `__builtin_issubnormal` and
+    /// `__builtin_iszero` for every class of every real floating type,
+    /// signaling NaNs, subnormals and x87's unsupported encodings included,
+    /// and folded for constants; on wasm32 too.
+    #[test]
+    fn float_classes_match_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("float_classes.c", "-std=gnu17", true);
+    }
+
+    /// `__builtin_isfpclass` takes its mask as an integer constant
+    /// expression from 0 to 1023, with Clang's errors, and only the Clang
+    /// identities have it, its siblings and the `__FPCLASS_*` macros.
+    #[test]
+    fn isfpclass_masks_are_constants_of_the_clang_identities() {
+        let source = temporary("mask.c");
+        std::fs::write(
+            &source,
+            "int a(double x) { return __builtin_isfpclass(x, 1024); }\nint b(double x, int m) { \
+             return __builtin_isfpclass(x, m); }\nint c(double x) { return __builtin_isfpclass(x, \
+             3.0) + __builtin_isfpclass(x, (char)3); }\n",
+        )
+        .unwrap();
+        let output = bcc(&["--clang-mode", "-fsyntax-only", source.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = text(&output.stderr);
+        let errors: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.contains("error:"))
+            .collect();
+        let name = source.to_str().unwrap();
+        assert_eq!(
+            errors,
+            [
+                format!(
+                    "{name}:1:26: error: argument value 1024 is outside the valid range [0, 1023]"
+                ),
+                format!(
+                    "{name}:2:33: error: argument to '__builtin_isfpclass' must be a constant \
+                     integer"
+                ),
+                format!(
+                    "{name}:3:26: error: argument to '__builtin_isfpclass' must be a constant \
+                     integer"
+                ),
+            ],
+            "{stderr}"
+        );
+        std::fs::write(
+            &source,
+            "__has_builtin(__builtin_isfpclass) __has_builtin(__builtin_issubnormal) \
+             __has_builtin(__builtin_iszero) __FPCLASS_POSZERO\n",
+        )
+        .unwrap();
+        for (identity, expected) in [
+            ("--compiler-identity=clang", "1 1 1 0x0040"),
+            ("--compiler-identity=clang-cl", "1 1 1 0x0040"),
+            ("--compiler-identity=gcc", "0 0 0 __FPCLASS_POSZERO"),
+        ] {
+            let output = bcc(&[identity, "-E", "-P", source.to_str().unwrap()]);
+            assert!(
+                output.status.success(),
+                "{identity}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout).trim(), expected, "{identity}");
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
     /// GNU complex integer types: arithmetic, the conjugate, conversions,
     /// component lvalues, static initializers and calls; GCC and Clang
     /// divide them differently.
