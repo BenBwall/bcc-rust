@@ -6771,6 +6771,14 @@ fn undefined_calls_through_pointers_to_functions_stop() {
     let session = run(source);
     let diagnostic = &session.state().diagnostics[0];
     assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.5.2.2p9"));
+    // Undefined whether or not the two types pass their values in the same
+    // places; a disagreement about where they are is only one consequence.
+    let summary = &session.state().event.summary;
+    assert!(
+        summary.contains("has no meaning, even when it seems"),
+        "{summary}"
+    );
+    assert!(summary.contains("may disagree about where"), "{summary}");
     assert!(
         diagnostic
             .message

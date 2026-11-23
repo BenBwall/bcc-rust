@@ -466,8 +466,9 @@ impl Topic {
                  would, with the arguments converted to the parameter types the pointer's type \
                  spells. That type is a promise: a call through a null pointer, or through a \
                  pointer cast to the wrong type, is undefined. Without optimization the first \
-                 usually crashes a compiled program; the second often runs on, with the caller and \
-                 the function disagreeing about where the arguments and the result are.",
+                 usually crashes a compiled program. The second often runs on, and may even give \
+                 the right result, but C gives it no meaning; among other things, the caller and \
+                 the function may disagree about where the arguments and the result are.",
             | Self::ConstantExpression =>
                 "An object with static storage duration gets its value before main runs, so its \
                  initializer must be a constant expression, which the compiler works out while it \
@@ -1213,8 +1214,9 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
         | Some(Undefined::CallType) => (
             "Undefined behavior: call through the wrong function type",
             "A cast let this pointer reach a function of another type. C lets such a pointer be \
-             converted back, but a call through the wrong type has no meaning: the caller and the \
-             function would disagree about the arguments and the result.",
+             converted back, but a call through the wrong type has no meaning, even when it seems \
+             to work: among other things, the caller and the function may disagree about where \
+             the arguments and the result are.",
         ),
         | Some(Undefined::PointerOrder) => (
             "Undefined behavior: ordering unrelated pointers",
