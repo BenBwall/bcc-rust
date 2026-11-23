@@ -272,7 +272,8 @@ clauses! {
     CONDITIONAL_CONSTRAINT = "6.5.15p3", "p. 90; PDF p. 102", "Conditional operator",
         "The second and third operands must both be arithmetic, both void, the same structure or \
          union type, or pointers to compatible types; or one is a pointer and the other a null \
-         pointer constant or a pointer to void.";
+         pointer constant; or one is a pointer to an object or incomplete type and the other a \
+         pointer to void.";
     /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
     COMMA = "6.5.17p2", "p. 94; PDF p. 106", "Comma operator",
         "The comma operator evaluates its left operand and discards the value; a sequence point \
@@ -370,13 +371,15 @@ clauses! {
          unchanged; calling through the wrong type is undefined.";
     /// C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
     POINTER_EQUALITY = "6.5.9p6", "p. 87; PDF p. 99", "Equality operators",
-        "Two pointers compare equal when both are null, both point to the same object or the same \
-         function, or both point one past the same array; otherwise only when one points one past \
-         an array and the other to an object that happens to follow it.";
+        "Two pointers compare equal exactly when both are null, both point to the same object \
+         (or one to an object and the other to a subobject at its start) or the same function, \
+         both point one past the last element of the same array, or one points one past the end \
+         of an array and the other to the start of a different array that happens to follow it \
+         immediately in memory.";
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
     EQUALITY_CONSTRAINT = "6.5.9p2", "p. 86; PDF p. 98", "Equality operators",
         "== and != compare two numbers, two pointers to compatible types, a pointer to an object \
-         with a pointer to void, or a pointer with a null pointer constant.";
+         or incomplete type with a pointer to void, or a pointer with a null pointer constant.";
     /// C99: §6.5.6 paragraph 2, p. 82; PDF p. 94.
     FUNCTION_POINTER_ARITHMETIC = "6.5.6p2", "p. 82; PDF p. 94", "Additive operators",
         "Adding an integer to a pointer needs a pointer to an object type, the element of an \
