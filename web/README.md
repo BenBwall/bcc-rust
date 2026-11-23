@@ -131,9 +131,10 @@ compiler; each part is captioned with what its lessons share
   and every expression's type), bcc IR before and after ABI lowering, LLVM
   IR, native x86-64 assembly, and machine code with its encoded bytes, each
   with a short explanation and, for the front end, the C99 rules it applies.
-  Every way into the pipeline (its view key, the landing's third step,
-  lesson 13) opens it at its first stage, and each front-end stage before
-  the last has a **Skip to bcc IR** key for readers who came for the IR.
+  Every way into the pipeline (its view key, the landing's third step, the
+  lesson "From source to a running program") opens it at its first stage,
+  and each front-end stage before the last has a **Skip to bcc IR** key for
+  readers who came for the IR.
   Each stage leads with one sentence on what it takes from the stage before
   and hands to the next, with a button to that next stage, and with it
   three lines (`Stage::brief`): what goes in, what comes out, and why a
@@ -602,6 +603,19 @@ into one array, a `ptrdiff_t` (`long` on x86-64). Each nested update says
 what value it yields and by which sequence point its store completes, and
 the machine checks that no unsequenced access reaches the same object. It
 includes `<stdio.h>`.
+
+The lesson "Callbacks: passing a function to a function"
+(`demos/callbacks.c`), after the string lesson, passes `twice` and then
+`square` to `sum_of(const int *v, int n, int (*f)(int))`, which adds up
+`f(v[i])` over an array. Each name, as an argument, becomes a pointer to its
+function, the parameter `f` holds that pointer, and the one call `f(v[i])`
+runs `twice` in the first call of `sum_of` and `square` in the second: 14
+and 25, as GCC prints. In the compiler views that line is an indirect call:
+`call_indirect v2(v12)` in bcc IR, `call i32 %v2(…)` in LLVM IR, `callq
+*%r13` in the assembly, and `call_indirect` through the function table in
+Clang's WebAssembly module. At `-O2` bcc inlines `sum_of` into `main`, where
+the pointer is known, so those copies call `@twice` and `@square` directly.
+It includes `<stdio.h>`.
 
 How live compilation runs:
 
