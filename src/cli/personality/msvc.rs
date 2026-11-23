@@ -259,28 +259,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             continue;
         }
         // clang-cl's `/o`, also `-o`, joined (`-ox.obj`, and `-objectx` too)
-        // or separate, names the object under `/c`, where it and `/Fo`
-        // override each other, and otherwise the executable (or icx-cl's
-        // library), where it and `/Fe` do; `/E` and `/P` ignore it
-        // (`GetNamedOutputPath`). The Clang option `-object-file-name` is a
-        // longer match, and the `/openmp` flags are whole names.
+        // or separate. The Clang option `-object-file-name` is a longer
+        // match, and the `/openmp` flags are whole names.
         if clang_cl
             && let Some(value) = option.strip_prefix('o')
             && !option.starts_with("object-file-name")
             && !matches!(option, "openmp" | "openmp-" | "openmp:experimental")
         {
-            let output = if value.is_empty() {
-                arguments.next()
-            } else {
-                Some(OsStr::new(value))
-            };
-            match output {
-                | Some(output) => {
-                    state.executable = Some(output.into());
-                    state.object_from_o = Some(output.into());
-                },
-                | None => state.missing_values(invocation, text, 1),
-            }
+            state.output_option(invocation, text, value, &mut arguments);
             continue;
         }
         if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
@@ -537,40 +523,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         ));
         return Err(MainError::Reported(error_status(invocation.personality)));
     }
-    // Preprocessing: `/E` and `/EP` write every source to stdout, `/P` each
-    // to its `.i` file, and Clang's `-o` to its file (`-` is stdout).
     if let Some(mode) = state.preprocess {
-        let outputs: Vec<Option<PathBuf>> = c_sources
-            .iter()
-            .map(|source| match &state.clang_output {
-                | Some(output) if output.as_os_str() == "-" => None,
-                | Some(output) => Some(operand(output).into_owned()),
-                | None => mode
-                    .to_file
-                    .then(|| named(state.preprocessed.as_deref(), &source.path, "i")),
-            })
-            .collect();
-        let files: Vec<PathBuf> = outputs.iter().flatten().cloned().collect();
-        check_outputs(invocation, &state, &files)?;
-        for (source, output) in c_sources.iter().zip(outputs) {
-            let mut step = common.clone();
-            step.push("-E".into());
-            if mode.no_line_markers {
-                step.push("-P".into());
-            }
-            if let Some(output) = output {
-                step.push("-o".into());
-                step.push(output.into());
-            }
-            step.extend(source.arguments());
-            if !clang_cl {
-                plan.steps.push(Step::Print {
-                    text:   format!("{}\n", source.echoed()),
-                    stderr: true,
-                });
-            }
-            plan.steps.push(Step::Bcc(step));
-        }
+        preprocessing_steps(invocation, &state, mode, &common, &c_sources, &mut plan)?;
         return Ok(plan);
     }
     // `cl` writes the diagnostics of a compile, as its notes and the names
@@ -704,6 +658,51 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.push(executable.into());
     plan.steps.push(Step::Link(link));
     Ok(plan)
+}
+
+/// Plans preprocessing each of `sources` with bcc's options `common`, as
+/// `mode` asks: `/E` and `/EP` write every source to stdout, `/P` each to
+/// its `.i` file, and Clang's `-o` to its file (`-` is stdout).
+fn preprocessing_steps(
+    invocation: &Invocation,
+    state: &State,
+    mode: Preprocess,
+    common: &[OsString],
+    sources: &[&Source],
+    plan: &mut Plan,
+) -> Result<(), MainError> {
+    let outputs: Vec<Option<PathBuf>> = sources
+        .iter()
+        .map(|source| match &state.clang_output {
+            | Some(output) if output.as_os_str() == "-" => None,
+            | Some(output) => Some(operand(output).into_owned()),
+            | None => mode
+                .to_file
+                .then(|| named(state.preprocessed.as_deref(), &source.path, "i")),
+        })
+        .collect();
+    let files: Vec<PathBuf> = outputs.iter().flatten().cloned().collect();
+    check_outputs(invocation, state, &files)?;
+    for (source, output) in sources.iter().zip(outputs) {
+        let mut step = common.to_vec();
+        step.push("-E".into());
+        if mode.no_line_markers {
+            step.push("-P".into());
+        }
+        if let Some(output) = output {
+            step.push("-o".into());
+            step.push(output.into());
+        }
+        step.extend(source.arguments());
+        if !invocation.personality.is_clang_cl() {
+            plan.steps.push(Step::Print {
+                text:   format!("{}\n", source.echoed()),
+                stderr: true,
+            });
+        }
+        plan.steps.push(Step::Bcc(step));
+    }
+    Ok(())
 }
 
 /// What clang-cl's driver answers itself, without inputs, for one of its
@@ -1283,9 +1282,11 @@ impl State {
         match option {
             | "c" => self.compile_only = true,
             | "nologo" => self.nologo = true,
+            // clang-cl's `/P` writes its file beside `/E` too.
             | "E" =>
                 self.preprocess = Some(Preprocess {
-                    to_file:         false,
+                    to_file:         invocation.personality.is_clang_cl()
+                        && self.preprocess.is_some_and(|p| p.to_file),
                     no_line_markers: self.preprocess.is_some_and(|p| p.no_line_markers),
                 }),
             | "EP" => {
@@ -1857,7 +1858,20 @@ impl State {
         x86_options: &mut Vec<&'a str>,
     ) -> bool {
         let mut words = vec![text];
+        // clang-cl reads a configuration file of options, which bcc does
+        // not.
+        if text.starts_with("--config=") {
+            self.command_line_error(
+                invocation,
+                None,
+                format_args!("'{text}' is not supported: bcc reads no configuration files"),
+            );
+            return false;
+        }
         match known::clang_option(text, ClangVisibility::ClangCl) {
+            // A `cl` flag of the same name wins, and takes no value: `-u`
+            // is `/u`.
+            | Some(ClangOption::TakesNext(_)) if known::is_clang_cl_flag(&text[1..]) => {},
             | Some(ClangOption::TakesNext(count)) => {
                 words.extend(arguments.by_ref().take(count).filter_map(OsStr::to_str));
                 if words.len() <= count {
@@ -2067,6 +2081,32 @@ impl State {
         }
     }
 
+    /// Reads clang-cl's `/o` (`text`), with its joined `value` or the next of
+    /// `arguments`, which names the object under `/c`, where it and `/Fo`
+    /// override each other, and otherwise the executable (or icx-cl's
+    /// library), where it and `/Fe` do; `/E` and `/P` ignore it
+    /// (`GetNamedOutputPath`).
+    fn output_option<'a>(
+        &mut self,
+        invocation: &Invocation,
+        text: &str,
+        value: &'a str,
+        arguments: &mut impl Iterator<Item = &'a OsStr>,
+    ) {
+        let output = if value.is_empty() {
+            arguments.next()
+        } else {
+            Some(OsStr::new(value))
+        };
+        match output {
+            | Some(output) => {
+                self.executable = Some(output.into());
+                self.object_from_o = Some(output.into());
+            },
+            | None => self.missing_values(invocation, text, 1),
+        }
+    }
+
     /// Refuses `option`, whose bare name takes `count` values from the next
     /// arguments, where too few follow, in Clang's words: `argument to
     /// '-Xclang' is missing (expected 1 value)`.
@@ -2112,15 +2152,16 @@ enum BccReading {
 /// optimization options, and its linker options. `-o` names the step's
 /// output, and `-shared` makes a link's executable a DLL. `-dM` and `-P`
 /// do nothing without `-E`, nor `-dD` and `-dI`, which bcc does not
-/// implement, `-MG` without `-M`, and `-iprefix` without the `-iwithprefix`
-/// that uses it, which bcc refuses; `-save-temps` and `-save-stats` change
-/// no program. An option clang-cl calls unused in the kind of step, as the
-/// pinned Clang's table records it for exactly that kind and spelling
-/// (`-sectcreate a b c` beside `/c`), is dropped with its warning, as is
-/// `-Wl,` without a link; bcc refuses the rest as its Clang personality
-/// refuses an option it does not implement (`-imacros`, `-isysroot`,
-/// `-working-directory`, `-S`, `-M`, `-Wp,`), never reading them as anything
-/// else or dropping one that could change what the step writes.
+/// implement, and `-iprefix` without the `-iwithprefix` that uses it, which
+/// bcc refuses; `-save-temps` and `-save-stats` change no program, and
+/// clang-cl's link uses neither `-nostdlib` nor `-nostartfiles`. An option
+/// clang-cl calls unused in the kind of step, as the pinned Clang's table
+/// records it for exactly that kind and spelling (`-sectcreate a b c` beside
+/// `/c`), is dropped with its warning, as is `-Wl,` without a link; bcc refuses
+/// the rest as its Clang personality refuses an option it does not implement
+/// (`-imacros`, `-isysroot`, `-working-directory`, `-S`, `-M`, `-Wp,`), never
+/// reading them as anything else or dropping one that could change what the
+/// step writes.
 fn bcc_reading(words: &[&str], step: ClangStep) -> BccReading {
     use BccReading::{
         Inert,
@@ -2181,6 +2222,10 @@ fn bcc_reading(words: &[&str], step: ClangStep) -> BccReading {
     };
     let separate = !values.is_empty();
     match (name, value) {
+        // clang-cl's link uses neither, and Clang writes no dependencies
+        // where it only checks.
+        | ("-nostdlib" | "-nostartfiles", None) if step == ClangStep::Link => Inert,
+        | ("-MD" | "-MMD", None) if step == ClangStep::Syntax => Refused,
         | (
             "-D"
             | "-U"
@@ -2195,7 +2240,6 @@ fn bcc_reading(words: &[&str], step: ClangStep) -> BccReading {
             | "-x"
             | "-B"
             | "-l"
-            | "-L"
             | "-Xlinker"
             | "-Xassembler"
             | "--include-directory="
@@ -2206,8 +2250,8 @@ fn bcc_reading(words: &[&str], step: ClangStep) -> BccReading {
         | (
             "-H" | "-MD" | "-MMD" | "-MP" | "-help" | "--help" | "-v" | "--verbose" | "--version"
             | "-w" | "-pedantic" | "-pedantic-errors" | "-pg" | "-trigraphs" | "-nostdinc"
-            | "-nostdlibinc" | "-nobuiltininc" | "-nostdlib" | "-nodefaultlibs" | "-nostartfiles"
-            | "-pthread" | "-r" | "-rdynamic" | "-static" | "-static-libgcc" | "-shared-libgcc",
+            | "-nostdlibinc" | "-nobuiltininc" | "-nostdlib" | "-nodefaultlibs" | "-pthread" | "-r"
+            | "-static",
             None,
         ) => Read,
         // bcc's command line joins these long options' values with `=`.
@@ -2235,8 +2279,9 @@ fn bcc_reading(words: &[&str], step: ClangStep) -> BccReading {
                 Inert
             },
         | ("-shared" | "--shared", None) if step == ClangStep::Link => Shared,
-        | ("-MG" | "-save-temps" | "-save-temps=" | "-save-stats", None)
-        | ("-iprefix" | "-save-temps=" | "-save-stats=", Some(_)) => Inert,
+        | ("-save-temps" | "-save-temps=" | "-save-stats", None)
+        | ("-iprefix" | "-save-temps=", Some(_))
+        | ("-save-stats=", Some("cwd" | "obj")) => Inert,
         | _ if known::clang_unused(words, step) => Unused,
         | _ => Refused,
     }
@@ -2262,7 +2307,6 @@ fn bcc_debug_option(text: &str) -> bool {
                 | "-gno-column-info"
                 | "-gline-tables-only"
                 | "-gmlt"
-                | "-gtoggle"
         )
 }
 
@@ -2730,7 +2774,29 @@ mod tests {
             (&["-S"], Preprocess, Unused),
             (&["-M"], Compile, Refused),
             (&["-MM"], Preprocess, Refused),
-            (&["-nostartfiles"], Compile, Read),
+            // clang-cl's link uses neither; beside `/c` it calls
+            // `-nostartfiles` unused, and every step `-L`.
+            (&["-nostartfiles"], Compile, Unused),
+            (&["-nostartfiles"], Link, Inert),
+            (&["-nostdlib"], Link, Inert),
+            (&["-L", "x"], Link, Unused),
+            (&["-Lx"], Compile, Unused),
+            (&["-rdynamic"], Link, Unused),
+            // `-d` with a value is unused, `-dD` alone not.
+            (&["-dDx"], Compile, Unused),
+            (&["-dumpmachinex"], Link, Unused),
+            // With `/Zs`, Clang writes the dependencies `bcc --syntax-only`
+            // does not.
+            (&["-MD"], Compile, Read),
+            (&["-MD"], Syntax, Refused),
+            (&["-MMD"], Syntax, Refused),
+            // clang-cl refuses these.
+            (&["-MG"], Compile, Refused),
+            (&["-gtoggle"], Compile, Refused),
+            (&["-save-stats=x"], Compile, Refused),
+            (&["-save-stats=obj"], Compile, Inert),
+            // clang-cl compiles nothing for the host and links nothing.
+            (&["--cuda-device-only"], Link, Refused),
             (&["--emit-static-lib"], Compile, Unused),
             (&["--emit-static-lib"], Link, Refused),
             (&["-Tx"], Compile, Unused),

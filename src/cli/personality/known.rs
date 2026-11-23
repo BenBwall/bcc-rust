@@ -172,6 +172,13 @@ pub(super) fn clang_cl_option(option: &str) -> Option<ClOption> {
     known
 }
 
+/// Whether `option`, an argument without its `/` or `-`, is the whole name
+/// of one of clang-cl's `cl` flags, which its option parser prefers to a
+/// Clang option of the same name (`-u` is `/u`, which takes no value).
+pub(super) fn is_clang_cl_flag(option: &str) -> bool {
+    clang_cl_options().any(|(kind, name)| kind == "flag" && name == option)
+}
+
 /// The `cl` option clang-cl suggests for an input `argument` that does not
 /// exist (`no such file or directory: '/Brepo'; did you mean '/Brepro'?`),
 /// as LLVM's `OptTable::findNearest` chooses it: the closest spelling, with
@@ -678,6 +685,9 @@ mod tests {
             // value; `/E` prints the definitions.
             (&["-dD"], Compile, false),
             (&["-dD"], Preprocess, false),
+            (&["-dDx"], Compile, true),
+            // clang-cl calls the source unused, not the option.
+            (&["--cuda-device-only"], Link, false),
             (&["-dI"], Compile, false),
             (&["-dumpmachine"], Compile, false),
             (&["-D", "X"], Compile, false),

@@ -407,36 +407,51 @@ def clang_driver_options(gcc, options_td):
             """Whether clang-cl calls the `/clang:` option `words` unused in
             the step `step` asks for (`/c`, `/E`, none to link): any
             `argument unused during compilation` but about the step's own
-            option, which an option that changes the step leaves unused
-            (`/c` beside `-S`), in whatever spelling Clang renders the
+            option or its input, which an option that changes the step
+            leaves unused (`/c` beside `-S`, `a.c` beside
+            `--cuda-device-only`), in whatever spelling Clang renders the
             option (`'-T Zq'` for `-TZq`)."""
+            source = str(directory / "a.c")
             result = subprocess.run(
-                [str(CLANG), "--driver-mode=cl", "-###", *step, str(directory / "a.c")]
+                [str(CLANG), "--driver-mode=cl", "-###", *step, source]
                 + [f"/clang:{word}" for word in words],
                 capture_output=True,
                 text=True,
                 cwd=directory,
                 timeout=60,
             )
-            return any(match.group(1) not in step for match in UNUSED.finditer(result.stderr))
+            return any(
+                match.group(1) not in [*step, source] for match in UNUSED.finditer(result.stderr)
+            )
 
-        def cl_tags(line, separate):
-            kind, name, *count = line.split(" ")
-            argument = f"{name}Zq" if kind == "joined" else name
+        def tags(argument, words):
+            """The tags of the option `argument` given as `words`: `cl` where
+            clang-cl takes it bare, and the steps it is unused in."""
             ignored, _ = unknown_to_cl([str(CLANG), "--driver-mode=cl"], directory, argument)
-            if not ignored:
-                line += " cl"
-            # A joined option is measured with a value and without one
-            # (`-dD`, which `-d` absorbs with a value), unless its bare name
-            # takes its value from the next argument instead (`-T`).
-            if kind == "joined":
-                forms = [[argument]] if separate else [[name], [argument]]
-            else:
-                forms = [[argument] + ["x"] * int(count[0] if count else 0)]
+            found = [] if ignored else ["cl"]
             for tag, steps in UNUSED_STEPS:
-                if all(unused_in(step, words) for step in steps for words in forms):
-                    line += f" {tag}"
-            return line
+                if all(unused_in(step, words) for step in steps):
+                    found.append(tag)
+            return "".join(f" {tag}" for tag in found)
+
+        def cl_tags(line, separate, flag):
+            """`line` with its tags, measured on the option as spelled: a
+            joined option with a value. Where its name alone, which Clang
+            takes (`flag`) and whose value no next argument gives, reads
+            otherwise (`-dD`, which `-d` absorbs with a value; the
+            `-ccc-print-phases` clang-cl shows bare), it is listed again as
+            a flag with its own tags."""
+            kind, name, *count = line.split(" ")
+            if kind != "joined":
+                words = [name] + ["x"] * int(count[0] if count else 0)
+                return [line + tags(name, words)]
+            joined = tags(f"{name}Zq", [f"{name}Zq"])
+            lines = [line + joined]
+            if flag and not separate:
+                alone = tags(name, [name])
+                if alone != joined:
+                    lines.append(f"flag {name}{alone}")
+            return lines
 
         def survey(name):
             refused, stderr = unknown(name)
@@ -453,7 +468,7 @@ def clang_driver_options(gcc, options_td):
                         lines = [line for line in lines if not line.startswith("flag ")]
                         lines.append(f"joined {name}")
             separate = any(line.startswith("separate ") for line in lines)
-            return [cl_tags(line, separate) for line in lines]
+            return [tagged for line in lines for tagged in cl_tags(line, separate, not refused)]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(survey, names))

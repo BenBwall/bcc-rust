@@ -148,6 +148,8 @@ fn clang_cl_plans_the_outputs_clang_cl_names() {
         (&["/P", "a.c", "/clang:-o", "/clang:-"], None),
         (&["/E", "a.c", "-o", "x.i"], None),
         (&["/P", "a.c", "-o", "x.i"], Some("a.i")),
+        // clang-cl's `/P` writes its file beside `/E`.
+        (&["/P", "/E", "a.c"], Some("a.i")),
     ] {
         assert_eq!(
             output(&last(arguments)).as_deref(),
