@@ -160,6 +160,54 @@ pub(crate) fn float_binary(
     }
 }
 
+/// `powi`: `base`, of type `ty`, raised to the `i32` `exponent` as libgcc's
+/// `__powidf2` and its relatives compute it, squaring the base for each
+/// bit of the exponent's magnitude and multiplying in the squares its set
+/// bits select, the lowest first, then taking the reciprocal for a negative
+/// exponent. An odd exponent starts from the base itself, so `powi(x, 1)`
+/// is `x`, a signaling NaN included. GNU extension: GCC manual, "Other
+/// Builtins"; libgcc's `libgcc2.c`, `__powidf2`.
+pub(crate) fn powi(ty: Type, base: RuntimeValue, exponent: RuntimeValue) -> RuntimeValue {
+    let RuntimeValue::Int(bits) = exponent else {
+        return RuntimeValue::Poison;
+    };
+    if matches!(base, RuntimeValue::Poison) {
+        return RuntimeValue::Poison;
+    }
+    let one = match ty {
+        | Type::F32 => RuntimeValue::F32(1.0),
+        | Type::F64 => RuntimeValue::F64(1.0),
+        | Type::F80 => RuntimeValue::F80(X87::from_f64(1.0)),
+        // Binary128's one: the exponent bias, 16383, and no fraction.
+        | Type::F128 => RuntimeValue::F128(0x3FFF << 112),
+        | _ => return RuntimeValue::Poison,
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "The exponent is the low 32 bits of an i32 value."
+    )]
+    let exponent = bits as u32 as i32;
+    let mut magnitude = exponent.unsigned_abs();
+    let mut square = base;
+    let mut power = if magnitude % 2 == 1 { base } else { one };
+    loop {
+        magnitude >>= 1;
+        if magnitude == 0 {
+            break;
+        }
+        square = float_binary(Opcode::Fmul, ty, square, square);
+        if magnitude % 2 == 1 {
+            power = float_binary(Opcode::Fmul, ty, power, square);
+        }
+    }
+    if exponent < 0 {
+        float_binary(Opcode::Fdiv, ty, one, power)
+    } else {
+        power
+    }
+}
+
 /// `fneg`: the sign bit flipped, NaNs included.
 pub(crate) fn float_negate(ty: Type, a: RuntimeValue) -> RuntimeValue {
     debug_assert!(ty.is_float(), "fneg on {ty}");

@@ -44,6 +44,7 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
+        Intrinsic,
         Opcode,
         Type,
         Value,
@@ -319,20 +320,56 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// The refusal of a call of a reserved `__builtin_` name semantic
     /// analysis has no contract for, whose result type it could not
-    /// analyze: by name where GCC has the builtin.
-    pub(super) fn opaque_builtin(&self, mut e: &'tu Expression<'tu>) -> Option<LoweringError> {
-        // The call may sit under parentheses and casts, as in
-        // `(void) __builtin_apply_args ()`, whose cast has no type either.
+    /// analyze: by name where GCC has the builtin. The call may be `e` or
+    /// an operand of the operators `e` applies, whose type it leaves
+    /// unanalyzed in turn (`__builtin_stack_save () != 0`).
+    pub(super) fn opaque_builtin(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
         use crate::translation_phases::parsing::syntax::ExpressionType as E;
-        loop {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(e);
+        while let Some(e) = work.pop() {
             match e.kind {
-                | E::Parenthesized { expression } => e = expression,
+                // As in `(void) __builtin_apply_args ()`, whose cast has no
+                // type either, and an operand whose type `sizeof` or
+                // `_Alignof` asks for.
+                | E::Parenthesized {
+                    expression: operand,
+                }
                 | E::Cast {
-                    operand_expression, ..
-                } => e = operand_expression,
-                | _ => break,
+                    operand_expression: operand,
+                    ..
+                }
+                | E::Unary {
+                    operand_expression: operand,
+                    ..
+                }
+                | E::SizeofExpr(operand)
+                | E::AlignofExpr(operand) => work.push(operand),
+                | E::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => {
+                    work.push(right_expression);
+                    work.push(left_expression);
+                },
+                // `x ? __builtin_stack_save () : 0`.
+                | E::Conditional(conditional) | E::OmittedConditional(conditional) => {
+                    work.push(conditional.else_expression);
+                    work.push(conditional.then_expression);
+                    work.push(conditional.condition_expression);
+                },
+                | _ =>
+                    if let Some(refusal) = self.opaque_builtin_call(e) {
+                        return Some(refusal);
+                    },
             }
         }
+        None
+    }
+
+    /// [`Self::opaque_builtin`] for `e` itself.
+    fn opaque_builtin_call(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
         let crate::translation_phases::semantic_analysis::Callee::Builtin {
             binding: Some(binding),
             instance: None,
@@ -798,6 +835,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .ok_or_else(|| LoweringError::unsupported(super::Construct::Builtin, source))?;
                 Operand::Value(self.fconst(ty, bits))
             },
+            | CommonBuiltin::Powi(_) => {
+                let base = self.value(items[0], source)?;
+                let exponent = self.value(items[1], source)?;
+                let builtin = instance.descriptor.descriptor().spelling;
+                Operand::Value(self.powi(base, exponent, builtin, source)?)
+            },
             | CommonBuiltin::Rotate(width, right) => {
                 let value = self.value(items[0], source)?;
                 let count = self.value(items[1], source)?;
@@ -1221,7 +1264,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let gcc = self.unit.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Gcc;
         let result = gcc.then_some(Type::I32);
-        let signature = self.unit.module.intern(crate::ir::Signature {
+        let signature = crate::ir::Signature {
             params: &[],
             aggregates: &[],
             noundef: &[],
@@ -1233,24 +1276,100 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             result_noundef: false,
             variadic_noundef: false,
             chain: false,
-        });
-        let name = "__cpu_indicator_init";
-        let function = match self.unit.module.symbol(name) {
-            | Some(crate::ir::Symbol::Function(function)) => function,
-            | Some(_) =>
-                return Err(LoweringError::missing(
-                    "__cpu_indicator_init is not a function",
-                    source,
-                )),
-            | None =>
-                self.unit
-                    .module
-                    .declare_function(name, signature, crate::ir::Linkage::External),
         };
-        Ok(match self.draft.push(Op::Call(function, &[]), result) {
+        let function = self.unit.runtime_function(
+            "__cpu_indicator_init",
+            signature,
+            super::errors::RuntimeCaller::Builtin("__builtin_cpu_init"),
+            source,
+        )?;
+        Ok(match self.call_runtime(function, &[], result) {
             | Some(value) => Operand::Value(value),
             | None => Operand::Void,
         })
+    }
+
+    /// `__builtin_powi` and its `float` and `long double` forms: the base
+    /// raised to the `int` exponent as the claimed compiler computes it.
+    /// Clang emits `llvm.powi`, which LLVM's code generator makes a call of
+    /// the runtime's `__powidf2` or its relative, or on Windows, whose
+    /// runtimes lack them, of the C library's `pow`, `powf` or `powl` with
+    /// the exponent converted to the base's type; GCC calls libgcc's
+    /// `__powidf2` on every target, MinGW-w64's too. Off Windows the IR's
+    /// `powi` intrinsic says so, which every back end and the interpreter
+    /// compute alike; on Windows the call is made here, so that they all call
+    /// the same function. A unit that gives the routine's name to a static
+    /// function, which Clang then calls with the routine's arguments, is
+    /// refused (`runtime_calls.rs`). GNU extension: GCC manual, "Other
+    /// Builtins".
+    fn powi(
+        &mut self,
+        base: Value,
+        exponent: Value,
+        builtin: &'static str,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let ty = self.draft.value_type(base);
+        let intrinsic = match ty {
+            | Type::F32 => Intrinsic::PowiF32,
+            | Type::F64 => Intrinsic::PowiF64,
+            | Type::F80 => Intrinsic::PowiF80,
+            | Type::F128 => Intrinsic::PowiF128,
+            | _ =>
+                return Err(LoweringError::unsupported(
+                    super::Construct::Builtin,
+                    source,
+                )),
+        };
+        let configuration = self.unit.context.configuration;
+        if !matches!(
+            configuration.target(),
+            crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+        ) {
+            let args = self.scratch.alloc_slice_copy(&[base, exponent]);
+            return Ok(self
+                .draft
+                .push(Op::Intrinsic(intrinsic, 0, args), Some(ty))
+                .expect("a power has a result"));
+        }
+        // `cl` has no such builtin; its C runtime has `pow`.
+        let gcc = configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc;
+        let (name, exponent) = if gcc {
+            let (name, _) = intrinsic.powi_routine().expect("a powi intrinsic");
+            (name, exponent)
+        } else {
+            let name = match ty {
+                | Type::F32 => "powf",
+                | Type::F64 => "pow",
+                | _ => "powl",
+            };
+            (name, self.convert(Opcode::Sitofp, ty, exponent))
+        };
+        let params = self
+            .scratch
+            .alloc_slice_copy(&[ty, self.draft.value_type(exponent)]);
+        let signature = crate::ir::Signature {
+            params,
+            aggregates: &[],
+            noundef: &[],
+            result: Some(ty),
+            variadic: false,
+            variadic_fixed: None,
+            extensions: &[],
+            result_extension: None,
+            result_noundef: false,
+            variadic_noundef: false,
+            chain: false,
+        };
+        let function = self.unit.runtime_function(
+            name,
+            signature,
+            super::errors::RuntimeCaller::Builtin(builtin),
+            source,
+        )?;
+        Ok(self
+            .call_runtime(function, &[base, exponent], Some(ty))
+            .expect("a power has a result"))
     }
 
     /// `__builtin_cpu_supports` (`processor` false) and `__builtin_cpu_is`:

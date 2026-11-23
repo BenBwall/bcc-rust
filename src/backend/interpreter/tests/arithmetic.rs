@@ -454,3 +454,67 @@ fn binary128_arithmetic_matches_libgcc() {
         RuntimeValue::F128(three | 1 << 127)
     );
 }
+
+/// `powi` squares and multiplies as libgcc's `__powidf2` and its relatives
+/// do: an odd exponent starts from the base itself, which keeps a
+/// signaling NaN, and a negative one takes the reciprocal, also of
+/// `INT_MIN`'s magnitude. The binary128 results are GCC 14's for libgcc's
+/// algorithm on `__float128`.
+#[test]
+fn powi_squares_and_multiplies_as_libgcc_does() {
+    let power = |ty: &str, base: RuntimeValue, exponent: i32| {
+        let text = format!(
+            "function @f({ty}, i32) -> {ty} external {{\nblock0(v0: {ty}, v1: i32):\n    v2 = \
+             intrinsic powi.{ty} v0, v1\n    return v2\n}}\n"
+        );
+        #[expect(clippy::cast_sign_loss, reason = "The exponent's bits.")]
+        let exponent = int(u128::from(exponent as u32));
+        returned_with(&text, "f", &[base, exponent])
+    };
+    let f64_bits = |value: RuntimeValue| match value {
+        | RuntimeValue::F64(value) => value.to_bits(),
+        | other => panic!("{other:?}"),
+    };
+    let double = |bits: u64| RuntimeValue::F64(f64::from_bits(bits));
+    // 1.1 to the 15th, whose last bit the runtime's order of products sets.
+    assert_eq!(
+        f64_bits(power("f64", RuntimeValue::F64(1.1), 15)),
+        0x4010_B580_8B4B_AA18
+    );
+    assert_eq!(
+        f64_bits(power("f64", RuntimeValue::F64(2.0), -1)),
+        0x3FE0_0000_0000_0000
+    );
+    assert_eq!(f64_bits(power("f64", RuntimeValue::F64(2.0), i32::MIN)), 0);
+    assert_eq!(
+        f64_bits(power("f64", RuntimeValue::F64(-1.0), i32::MIN)),
+        0x3FF0_0000_0000_0000
+    );
+    assert_eq!(
+        f64_bits(power("f64", double(0x7FF4_0000_0000_0000), 1)),
+        0x7FF4_0000_0000_0000
+    );
+    assert_eq!(
+        f64_bits(power("f64", double(0x7FF4_0000_0000_0000), 2)),
+        0x7FFC_0000_0000_0000
+    );
+    assert_eq!(
+        f64_bits(power("f64", RuntimeValue::F64(-0.0), -1)),
+        0xFFF0_0000_0000_0000
+    );
+    assert_eq!(
+        power("f32", RuntimeValue::F32(1.1), 15),
+        RuntimeValue::F32(f32::from_bits(0x4085_AC07))
+    );
+    // 1.1 (the double, widened) to the 15th, and 2 to the -1st.
+    let one_point_one = 0x3FFF_1999_9999_9999_A000_0000_0000_0000;
+    assert_eq!(
+        power("f128", RuntimeValue::F128(one_point_one), 15),
+        RuntimeValue::F128(0x4001_0B58_08B4_BAA1_8CB2_830A_EAEA_B65D)
+    );
+    assert_eq!(
+        power("f128", RuntimeValue::F128(0x4000 << 112), -1),
+        RuntimeValue::F128(0x3FFE << 112)
+    );
+    assert_eq!(power("f64", RuntimeValue::Poison, 2), RuntimeValue::Poison);
+}

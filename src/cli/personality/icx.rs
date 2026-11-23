@@ -858,6 +858,12 @@ fn is_intel_warning(option: &str) -> bool {
         .any(|line| line == name)
 }
 
+/// Whether icx's wrapper reports `text`, a whole argument, as one of
+/// Intel's classic options (`command line warning #10430`) and drops it.
+pub(super) fn is_classic_option(text: &str) -> bool {
+    classic_option(text, &mut [].iter().peekable()).is_some()
+}
+
 /// The classic option `text` names, as the wrapper lists it, reading the
 /// operand of one that takes the next argument: icx 2026.2.0's
 /// `-qnextgen-diag` table.

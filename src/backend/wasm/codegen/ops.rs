@@ -118,7 +118,15 @@ impl Codegen<'_, '_, '_, '_, '_> {
                 self.indirect_call(sig, args, result);
             },
             | InstData::InlineAsm { .. } => self.refuse("inline assembly"),
-            | InstData::Intrinsic { .. } => self.refuse("an x86 instruction"),
+            | InstData::Intrinsic {
+                intrinsic, args, ..
+            } => match super::calls::powi_routine(intrinsic) {
+                | Some(routine) => {
+                    let args = self.body.value_list(args);
+                    self.call_routine(routine, &[Arg::Value(args[0]), Arg::Value(args[1])], result);
+                },
+                | None => self.refuse("an x86 instruction"),
+            },
             | InstData::VaArgAggregate { .. } =>
                 self.refuse("va_arg of an aggregate before ABI lowering"),
             // Recomputed where they are used, and the terminators, which

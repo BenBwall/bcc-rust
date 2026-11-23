@@ -1840,8 +1840,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `__builtin_types_compatible_p` and `_Countof` have none, whatever
     /// their operands. With `evaluation`, what evaluating the expression
     /// would run counts too, which Clang's predicate passes over: an `asm`
-    /// statement, and the size of a variable length array type that
-    /// `sizeof` or `_Alignof` names.
+    /// statement, the size of a variable length array type that `sizeof` or
+    /// `_Alignof` names, and a call of a builtin bcc knows but does not
+    /// implement ([`Self::refused_builtin`]), which lowering would refuse.
     /// GNU extension: GCC manual, "Statement Exprs"; Clang's `Expr.cpp`.
     pub(in crate::translation_phases::semantic_analysis) fn clang_has_side_effects(
         &self,
@@ -1913,6 +1914,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// Whether the callee `callee` names a builtin this compiler binds
+    /// but does not implement (an opaque intrinsic), which lowering
+    /// refuses to call.
+    fn refused_builtin(&self, mut callee: &'tu Expression<'tu>) -> bool {
+        while let ExpressionType::Parenthesized { expression: inner } = callee.kind {
+            callee = inner;
+        }
+        matches!(callee.kind, ExpressionType::Identifier(_))
+            && self.expression_info(callee).binding.is_some_and(|binding| {
+                self.bindings[binding].origin == super::super::BindingOrigin::OpaqueIntrinsic
+            })
+    }
+
     fn side_effects(&self, expression: &'tu Expression<'tu>, rules: EffectRules) -> bool {
         let folding = rules == EffectRules::Folding;
         let clang = matches!(rules, EffectRules::Clang { .. });
@@ -1930,7 +1944,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     function_expression,
                     arguments,
                 } if clang => {
-                    if !self.clang_pure_callee(function_expression) {
+                    if !self.clang_pure_callee(function_expression)
+                        || (rules == (EffectRules::Clang { evaluation: true })
+                            && self.refused_builtin(function_expression))
+                    {
                         return true;
                     }
                     work.push((function_expression, true));

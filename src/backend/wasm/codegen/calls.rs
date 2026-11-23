@@ -585,6 +585,9 @@ routines! {
     Fmodf = "fmodf" (F32, F32) -> F32;
     Fmod = "fmod" (F64, F64) -> F64;
     Fmodl = "fmodl" (F128, F128) -> F128;
+    Powisf2 = "__powisf2" (F32, I32) -> F32;
+    Powidf2 = "__powidf2" (F64, I32) -> F64;
+    Powitf2 = "__powitf2" (F128, I32) -> F128;
     Addtf3 = "__addtf3" (F128, F128) -> F128;
     Subtf3 = "__subtf3" (F128, F128) -> F128;
     Multf3 = "__multf3" (F128, F128) -> F128;
@@ -641,6 +644,15 @@ pub(crate) const fn half_routine(
     })
 }
 
+/// The runtime routine that computes a `powi` intrinsic, named as
+/// [`crate::ir::Intrinsic::powi_routine`] names it.
+pub(super) fn powi_routine(intrinsic: crate::ir::Intrinsic) -> Option<Routine> {
+    let (name, _) = intrinsic.powi_routine()?;
+    [Routine::Powisf2, Routine::Powidf2, Routine::Powitf2]
+        .into_iter()
+        .find(|routine| routine.name() == name)
+}
+
 /// The routines an instruction calls, for the linker to include.
 pub(crate) fn routines_of(
     data: &InstData,
@@ -670,6 +682,10 @@ pub(crate) fn routines_of(
             };
             visit(routine);
         },
+        | InstData::Intrinsic { intrinsic, .. } =>
+            if let Some(routine) = powi_routine(intrinsic) {
+                visit(routine);
+            },
         | InstData::FloatCompare { ty: Type::F128, .. } => {
             for routine in [
                 Routine::Eqtf2,

@@ -500,46 +500,46 @@ impl<'tu> Unit<'_, 'tu, '_> {
     }
 
     /// The external C library function `name`, declared with `params` and
-    /// `result` unless the unit declares it already with the same types.
+    /// `result`, for a jump out of a nested function. The call needs the
+    /// function itself, as `_setjmp` returns twice, so one the unit
+    /// declares with another type is refused too (`runtime_calls.rs`).
     fn library_function(
         &mut self,
-        name: &str,
+        name: &'static str,
         params: &[Type],
         result: Option<Type>,
         source: SourceVectors,
     ) -> Result<FuncId, LoweringError> {
-        if let Some(symbol) = self.module.symbol(name) {
-            let crate::ir::Symbol::Function(func) = symbol else {
-                return Err(LoweringError::missing(
-                    "a C library function's name names an object",
-                    source,
-                ));
-            };
-            let signature = self.module.function_signature(func);
-            if signature.params != params || signature.result != result || signature.variadic {
-                return Err(LoweringError::missing(
-                    "a C library function is declared with another type",
-                    source,
-                ));
-            }
-            return Ok(func);
+        let caller = super::errors::RuntimeCaller::Operation("a jump out of a nested function");
+        let function = self.runtime_function(
+            name,
+            Signature {
+                params,
+                aggregates: &[],
+                noundef: &[],
+                result,
+                variadic: false,
+                variadic_fixed: None,
+                extensions: &[],
+                result_extension: None,
+                result_noundef: false,
+                variadic_noundef: false,
+                chain: false,
+            },
+            caller,
+            source,
+        )?;
+        if function.retyped.is_some() {
+            return Err(LoweringError {
+                kind:   super::LoweringErrorKind::RuntimeName {
+                    routine: name,
+                    caller,
+                    taken: super::errors::TakenName::OtherType,
+                },
+                source: Some(source),
+            });
         }
-        let signature = self.module.intern(Signature {
-            params,
-            aggregates: &[],
-            noundef: &[],
-            result,
-            variadic: false,
-            variadic_fixed: None,
-            extensions: &[],
-            result_extension: None,
-            result_noundef: false,
-            variadic_noundef: false,
-            chain: false,
-        });
-        Ok(self
-            .module
-            .declare_function(name, signature, crate::ir::Linkage::External))
+        Ok(function.func)
     }
 
     /// The function scope that evaluates the runtime bound `bound`: the

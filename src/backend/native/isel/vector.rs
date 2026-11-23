@@ -13,13 +13,21 @@
 //! nothing else here keeps a value in the YMM registers' upper halves and
 //! the SSE code after it would otherwise pay for the transition. The scalar
 //! square roots compute on the values' own registers, and `xgetbv` reads its
-//! index from `%ecx` and its result from `%edx:%eax`.
+//! index from `%ecx` and its result from `%edx:%eax`. `powi` calls the
+//! runtime, as LLVM's code generator does.
 //!
 //! Intel SDM Vol. 2A and 2B name each instruction ("AESENC", "PCLMULQDQ",
 //! "ROUNDPS", "CVTPS2DQ", "RCPPS", "SQRTSS", "PCMPISTRI", "VZEROUPPER",
 //! "XGETBV").
 
-use super::Selector;
+use super::{
+    Selector,
+    ValueKind,
+    calls::{
+        LibArg,
+        LibResult,
+    },
+};
 use crate::{
     backend::native::mir::{
         AluOp,
@@ -36,6 +44,7 @@ use crate::{
     },
     ir::{
         Intrinsic,
+        Type,
         Value,
     },
 };
@@ -73,6 +82,10 @@ impl Selector<'_, '_, '_> {
             (None, args)
         };
         match intrinsic {
+            | Intrinsic::PowiF32
+            | Intrinsic::PowiF64
+            | Intrinsic::PowiF80
+            | Intrinsic::PowiF128 => return self.powi(intrinsic, operands, result),
             | Intrinsic::SqrtF32 | Intrinsic::SqrtF64 => {
                 let op = if intrinsic == Intrinsic::SqrtF32 {
                     VectorOp::SqrtSs
@@ -104,6 +117,28 @@ impl Selector<'_, '_, '_> {
         }
         if form == VectorForm::Vex256 {
             self.emit(MInst::VZero { all: false });
+        }
+    }
+
+    /// `powi`: a call of the runtime's `__powidf2` or its relative, as
+    /// LLVM's code generator lowers `llvm.powi`, with the base in `%xmm0`
+    /// (or, for `f80` and `f128`, passed as the routine takes it) and the
+    /// exponent in the first integer register.
+    fn powi(&mut self, intrinsic: Intrinsic, operands: &[Value], result: Option<Value>) {
+        let (name, ty) = intrinsic.powi_routine().expect("a powi intrinsic");
+        let exponent = LibArg::Gpr(self.reg(operands[1]));
+        let result = result.expect("powi has a result");
+        if matches!(ty, Type::F80 | Type::F128) {
+            let base = LibArg::Wide(ty, self.pair(operands[0]));
+            let ValueKind::Pair(low, high) = self.kind(result) else {
+                unreachable!("an f80 or f128 result is a pair")
+            };
+            let dst = (Reg::Virt(low), Reg::Virt(high));
+            self.libcall(name, &[base, exponent], LibResult::Wide(ty, dst));
+        } else {
+            let base = LibArg::Xmm(self.reg(operands[0]));
+            let dst = self.result_reg(Some(result));
+            self.libcall(name, &[base, exponent], LibResult::Xmm(dst));
         }
     }
 

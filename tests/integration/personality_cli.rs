@@ -8317,6 +8317,161 @@ mod tests {
         );
     }
 
+    /// clang-cl ignores each GCC and Clang option its driver does not take
+    /// with a warning in `-Wunknown-argument`, which its warning options
+    /// read anywhere on the command line control, as clang-cl 23.1.5 does:
+    /// `/WX` makes it an error, `/w` and `-Wno-unknown-argument` silence it.
+    #[test]
+    fn clang_cl_reports_ignored_arguments_as_its_warning_options_say() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        let warning = |argument: &str| {
+            format!(
+                "clang-cl: warning: unknown argument ignored in clang-cl: '{argument}' \
+                 [-Wunknown-argument]\n"
+            )
+        };
+        let error = |argument: &str| {
+            format!(
+                "clang-cl: error: unknown argument ignored in clang-cl: '{argument}' \
+                 [-Werror,-Wunknown-argument]\n"
+            )
+        };
+        let warnings = [warning("-fsigned-char"), warning("-ffreestanding")].concat();
+        let errors = [error("-fsigned-char"), error("-ffreestanding")].concat();
+        let fatal = "clang-cl: fatal error: unknown argument ignored in clang-cl: '-fsigned-char' \
+                     [-Wunknown-argument]\n";
+        for (options, expected, status) in [
+            (&[][..], warnings.as_str(), 0),
+            (&["/W4"], &warnings, 0),
+            (&["/Wall"], &warnings, 0),
+            (&["/WX"], &errors, 1),
+            (&["-Werror"], &errors, 1),
+            (&["-Werror=unknown-argument"], &errors, 1),
+            (&["/WX", "/WX-"], &warnings, 0),
+            (&["/WX", "-Wno-error=unknown-argument"], &warnings, 0),
+            (&["-Wno-error=unknown-argument", "-Werror"], &warnings, 0),
+            (
+                &["-Werror=unknown-argument", "-Wunknown-argument"],
+                &errors,
+                1,
+            ),
+            (&["-Werror=unknown-argument", "-Wno-error"], &errors, 1),
+            (&["/w"], "", 0),
+            (&["/W0"], "", 0),
+            (&["-w"], "", 0),
+            (&["--no-warnings"], "", 0),
+            (&["/WX", "/w"], "", 0),
+            (&["/w", "/W4"], "", 0),
+            (&["-Wno-unknown-argument"], "", 0),
+            (&["/WX", "-Wno-unknown-argument"], "", 0),
+            (&["-Wno-everything"], "", 0),
+            (&["-Wno-everything", "-Weverything"], "", 0),
+            (
+                &["-Wno-unknown-argument", "-Wunknown-argument"],
+                &warnings,
+                0,
+            ),
+            (
+                &["-Werror=unknown-argument", "-Wno-unknown-argument"],
+                "",
+                0,
+            ),
+            (&["/WX", "-Wfatal-errors"], fatal, 1),
+            (&["-Wfatal-errors=unknown-argument"], fatal, 1),
+            (&["-Wfatal-errors"], &warnings, 0),
+            // clang-cl hands `/clang:` options to its front end alone.
+            (&["/clang:-Wno-unknown-argument"], &warnings, 0),
+            (&["/clang:-w"], &warnings, 0),
+            (&["/clang:-Werror"], &warnings, 0),
+        ] {
+            let mut args = vec!["/c", "/Fo:a.obj", "-fsigned-char"];
+            args.extend(options);
+            args.extend(["a.c", "-ffreestanding"]);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(stderr(&output), expected, "{options:?}");
+            assert_eq!(output.status.code(), Some(status), "{options:?}");
+        }
+        // The warning suggests the option clang-cl's driver finds one edit
+        // away, keeping a value it is given.
+        let output = directory.bcc(
+            "--clang-cl-mode",
+            &["/c", "/Fo:a.obj", "-fbuiltin-", "-mabs=x", "-mabs=", "a.c"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "clang-cl: warning: unknown argument ignored in clang-cl '-fbuiltin-'; did you mean \
+             '-fbuiltin'? [-Wunknown-argument]\nclang-cl: warning: unknown argument ignored in \
+             clang-cl '-mabs=x'; did you mean '-mabi=x'? [-Wunknown-argument]\nclang-cl: warning: \
+             unknown argument ignored in clang-cl: '-mabs=' [-Wunknown-argument]\n"
+        );
+        // An ignored option takes no value: the next argument is an input,
+        // as in clang-cl.
+        let output = directory.bcc("--clang-cl-mode", &["/c", "-isystem", "missing.c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            [
+                warning("-isystem").as_str(),
+                "clang-cl: error: no such file or directory: 'missing.c'\n",
+            ]
+            .concat()
+        );
+    }
+
+    /// The GCC-style options clang-cl ignores bcc ignores too, rather than
+    /// honoring them: `-ffreestanding` leaves the hosted environment,
+    /// `-std=c11` the C17 default and `-funsafe-math-optimizations` the
+    /// math functions' `errno` alone; `/clang:` gives them to bcc. icx-cl
+    /// takes `-ffast-math`, which its driver passes on.
+    #[test]
+    fn clang_cl_ignores_the_gcc_options_its_driver_does_not_take() {
+        let directory = Directory::new();
+        directory.write(
+            "probe.c",
+            "hosted __STDC_HOSTED__ version __STDC_VERSION__ fast __FAST_MATH__\n",
+        );
+        let expand = |mode: &str, options: &[&str]| {
+            let mut args = vec!["/EP"];
+            args.extend(options);
+            args.push("probe.c");
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            (stdout(&output).trim().to_owned(), stderr(&output))
+        };
+        let (plain, quiet) = expand("--clang-cl-mode", &[]);
+        assert_eq!(plain, "hosted 1 version 201710L fast __FAST_MATH__");
+        assert_eq!(quiet, "");
+        for option in ["-ffreestanding", "-std=c11", "-ffast-math", "-pedantic"] {
+            let (text, warning) = expand("--clang-cl-mode", &[option]);
+            assert_eq!(text, plain, "{option}");
+            assert_eq!(
+                warning,
+                format!(
+                    "clang-cl: warning: unknown argument ignored in clang-cl: '{option}' \
+                     [-Wunknown-argument]\n"
+                )
+            );
+        }
+        let (text, _) = expand(
+            "--clang-cl-mode",
+            &["/clang:-ffreestanding", "/clang:-std=c11"],
+        );
+        assert_eq!(text, "hosted 0 version 201112L fast __FAST_MATH__");
+        let (text, warning) = expand("--icx-cl-mode", &["-ffreestanding"]);
+        assert!(text.starts_with("hosted 1 "), "{text}");
+        assert!(
+            warning.ends_with(
+                "icx-cl: warning: unknown argument ignored in clang-cl '-ffreestanding'; did you \
+                 mean '-Qfreestanding'? [-Wunknown-argument]\n"
+            ),
+            "{warning}"
+        );
+        let (_, warning) = expand("--icx-cl-mode", &["-ffast-math"]);
+        assert!(!warning.contains("unknown argument"), "{warning}");
+    }
+
     #[test]
     fn diagnostics_use_each_compilers_location_format() {
         let directory = Directory::new();

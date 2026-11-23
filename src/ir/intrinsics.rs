@@ -3,7 +3,9 @@
 //! expands most `__builtin_ia32_*` builtins into scalar lane code
 //! (`lowering/x86.rs`); the rest become one `intrinsic` instruction naming
 //! the instruction, as Clang's `CGBuiltin.cpp` emits an LLVM intrinsic for
-//! them.
+//! them. `powi`, a power with an `int` exponent, is one too, which the
+//! runtime's `__powidf2` and its relatives compute; lowering emits it off
+//! Windows, where LLVM calls `pow` for it instead.
 //!
 //! An intrinsic reads each vector operand from memory, through a `ptr`
 //! operand, and writes a vector result through a destination `ptr`, its
@@ -21,8 +23,9 @@
 //! The LLVM back end calls the LLVM intrinsic of [`IntrinsicSignature::llvm`]
 //! on the loaded vectors; the interpreter computes the instructions it
 //! models (`backend/interpreter/intrinsics.rs`); the native back end emits
-//! each instruction (`backend/native/isel/vector.rs`); the WebAssembly back
-//! end refuses the instruction by name.
+//! each instruction (`backend/native/isel/vector.rs`), and calls the runtime
+//! for `powi`; the WebAssembly back end calls the runtime for `powi` and
+//! refuses the others by name.
 
 use super::types::Type;
 
@@ -58,14 +61,30 @@ impl IntrinsicOperand {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IntrinsicSignature {
     /// `None` for an instruction with no result.
-    pub(crate) result:     Option<IntrinsicOperand>,
-    pub(crate) operands:   &'static [IntrinsicOperand],
+    pub(crate) result:             Option<IntrinsicOperand>,
+    pub(crate) operands:           &'static [IntrinsicOperand],
     /// The type of the immediate operand LLVM's intrinsic takes last, if
     /// the instruction has one.
-    pub(crate) immediate:  Option<Type>,
-    pub(crate) llvm:       &'static str,
+    pub(crate) immediate:          Option<Type>,
+    pub(crate) llvm:               &'static str,
     /// Whether the LLVM intrinsic is overloaded on its result type.
-    pub(crate) overloaded: bool,
+    pub(crate) overloaded:         bool,
+    /// Whether it is also overloaded on its last operand's type, as
+    /// `llvm.powi.f64.i32` is.
+    pub(crate) overloaded_operand: bool,
+}
+
+impl Intrinsic {
+    /// The runtime routine that computes a `powi`, and its base's type.
+    pub(crate) const fn powi_routine(self) -> Option<(&'static str, Type)> {
+        match self {
+            | Self::PowiF32 => Some(("__powisf2", Type::F32)),
+            | Self::PowiF64 => Some(("__powidf2", Type::F64)),
+            | Self::PowiF80 => Some(("__powixf2", Type::F80)),
+            | Self::PowiF128 => Some(("__powitf2", Type::F128)),
+            | _ => None,
+        }
+    }
 }
 
 impl IntrinsicSignature {
@@ -118,6 +137,7 @@ const fn sig(
         immediate,
         llvm,
         overloaded: false,
+        overloaded_operand: false,
     }
 }
 
@@ -126,6 +146,15 @@ const fn overloaded(signature: IntrinsicSignature) -> IntrinsicSignature {
     IntrinsicSignature {
         overloaded: true,
         ..signature
+    }
+}
+
+/// `powi` of the base and the `i32` exponent `operands`: `llvm.powi`,
+/// overloaded on the base, which is the result's type, and on the exponent.
+const fn powi(operands: &'static [IntrinsicOperand]) -> IntrinsicSignature {
+    IntrinsicSignature {
+        overloaded_operand: true,
+        ..overloaded(sig(Some(operands[0]), operands, None, "llvm.powi"))
     }
 }
 
@@ -167,6 +196,15 @@ intrinsics! {
         => overloaded(sig(Some(S(Type::F32)), &[S(Type::F32)], None, "llvm.sqrt")),
     SqrtF64 = "x86.sqrtsd"
         => overloaded(sig(Some(S(Type::F64)), &[S(Type::F64)], None, "llvm.sqrt")),
+    /// The base raised to the `i32` exponent by repeated squaring, the
+    /// reciprocal for a negative one, as libgcc's and compiler-rt's
+    /// `__powisf2`, `__powidf2`, `__powixf2` and `__powitf2` compute it:
+    /// GCC's and Clang's `__builtin_powi`. GCC manual, "Other Builtins";
+    /// LLVM Language Reference, "`llvm.powi.*` Intrinsic".
+    PowiF32 = "powi.f32" => powi(&[S(Type::F32), I32]),
+    PowiF64 = "powi.f64" => powi(&[S(Type::F64), I32]),
+    PowiF80 = "powi.f80" => powi(&[S(Type::F80), I32]),
+    PowiF128 = "powi.f128" => powi(&[S(Type::F128), I32]),
     /// One AES encryption round (`aesenc`): `ShiftRows`, `SubBytes`,
     /// `MixColumns`, then the round key added by exclusive or. Intel SDM
     /// Vol. 2A, "AESENC"; Clang `BuiltinsX86.td`, `__builtin_ia32_aesenc128`.
