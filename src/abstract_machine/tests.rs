@@ -3456,7 +3456,7 @@ fn the_usual_arithmetic_conversions_say_which_operand_converts_and_why() {
         conversion
             .event
             .explanation
-            .contains("is wider (64 bits against 32)"),
+            .contains("is wider (64 bits against 32 on x86-64 Linux)"),
         "{}",
         conversion.event.explanation
     );
@@ -3797,7 +3797,7 @@ fn sizeof_gives_a_size_t_without_evaluating_its_operand() {
         ["6.5.3.4p2", "6.5.3.4p4", "7.17p2", "6.3.2.1p3"]
     );
     assert_eq!(first.event.kind.category(), "evaluate");
-    assert_eq!(first.event.result_type.as_deref(), Some("unsigned long"));
+    assert_eq!(first.event.result_type.as_deref(), Some("size_t"));
     // The operand is never evaluated: nothing is read, nothing can stop.
     assert!(
         !steps
@@ -3916,6 +3916,58 @@ fn an_object_declared_size_t_keeps_the_typedef_name() {
     );
 }
 
+/// A long is 8 bytes on x86-64 Linux but 4 on x86_64-pc-windows-msvc, and a
+/// long double 16 and 8, so every statement of their ranges, widths or
+/// types names the target; an int's, the same on both, does not.
+#[test]
+fn statements_of_long_widths_name_x86_64_linux() {
+    let source = "struct s { char c; long l; };\nint main(void) {\n    long a = 3000000000;\n    \
+                  long b = a + 1;\n    unsigned long c = (unsigned long)b;\n    struct s v;\n    \
+                  v.l = 2;\n    long double d = 18446744073709551615u;\n    int i = 1;\n    i = i \
+                  + 1;\n    return (int)sizeof(long) + i;\n}\n";
+    returned(source, 10);
+    let steps = states(source);
+    let said = |kind: EventKind, words: &str| {
+        steps.iter().any(|state| {
+            state.event.kind == kind
+                && format!("{} {}", state.event.summary, state.event.explanation).contains(words)
+        })
+    };
+    for (kind, words) in [
+        (
+            EventKind::Constant,
+            "has type long on x86-64 Linux: 3000000000 is too large for an int",
+        ),
+        (
+            EventKind::Arithmetic,
+            "fits in a long (-9223372036854775808 to 9223372036854775807 on x86-64 Linux)",
+        ),
+        (
+            EventKind::Cast,
+            "fits in an unsigned long (0 to 18446744073709551615 on x86-64 Linux)",
+        ),
+        (
+            EventKind::Assign,
+            "it fits in -9223372036854775808 to 9223372036854775807 on x86-64 Linux",
+        ),
+        (EventKind::Member, "8 bytes into it on x86-64 Linux"),
+        (
+            EventKind::Initialize,
+            "converts to the long double 18446744073709551615.0, exactly on x86-64 Linux",
+        ),
+        (
+            EventKind::Sizeof,
+            "is the size of a long in bytes, 8 on x86-64 Linux, a size_t",
+        ),
+        (
+            EventKind::Arithmetic,
+            "computed in int; the result fits in an int, so it is well defined.",
+        ),
+    ] {
+        assert!(said(kind, words), "no {kind:?} step says {words:?}");
+    }
+}
+
 #[test]
 fn integer_constants_take_their_type_from_their_value_and_suffix() {
     let source = "int main(void) {\n    long big = 2147483648;\n    unsigned long a = 10ul;\n    \
@@ -3936,7 +3988,7 @@ fn integer_constants_take_their_type_from_their_value_and_suffix() {
         constants,
         [
             (
-                "The constant 2147483648 is the long value 2147483648.",
+                "The constant 2147483648 is the long value 2147483648 on x86-64 Linux.",
                 Some("long")
             ),
             (

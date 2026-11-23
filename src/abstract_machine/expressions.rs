@@ -1348,10 +1348,11 @@ impl Parser<'_> {
             | ConstantError::OutOfRange(format) => Diagnostic::constraint(
                 token.range,
                 &format!(
-                    "`{text}` is beyond the largest {}, about {}: a constant's value must be in \
+                    "`{text}` is beyond the largest {}, about {}{}: a constant's value must be in \
                      its type's range (C99 §6.4.4p2)",
                     format.spelling(),
-                    format.maximum_text()
+                    format.maximum_text(),
+                    format.on_linux()
                 ),
                 &super::clauses::CONSTANT_RANGE,
             ),

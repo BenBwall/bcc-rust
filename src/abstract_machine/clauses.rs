@@ -92,7 +92,8 @@ clauses! {
     /// C99: §F.2 paragraph 1, p. 444; PDF p. 456.
     FLOATING_FORMATS = "F.2p1", "p. 444; PDF p. 456", "Types (Annex F)",
         "Under Annex F, float is IEEE 754 single precision and double is double precision; long \
-         double is an extended format, on x86-64 Linux the x87 80-bit one.";
+         double is an extended format if there is one, else double precision: on x86-64 Linux \
+         the x87 80-bit format, and with Microsoft's compiler double.";
     /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
     FLOATING_OPERATIONS = "F.3p1", "pp. 445-447; PDF pp. 457-459", "Operators and functions",
         "Under Annex F, +, -, * and / are IEEE 754's operations: each gives its exact result \
@@ -177,8 +178,8 @@ clauses! {
         "Binary arithmetic first converts both operands to a common type. With the same \
          signedness it is the higher-ranked one. Otherwise it is the unsigned one when its rank \
          is at least as high; the signed one when it can represent every value of the other; \
-         and else the unsigned type of the signed one's rank (long long and unsigned long give \
-         unsigned long long). Two ints need no conversion.";
+         and else the unsigned type of the signed one's rank (on x86-64 Linux, long long and \
+         unsigned long give unsigned long long). Two ints need no conversion.";
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     LVALUE = "6.3.2.1p1", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
         "An lvalue is an expression that designates an object: a location, not yet a value.";

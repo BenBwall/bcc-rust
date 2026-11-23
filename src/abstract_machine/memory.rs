@@ -803,18 +803,20 @@ impl Machine {
         let message = if operator == "%" {
             format!(
                 "{expression} is undefined: the quotient {exact} does not fit in {}, whose range \
-                 is {} to {}",
+                 is {} to {}{}",
                 article(name),
                 ty.min(),
-                ty.max()
+                ty.max(),
+                ty.on_linux()
             )
         } else {
             format!(
-                "{expression} = {exact}, which does not fit in {} (range {} to {}): signed \
+                "{expression} = {exact}, which does not fit in {} (range {} to {}{}): signed \
                  overflow",
                 article(name),
                 ty.min(),
-                ty.max()
+                ty.max(),
+                ty.on_linux()
             )
         };
         let cause = if matches!(operator, "/" | "%") {
@@ -943,12 +945,13 @@ impl Machine {
                     article(name)
                 ),
                 | Unrepresentable::OutOfRange(whole) => {
-                    let (low, high) = to
-                        .integer()
-                        .map_or((0, 0), |integer| (integer.min(), integer.max()));
+                    let (low, high, model) = to.integer().map_or((0, 0, ""), |integer| {
+                        (integer.min(), integer.max(), integer.on_linux())
+                    });
                     format!(
                         "converting {shown} to {} keeps its integral part, {whole}, which is \
-                         outside {name}'s range of {low} to {high}: the behavior is undefined",
+                         outside {name}'s range of {low} to {high}{model}: the behavior is \
+                         undefined",
                         article(name)
                     )
                 },
@@ -978,9 +981,10 @@ impl Machine {
             return Err(Diagnostic::ub(
                 self.state.source_range,
                 &format!(
-                    "`{left} {operator} {right}` shifts {}, which has {bits} bits, by {right}: a \
-                     shift count must be 0 to {}",
+                    "`{left} {operator} {right}` shifts {}, which has {bits} bits{}, by {right}: \
+                     a shift count must be 0 to {}",
                     article(ty.spelling()),
+                    ty.on_linux(),
                     bits - 1
                 ),
                 &clauses::SHIFT_COUNT,
@@ -1012,9 +1016,10 @@ impl Machine {
                 self.state.source_range,
                 &format!(
                     "`{left} << {right}` is {left} × 2^{right} = {exact}, which does not fit in \
-                     {} (largest {}): undefined for a signed type",
+                     {} (largest {}{}): undefined for a signed type",
                     article(ty.spelling()),
-                    ty.max()
+                    ty.max(),
+                    ty.on_linux()
                 ),
                 &clauses::LEFT_SHIFT,
                 Undefined::ShiftOverflow,

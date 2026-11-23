@@ -2379,7 +2379,16 @@ impl Machine {
         };
         let whole = self.location_of(target, base, whole);
         let byte = self.byte_offset(target, base, offset);
-        let at = byte.map_or_else(String::new, |byte| format!(", {byte} bytes into it"));
+        // A member's offset depends on the sizes of the members before it.
+        let model = if self
+            .object_type(target)
+            .is_some_and(|ty| ty.model_dependent(&self.structures))
+        {
+            " on x86-64 Linux"
+        } else {
+            ""
+        };
+        let at = byte.map_or_else(String::new, |byte| format!(", {byte} bytes into it{model}"));
         let (summary, mut text, mut cited) = if let Some(pointer) = &pointer {
             (
                 format!(
@@ -2947,7 +2956,14 @@ impl Machine {
     ) -> Event {
         let side = if depth == 1 { "left" } else { "right" };
         let (a, b, target) = (from.spelling(), other.spelling(), to.spelling());
-        let why = match from.common(other).1 {
+        // The common type of a long and another type can differ in LLP64,
+        // where a long is no wider than an int.
+        let common = from.common(other).1;
+        let model = match common {
+            | Common::Signed | Common::BothUnsigned => on_linux_either(from, other),
+            | _ => "",
+        };
+        let why = match common {
             | Common::Rank => format!(
                 "both are {}, so the one of lower rank, {a}, converts to {target}",
                 if from.signed() { "signed" } else { "unsigned" }
@@ -2960,24 +2976,27 @@ impl Machine {
                 "the unsigned type, {b}, ranks above {a}, so the signed operand converts to it"
             ),
             | Common::Signed => format!(
-                "the signed type {b} ranks above {a} and is wider ({} bits against {}), so it \
+                "the signed type {b} ranks above {a} and is wider ({} bits against {}{}), so it \
                  holds every {a} value, and the unsigned operand converts to it",
                 other.bits(),
-                from.bits()
+                from.bits(),
+                model
             ),
             | Common::BothUnsigned | Common::Same => format!(
-                "the signed type ranks higher but is no wider ({} bits each), so it cannot hold \
+                "the signed type ranks higher but is no wider ({} bits each{}), so it cannot hold \
                  every value of the unsigned one: both operands convert to {target}, the unsigned \
                  type of the signed one's rank",
-                to.bits()
+                to.bits(),
+                model
             ),
         };
         let changed = value != converted;
         let (outcome, clause) = if changed {
             (
                 format!(
-                    "Converting to an unsigned type reduces the value modulo {}: {}.",
+                    "Converting to an unsigned type reduces the value modulo {}{}: {}.",
                     power_text(to.bits()),
+                    to.on_linux(),
                     modulo_text(value, converted, to.bits())
                 ),
                 clauses::UNSIGNED_CONVERSION,
@@ -2985,22 +3004,29 @@ impl Machine {
         } else {
             (
                 format!(
-                    "{value} fits in {target}, so the value stays {value}; only its type changes."
+                    "{value} fits in {target}{}, so the value stays {value}; only its type \
+                     changes.",
+                    to.fit_on_linux(value)
                 ),
                 clauses::INTEGER_UNCHANGED,
             )
         };
         let summary = if changed {
             format!(
-                "`{whole}` mixes {} and {}, so the {side} operand converts to {target}: {}.",
+                "`{whole}` mixes {} and {}, so the {side} operand converts to {target}{}: {}.",
                 article(a),
                 article(b),
+                if model.is_empty() {
+                    to.on_linux()
+                } else {
+                    model
+                },
                 modulo_text(value, converted, to.bits())
             )
         } else {
             format!(
-                "`{whole}` mixes {} and {}, so the {side} operand, {value}, converts to {target} \
-                 and keeps its value.",
+                "`{whole}` mixes {} and {}, so the {side} operand, {value}, converts to \
+                 {target}{model} and keeps its value.",
                 article(a),
                 article(b)
             )
@@ -3057,9 +3083,14 @@ impl Machine {
             let bytes = element.size_align(&self.structures).0;
             let _ = write!(
                 text,
-                " That is the whole array, {count} elements of {bytes} byte{} each: an array \
+                " That is the whole array, {count} elements of {bytes} byte{} each{}: an array \
                  operand of sizeof does not decay to a pointer.",
-                if bytes == 1 { "" } else { "s" }
+                if bytes == 1 { "" } else { "s" },
+                if element.model_dependent(&self.structures) {
+                    " on x86-64 Linux"
+                } else {
+                    ""
+                }
             );
             cited.push(clauses::ARRAY_DECAY);
         }
@@ -3072,16 +3103,22 @@ impl Machine {
             explained(
                 Event::new(EventKind::Sizeof, range, format!("`{form}` is {size}")),
                 &format!(
-                    "`{form}` is the size of {} in bytes, {size}, a size_t; its operand is not \
+                    "`{form}` is the size of {} in bytes, {size}{}, a size_t; its operand is not \
                      evaluated.",
-                    article(&spelled)
+                    article(&spelled),
+                    if ty.model_dependent(&self.structures) {
+                        " on x86-64 Linux"
+                    } else {
+                        ""
+                    }
                 ),
                 &text,
                 &cited,
             ),
             Topic::Sizeof,
         );
-        event.result_type = Some(String::from("unsigned long"));
+        // The type sizeof yields is size_t, whichever type that names.
+        event.result_type = Some(String::from("size_t"));
         result(event, Operand::Value(value))
     }
 
@@ -3311,8 +3348,9 @@ impl Machine {
                     format!("-({input}) is 0, which needs no reduction")
                 } else {
                     format!(
-                        "-({input}) is {exact}, which is reduced modulo {}: {}",
+                        "-({input}) is {exact}, which is reduced modulo {}{}: {}",
                         power_text(ty.bits()),
+                        ty.on_linux(),
                         modulo_text(exact, exact + (1_i128 << ty.bits()), ty.bits())
                     )
                 };
@@ -3348,8 +3386,9 @@ impl Machine {
                 } else {
                     format!(
                         "For an unsigned type ~x is the largest value minus x: {} - {input} = \
-                         {shown}.",
-                        ty.max()
+                         {shown}{}.",
+                        ty.max(),
+                        ty.on_linux()
                     )
                 };
                 (
@@ -3361,10 +3400,11 @@ impl Machine {
                     ),
                     format!(
                         "`~` works on its operand after the integer promotions, here {}, and \
-                         flips each of its {} bits: every 0 becomes 1 and every 1 becomes 0. \
+                         flips each of its {} bits{}: every 0 becomes 1 and every 1 becomes 0. \
                          {input} is {}, so ~{input} is {}. {meaning}",
                         article(name),
                         ty.bits(),
+                        ty.on_linux(),
                         bit_text(number, ty.bits()),
                         bit_text(flipped, ty.bits())
                     ),
@@ -3668,9 +3708,10 @@ impl Machine {
                     String::new()
                 } else {
                     format!(
-                        " Both operands have the common type {}, and the values are compared \
+                        " Both operands have the common type {}{}, and the values are compared \
                          there.",
-                        common.spelling()
+                        common.spelling(),
+                        common.on_linux()
                     )
                 };
                 let mut cited = vec![clause, clauses::EVALUATION_ORDER];
@@ -3734,16 +3775,21 @@ impl Machine {
                         ),
                         &format!(
                             "{a} {operator} {b} = {shown}, computed in {name}; the result fits in \
-                             {}, so it is well defined.",
-                            article(name)
+                             {}{}, so it is well defined.",
+                            article(name),
+                            match &output {
+                                | &Value::Integer(result) => ty.fit_on_linux(result),
+                                | _ => ty.on_linux(),
+                            }
                         ),
                         &format!(
                             "The operands have the common type {name}, so the machine {verb} in \
                              {name}: {a} {operator} {b} = {shown}. The result fits in {} ({} to \
-                             {}), so it is well defined.{UNORDERED}",
+                             {}{}), so it is well defined.{UNORDERED}",
                             article(name),
                             ty.min(),
-                            ty.max()
+                            ty.max(),
+                            ty.on_linux()
                         ),
                         &[clause, clauses::USUAL_ARITHMETIC, clauses::EVALUATION_ORDER],
                     ),
@@ -4002,10 +4048,11 @@ impl Machine {
             compact_bits(shown, width)
         );
         let text = format!(
-            "{types}, and the machine works on {name}'s {} bits, one position at a time: {rule}. \
-             {a} is {} and {b} is {}{higher}, so {a} {operator} {b} is {}, which is {shown}. \
-             {contrast}{UNORDERED}",
+            "{types}, and the machine works on {name}'s {} bits{}, one position at a time: \
+             {rule}. {a} is {} and {b} is {}{higher}, so {a} {operator} {b} is {}, which is \
+             {shown}. {contrast}{UNORDERED}",
             ty.bits(),
+            ty.on_linux(),
             bit_text(a, width),
             bit_text(b, width),
             bit_text(shown, width)
@@ -4065,16 +4112,18 @@ impl Machine {
                 format!("Compute {a} {operator} {b} = {shown} (wrapped)"),
                 format!(
                     "{a} {operator} {b} is {exact}, outside {name}, so the result is reduced \
-                     modulo 2^{}: {shown}. That is defined, unlike signed overflow.",
-                    ty.bits()
+                     modulo 2^{}{}: {shown}. That is defined, unlike signed overflow.",
+                    ty.bits(),
+                    ty.on_linux()
                 ),
                 format!(
                     "The operands have the common type {name}, so the machine {verb} in {name}: \
-                     the exact result is {exact}, outside its range of 0 to {}. An unsigned \
+                     the exact result is {exact}, outside its range of 0 to {}{}. An unsigned \
                      result never overflows: C reduces it modulo one more than the largest value, \
                      {power}, so {reduced}. Had the operands been signed, a result out of range \
                      would be undefined behavior.{UNORDERED}",
-                    ty.max()
+                    ty.max(),
+                    ty.on_linux()
                 ),
             )
         } else {
@@ -4082,15 +4131,17 @@ impl Machine {
                 format!("Compute {a} {operator} {b} = {shown}"),
                 format!(
                     "{a} {operator} {b} = {shown}, computed in {name}; the result is within 0 to \
-                     {}, so nothing wraps.",
-                    ty.max()
+                     {}{}, so nothing wraps.",
+                    ty.max(),
+                    ty.on_linux()
                 ),
                 format!(
                     "The operands have the common type {name}, so the machine {verb} in {name}: \
-                     {a} {operator} {b} = {shown}. An unsigned result outside 0 to {} would be \
+                     {a} {operator} {b} = {shown}. An unsigned result outside 0 to {}{} would be \
                      reduced modulo {power}; this one is inside, so it needs no \
                      reduction.{UNORDERED}",
-                    ty.max()
+                    ty.max(),
+                    ty.on_linux()
                 ),
             )
         };
@@ -4145,8 +4196,9 @@ impl Machine {
                     format!(
                         "{a} << {b} moves every bit {b} places up and fills the vacated bits with \
                          zeros, which multiplies by 2^{b}: {a} × 2^{b} = {shown}, which fits in \
-                         {}.",
-                        article(name)
+                         {}{}.",
+                        article(name),
+                        ty.fit_on_linux(result)
                     ),
                     clauses::LEFT_SHIFT,
                 )
@@ -4154,14 +4206,16 @@ impl Machine {
                 (
                     format!(
                         "{a} << {b} is {exact}, which {name} cannot hold, so it is reduced modulo \
-                         2^{}: {shown}, defined for an unsigned type.",
-                        ty.bits()
+                         2^{}{}: {shown}, defined for an unsigned type.",
+                        ty.bits(),
+                        ty.on_linux()
                     ),
                     format!(
                         "{a} << {b} is {a} × 2^{b} = {exact}. The bits shifted past the top of \
-                         the {}-bit {name} are lost: for an unsigned type that is the reduction \
+                         the {}-bit {name}{} are lost: for an unsigned type that is the reduction \
                          modulo {}, {}, and it is defined.",
                         ty.bits(),
+                        ty.on_linux(),
                         power_text(ty.bits()),
                         modulo_text(exact, result, ty.bits())
                     ),
@@ -4275,22 +4329,25 @@ impl Machine {
         let mut text = match integers {
             | Some((from, to, number, result)) if number != result && to.signed() => format!(
                 "The value to store is the {} {number}. {operation} converts it to {location}'s \
-                 type, {}, whose range is {} to {}. It does not fit, so the result is \
+                 type, {}, whose range is {} to {}{}. It does not fit, so the result is \
                  implementation-defined: GCC documents keeping the low {} bits, and bcc and Clang \
                  do the same on x86-64, so {location} now holds {shown}.",
                 from.spelling(),
                 to.spelling(),
                 to.min(),
                 to.max(),
+                to.on_linux(),
                 to.bits()
             ),
             | Some((from, to, number, result)) if number != result => format!(
                 "The value to store is the {} {number}. {operation} converts it to {location}'s \
-                 type, {}, which holds 0 to {}. Converting to an unsigned type is always defined: \
-                 C adds or subtracts {} until the value fits, {}, so {location} now holds {shown}.",
+                 type, {}, which holds 0 to {}{}. Converting to an unsigned type is always \
+                 defined: C adds or subtracts {} until the value fits, {}, so {location} now \
+                 holds {shown}.",
                 from.spelling(),
                 to.spelling(),
                 to.max(),
+                to.on_linux(),
                 power_text(to.bits()),
                 modulo_text(number, result, to.bits())
             ),
@@ -4317,9 +4374,10 @@ impl Machine {
                 article(to.spelling())
             ),
             | Some((_, to, number, result)) if number != result => format!(
-                "{number} does not fit in {}, so storing it reduces it modulo 2^{}: {}.",
+                "{number} does not fit in {}, so storing it reduces it modulo 2^{}{}: {}.",
                 article(to.spelling()),
                 to.bits(),
+                to.on_linux(),
                 modulo_text(number, result, to.bits())
             ),
             | _ if converted && leaf.is_some_and(Type::is_pointer) =>
@@ -4341,12 +4399,13 @@ impl Machine {
         {
             let _ = write!(
                 text,
-                " The {} {shown} is converted to {location}'s type, {}; it fits in {} to {}, so \
+                " The {} {shown} is converted to {location}'s type, {}; it fits in {} to {}{}, so \
                  the value is unchanged.",
                 from.spelling(),
                 to.spelling(),
                 to.min(),
-                to.max()
+                to.max(),
+                to.on_linux()
             );
         }
         let mut cited = vec![clause];
@@ -4469,10 +4528,11 @@ impl Machine {
                 let _ = write!(
                     text,
                     " The {arithmetic} happens in {}: the exact result, {exact}, is outside its \
-                     range of 0 to {}, so it is reduced modulo {}: {}. That is defined for an \
+                     range of 0 to {}{}, so it is reduced modulo {}: {}. That is defined for an \
                      unsigned type; for a signed one it would be overflow, undefined behavior.",
                     ty.spelling(),
                     ty.max(),
+                    ty.on_linux(),
                     power_text(ty.bits()),
                     modulo_text(exact, ty.convert(exact), ty.bits())
                 );
@@ -4519,9 +4579,10 @@ impl Machine {
             )
         } else if topic == Topic::Unsigned {
             format!(
-                "`{form}` {verb} {location}: {old} becomes {new}, reduced modulo 2^{}, which is \
+                "`{form}` {verb} {location}: {old} becomes {new}, reduced modulo 2^{}{}, which is \
                  defined for an unsigned type.",
-                leaf.map_or(32, Integer::bits)
+                leaf.map_or(32, Integer::bits),
+                leaf.map_or("", Integer::on_linux)
             )
         } else {
             format!("`{form}` {verb} {location}, so it changes from {old} to {new}.")
@@ -4806,16 +4867,18 @@ impl Machine {
                         ),
                         format!(
                             "A cast converts its operand's value to the type it names, here from \
-                             {source_type} to {name}, which holds {} to {}, and {old} is outside \
-                             that range. Converting a value that does not fit into a signed type \
-                             gives an implementation-defined result (or raises an \
+                             {source_type} to {name}, which holds {} to {}{}, and {old} is \
+                             outside that range. Converting a value that does not fit into a \
+                             signed type gives an implementation-defined result (or raises an \
                              implementation-defined signal): each compiler must choose and \
                              document one. GCC documents that it reduces the value modulo {}, \
-                             keeping its low {} bits, and bcc and Clang do the same: {modulo}.",
+                             keeping its low {} bits{}, and bcc and Clang do the same: {modulo}.",
                             target.min(),
                             target.max(),
+                            target.on_linux(),
                             power_text(target.bits()),
-                            target.bits()
+                            target.bits(),
+                            target.on_linux()
                         ),
                         vec![clauses::CAST, clauses::SIGNED_CONVERSION],
                         Topic::Cast,
@@ -4825,17 +4888,19 @@ impl Machine {
                         format!("Cast {old} to {name} → {new}"),
                         format!(
                             "Converting to {name} is defined for every value: {modulo}, reduced \
-                             modulo 2^{}.",
-                            target.bits()
+                             modulo 2^{}{}.",
+                            target.bits(),
+                            target.on_linux()
                         ),
                         format!(
                             "A cast converts its operand's value to the type it names, here from \
-                             {source_type} to {name}, which holds 0 to {}. {old} is outside that \
-                             range, and for an unsigned type C defines the result exactly: it \
-                             adds or subtracts one more than the largest value, {}, until the \
+                             {source_type} to {name}, which holds 0 to {}{}. {old} is outside \
+                             that range, and for an unsigned type C defines the result exactly: \
+                             it adds or subtracts one more than the largest value, {}, until the \
                              value fits, which keeps its low {} bits: {modulo}. Unlike a \
                              conversion to a signed type, this is the same on every compiler.",
                             target.max(),
+                            target.on_linux(),
                             power_text(target.bits()),
                             target.bits()
                         ),
@@ -4980,13 +5045,19 @@ impl Machine {
         };
         if let Some((common, leaf, current_value, right_value, result)) = integers {
             let name = common.spelling();
+            // The common type is one of the operands' types or its unsigned
+            // version, so it depends on the data model only with a long.
+            let model = on_linux_either(
+                leaf,
+                right_type.and_then(Arithmetic::integer).unwrap_or(leaf),
+            );
             // The conversions that bring the operands to the operator's
             // type, when it is not int (C99 §6.3.1.8p1).
             if common != Integer::Int && common != leaf.promoted() {
                 let _ = write!(
                     text,
-                    " The usual arithmetic conversions make the operation {name}: {} is converted \
-                     to {name}{}.",
+                    " The usual arithmetic conversions make the operation {name}{model}: {} is \
+                     converted to {name}{}.",
                     location,
                     if left == current {
                         String::new()
@@ -5006,8 +5077,8 @@ impl Machine {
             if right_converted != right && !matches!(operator, "<<" | ">>") {
                 let _ = write!(
                     text,
-                    " The usual arithmetic conversions make the operation {name}, so the right \
-                     operand, {operand}, is converted to {name}: {}.",
+                    " The usual arithmetic conversions make the operation {name}{model}, so the \
+                     right operand, {operand}, is converted to {name}: {}.",
                     modulo_text(right_value, common.convert(right_value), common.bits())
                 );
                 cited.extend([clauses::USUAL_ARITHMETIC, clauses::UNSIGNED_CONVERSION]);
@@ -5030,9 +5101,10 @@ impl Machine {
             {
                 let _ = write!(
                     text,
-                    " In {name} the exact result, {exact}, is reduced modulo {}: {}, which is \
+                    " In {name} the exact result, {exact}, is reduced modulo {}{}: {}, which is \
                      defined for an unsigned type.",
                     power_text(common.bits()),
+                    common.on_linux(),
                     modulo_text(exact, result, common.bits())
                 );
                 cited.push(clauses::UNSIGNED_WRAP);
@@ -5057,20 +5129,22 @@ impl Machine {
                 let _ = write!(
                     text,
                     " The arithmetic happens in {name}, giving {result}; that does not fit in {}, \
-                     so the implementation-defined conversion back to {} keeps its low {} bits, \
+                     so the implementation-defined conversion back to {} keeps its low {} bits{}, \
                      as bcc, GCC and Clang do.",
                     article(leaf.spelling()),
                     leaf.spelling(),
-                    leaf.bits()
+                    leaf.bits(),
+                    leaf.on_linux()
                 );
                 cited.push(clauses::SIGNED_CONVERSION);
             } else if back {
                 let _ = write!(
                     text,
                     " The arithmetic happens in {name}, giving {result}; converting that back to \
-                     {} reduces it modulo {}, which is defined: {}.",
+                     {} reduces it modulo {}{}, which is defined: {}.",
                     leaf.spelling(),
                     power_text(leaf.bits()),
+                    leaf.on_linux(),
                     modulo_text(result, leaf.convert(result), leaf.bits())
                 );
                 cited.push(clauses::UNSIGNED_CONVERSION);
@@ -6414,9 +6488,10 @@ pub(super) fn constant(
                  that can hold {integer}"
             )
         };
+        let model = ty.fit_on_linux(integer);
         let text = format!(
-            "The integer constant {spelling} has type {name}: {why}. Evaluating a constant just \
-             produces its value."
+            "The integer constant {spelling} has type {name}{model}: {why}. Evaluating a constant \
+             just produces its value."
         );
         let mut event = explained(
             Event::new(
@@ -6424,7 +6499,7 @@ pub(super) fn constant(
                 range,
                 format!("Evaluate the constant {spelling}"),
             ),
-            &format!("The constant {spelling} is the {name} value {integer}."),
+            &format!("The constant {spelling} is the {name} value {integer}{model}."),
             &text,
             &[clauses::INTEGER_CONSTANT],
         );
@@ -6495,8 +6570,9 @@ fn prefixed_constant(
             ),
         | _ => String::new(),
     };
+    let model = ty.fit_on_linux(integer);
     let text = format!(
-        "{spelling} is {} {base} constant: {prefix}, so {value_words}. It has type {name}, \
+        "{spelling} is {} {base} constant: {prefix}, so {value_words}. It has type {name}{model}, \
          {list}.{decimal_note} Evaluating a constant just produces its value.",
         if radix == 16 { "a" } else { "an" }
     );
@@ -6507,7 +6583,7 @@ fn prefixed_constant(
                 range,
                 format!("Evaluate the constant {spelling} = {integer}"),
             ),
-            &format!("The {base} constant {spelling} is the {name} value {integer}."),
+            &format!("The {base} constant {spelling} is the {name} value {integer}{model}."),
             &text,
             &[clauses::INTEGER_BASE, clauses::PREFIXED_CONSTANT],
         ),
@@ -6810,10 +6886,11 @@ fn range_text(ty: Type) -> String {
         | Type::Integer(Integer::Char) => String::from("a char (-128 to 127)"),
         | Type::Integer(Integer::Int) => String::from("an int"),
         | Type::Integer(integer) => format!(
-            "{} ({} to {})",
+            "{} ({} to {}{})",
             article(integer.spelling()),
             integer.min(),
-            integer.max()
+            integer.max(),
+            integer.on_linux()
         ),
         | _ => String::from("the type"),
     }
@@ -6833,6 +6910,16 @@ fn width_text(integer: Integer) -> String {
     )
 }
 
+/// [`Integer::on_linux`] for a statement about two types: tagged when either is
+/// a long.
+const fn on_linux_either(a: Integer, b: Integer) -> &'static str {
+    if a.on_linux().is_empty() {
+        b.on_linux()
+    } else {
+        a.on_linux()
+    }
+}
+
 /// The words for converting `value` of type `from` to `to`, giving
 /// `converted`, and the rule that defines it: kept, reduced modulo 2^N, or
 /// wrapped as the implementation chooses.
@@ -6840,14 +6927,18 @@ fn conversion_text(from: Integer, to: Integer, value: i128, converted: i128) -> 
     let (a, b) = (from.spelling(), to.spelling());
     if value == converted {
         (
-            format!("the {a} {value} fits in {b}, so it keeps its value"),
+            format!(
+                "the {a} {value} fits in {b}{}, so it keeps its value",
+                to.fit_on_linux(value)
+            ),
             clauses::INTEGER_UNCHANGED,
         )
     } else if !to.signed() {
         (
             format!(
-                "converting the {a} {value} to the unsigned type {b} reduces it modulo {}: {}",
+                "converting the {a} {value} to the unsigned type {b} reduces it modulo {}{}: {}",
                 power_text(to.bits()),
+                to.on_linux(),
                 modulo_text(value, converted, to.bits())
             ),
             clauses::UNSIGNED_CONVERSION,
@@ -6855,10 +6946,11 @@ fn conversion_text(from: Integer, to: Integer, value: i128, converted: i128) -> 
     } else {
         (
             format!(
-                "the {a} {value} does not fit in {b} ({} to {}), so the result is \
+                "the {a} {value} does not fit in {b} ({} to {}{}), so the result is \
                  implementation-defined; bcc, GCC and Clang wrap it: {}",
                 to.min(),
                 to.max(),
+                to.on_linux(),
                 modulo_text(value, converted, to.bits())
             ),
             clauses::SIGNED_CONVERSION,
