@@ -755,3 +755,18 @@ fn every_stage_gives_an_example_from_the_program_on_screen() {
         "{preprocessor}"
     );
 }
+
+/// A call through a register is a call through a pointer to a function, not
+/// a call to a function named `*%r13`.
+#[test]
+fn the_assembly_example_counts_calls_through_pointers() {
+    let callbacks = crate::demos::find("callbacks").expect("the callbacks lesson");
+    let compilation = crate::explorer::compile(callbacks.source, true);
+    assert_eq!(
+        example(Stage::Asm, &compilation, callbacks.source).as_deref(),
+        Some(
+            "Here bcc selected 76 x86-64 instructions, with calls to `printf` and 3 calls through \
+             a function pointer."
+        )
+    );
+}

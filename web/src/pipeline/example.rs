@@ -40,8 +40,10 @@ pub fn example(stage: Stage, compilation: &Compilation, source: &str) -> Option<
             let assembly = compilation.output(stage)?;
             let census = Census::of(stage, assembly);
             // `callq	printf@PLT`: the callee, reached through the PLT when
-            // the C library holds it.
+            // the C library holds it. `callq	*%r13` calls the address a
+            // register holds: a call through a pointer to a function.
             let mut callees: Vec<String> = Vec::new();
+            let mut indirect = 0;
             for line in assembly.lines() {
                 let mut fields = line.split_whitespace();
                 if fields
@@ -49,19 +51,29 @@ pub fn example(stage: Stage, compilation: &Compilation, source: &str) -> Option<
                     .is_some_and(|mnemonic| mnemonic.starts_with("call"))
                     && let Some(callee) = fields.next()
                 {
+                    if callee.starts_with('*') {
+                        indirect += 1;
+                        continue;
+                    }
                     let callee = callee.trim_end_matches("@PLT").to_owned();
                     if !callees.contains(&callee) {
                         callees.push(callee);
                     }
                 }
             }
+            let through = counted_as(
+                indirect,
+                "call through a function pointer",
+                "calls through a function pointer",
+            );
             Some(format!(
                 "Here bcc selected {}{}.",
                 counted(census.instructions, "x86-64 instruction"),
-                if callees.is_empty() {
-                    String::from(", and no function calls another")
-                } else {
-                    format!(", with calls to {}", names(&callees))
+                match (callees.is_empty(), indirect) {
+                    | (true, 0) => String::from(", and no function calls another"),
+                    | (true, _) => format!(", with {through}"),
+                    | (false, 0) => format!(", with calls to {}", names(&callees)),
+                    | (false, _) => format!(", with calls to {} and {through}", names(&callees)),
                 }
             ))
         },
