@@ -513,7 +513,6 @@
   .file-chip { display: inline-flex; align-items: center; gap: 8px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--screen-dim); }
   .file-chip::before { content: "Listing 1"; color: var(--screen-ink); font-weight: 700; }
   .file-chip svg { display: none; }
-  .source-pane.is-wasm .file-chip::before { content: "Listing 2"; }
   .edited-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--screen-ink); background: var(--accent); color: var(--on-accent); padding: 0 6px; }
   .source-pane .button { --key: var(--screen-2); --key-edge: #4a4a45; --key-ink: var(--screen-ink); box-shadow: none; }
   .source-pane .button.primary { --key: var(--accent); background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -1515,7 +1514,8 @@
   .source-pane.is-wasm > .code-editor { flex: none; --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(132px, 24svh)); }
   .wat-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; border-top: 1px solid var(--screen-faint); }
   .wat-header { margin-bottom: 0; }
-  .wat-header .file-chip::before { content: "Listing 3"; }
+  /* The C source stays Listing 1 beside the module it compiled to. */
+  .wat-header .file-chip::before { content: "Listing 2"; }
   .wat-chip { margin: 0; }
   .wat-producer { color: var(--screen-dim); font-size: 10.5px; }
   .wat-pane .stage-note { margin: 0; padding: 0 16px 8px; color: var(--screen-dim); }
