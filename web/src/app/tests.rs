@@ -342,3 +342,24 @@ fn the_listing_marks_the_label_a_goto_jumps_to() {
     assert_eq!(steps, 6);
     assert_eq!(goto_mark(&snapshot), None);
 }
+
+// A goto on its label's line says which way it jumps from where it is on
+// the line, not from the line alone.
+#[cfg(feature = "worker")]
+#[test]
+fn the_listing_says_a_goto_on_its_labels_line_jumps_back() {
+    use crate::machine::Machine;
+    let mut machine = Machine::default();
+    let mut snapshot = machine.load(
+        "int main(void) {\n    int n = 0;\nloop: n++; if (n < 3) goto loop;\n    return n;\n}\n"
+            .to_owned(),
+    );
+    while !snapshot.event.title.starts_with("goto `loop`") {
+        snapshot = machine.step().expect("the run reaches the goto");
+    }
+    let mark = goto_mark(&snapshot).expect("the goto's step marks its label");
+    assert_eq!(
+        mark.hover.as_deref(),
+        Some("The goto on line 3 jumps back to this label")
+    );
+}

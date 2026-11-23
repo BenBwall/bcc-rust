@@ -1730,8 +1730,10 @@ fn function_marks(snapshot: &Snapshot) -> Vec<Decoration> {
 /// (`goto, line 7 →`), so the jump reads from the goto to its target.
 fn goto_mark(snapshot: &Snapshot) -> Option<Decoration> {
     let label = snapshot.event.label?;
-    let from = snapshot.event.range?.start.line;
-    let direction = if from > label.start.line {
+    let goto = snapshot.event.range?.start;
+    let from = goto.line;
+    // Compare positions, not lines: a goto may share its label's line.
+    let direction = if (goto.line, goto.column) > (label.start.line, label.start.column) {
         "back"
     } else {
         "ahead"
