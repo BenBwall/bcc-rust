@@ -8307,13 +8307,13 @@ mod tests {
         // The value of an option clang-cl knows and bcc does not is no input.
         let clang_cl = directory.bcc(
             "--clang-cl-mode",
-            &["/c", "/imsvc", "/nonexistent/include", &plain],
+            &["/c", "/vctoolsdir", "/nonexistent/vc", &plain],
         );
         succeeds(&clang_cl);
         assert_eq!(
             stderr(&clang_cl),
-            "clang-cl: warning: unknown argument ignored in clang-cl: '/imsvc \
-             /nonexistent/include'\n"
+            "clang-cl: warning: unknown argument ignored in clang-cl: '/vctoolsdir \
+             /nonexistent/vc'\n"
         );
     }
 
@@ -11489,6 +11489,79 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             "--msvc-mode",
             &["/nologo", "/c", "/external:I", "ext", "/external:W0", "e.c"],
         ));
+    }
+
+    /// clang-cl's `/imsvc DIR` (also `-imsvc` and joined), which `CMake` gives
+    /// it for a `SYSTEM` include directory, is a system directory searched
+    /// after `/I` and just before `%INCLUDE%`, ahead of the `/external:I`
+    /// and `/external:env:` directories, and kept under `/X`. bcc keeps
+    /// `%INCLUDE%` ahead of its built-in headers, unlike clang-cl's driver,
+    /// whose order its intrinsic headers do not yet support. A header found
+    /// there draws no warnings and is listed by `/showIncludes`.
+    #[test]
+    fn clang_cl_imsvc_directories_precede_the_include_variable() {
+        let directory = Directory::new();
+        for name in ["i", "ext", "m1", "m2", "env", "ev"] {
+            std::fs::create_dir(directory.path(name)).unwrap();
+        }
+        directory.write("m1/h.h", "int h(int x) { x; return x; }\n");
+        directory.write("a.c", "#include <h.h>\nint a(void) { return h(1); }\n");
+        let variables = [("INCLUDE", "env"), ("FOO", "ev")];
+        let search = |mode: &str, args: &[&str]| {
+            let mut line = vec!["-v", "/c"];
+            line.extend_from_slice(args);
+            line.push("a.c");
+            let output = directory.bcc_with(mode, &line, &variables);
+            succeeds(&output);
+            let text = stderr(&output);
+            let list = text
+                .split_once("#include <...> search starts here:\n")
+                .and_then(|(_, rest)| rest.split_once("End of search list.\n"))
+                .unwrap_or_else(|| panic!("{text}"))
+                .0
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (list, text)
+        };
+        for mode in ["--clang-cl-mode", "--icx-cl-mode"] {
+            for (args, expected) in [
+                (
+                    &[
+                        "/external:env:FOO",
+                        "-imsvc",
+                        "m1",
+                        "/I",
+                        "i",
+                        "/imsvcm2",
+                        "/external:I",
+                        "ext",
+                    ][..],
+                    "i m1 m2 env ev ext",
+                ),
+                (&["/imsvc", "m1", "-imsvcm2"], "m1 m2 env"),
+                (&["/X", "-imsvc", "m1", "/external:env:FOO"], "m1 ev"),
+            ] {
+                assert_eq!(search(mode, args).0, expected, "{mode} {args:?}");
+            }
+            let (_, text) = search(mode, &["/W4", "/showIncludes", "-imsvc", "m1"]);
+            assert!(!text.contains("warning"), "{mode}: {text}");
+            assert!(text.contains("Note: including file:"), "{mode}: {text}");
+            let (_, text) = search(mode, &["/W4", "/I", "m1"]);
+            assert!(text.contains("expression result unused"), "{mode}: {text}");
+            for spelling in ["-imsvc", "/imsvc"] {
+                let output = directory.bcc_with(mode, &["/c", "a.c", spelling], &variables);
+                assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+                assert!(
+                    stderr(&output).contains(&format!(
+                        "argument to '{spelling}' is missing (expected 1 value)"
+                    )),
+                    "{}",
+                    stderr(&output)
+                );
+            }
+        }
     }
 
     #[test]

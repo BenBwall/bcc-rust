@@ -52,8 +52,9 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     ),
     BuiltinDescriptor {
         availability: Availability {
-            feature: Some(Feature::GccOnlyBuiltins),
-            naming:  NamingPolicy::Reserved,
+            feature:    Some(Feature::GccOnlyBuiltins),
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         ..descriptor(
             Id::Shuffle,
@@ -118,8 +119,9 @@ const fn descriptor(
         id,
         spelling,
         availability: Availability {
-            feature: Some(Feature::VectorBuiltins),
-            naming:  NamingPolicy::Reserved,
+            feature:    Some(Feature::VectorBuiltins),
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         syntax,
         designator: DesignatorPolicy::DirectCallOnly,

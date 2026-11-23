@@ -224,6 +224,55 @@ mod tests {
         }
     }
 
+    /// libgcc's processor data, `__cpu_model` and `__cpu_features2`, which
+    /// the processor queries read, given to a function is not that data;
+    /// lowering refuses the query with both names, as for the runtime
+    /// functions. An object of the name, static or external and of any type,
+    /// is read where it stands, as Clang and GCC read it.
+    #[test]
+    fn processor_data_named_by_a_function_is_refused() {
+        let function = "int __cpu_model(int a) { return a; }\nint f(void) { return \
+                        __builtin_cpu_supports(\"sse4.2\"); }\n";
+        let declared = "int __cpu_model(int);\nint g(void) { return __cpu_model(1); }\nint \
+                        f(void) { return __builtin_cpu_is(\"intel\"); }\n";
+        let features = "int __cpu_features2(void);\nint g(void) { return __cpu_features2(); \
+                        }\nint f(void) { return __builtin_cpu_supports(\"avx512bf16\"); }\n";
+        let objects = [
+            "static int __cpu_model = 3;\nint f(void) { return __builtin_cpu_supports(\"sse4.2\") \
+             + __cpu_model; }\n",
+            "static int __cpu_features2[3];\nint f(void) { return \
+             __builtin_cpu_supports(\"avx512bf16\") + __cpu_features2[0]; }\n",
+            "extern char __cpu_model[64];\nint f(void) { return \
+             __builtin_cpu_supports(\"sse4.2\") + __cpu_model[0]; }\n",
+        ];
+        for target in [WINDOWS[0], WINDOWS[1], LINUX] {
+            for args in compilations(target) {
+                for (source, message) in [
+                    (
+                        function,
+                        "'__builtin_cpu_supports' reads the external object '__cpu_model', but \
+                         '__cpu_model' names a function here",
+                    ),
+                    (
+                        declared,
+                        "'__builtin_cpu_is' reads the external object '__cpu_model', but \
+                         '__cpu_model' names a function here",
+                    ),
+                    (
+                        features,
+                        "'__builtin_cpu_supports' reads the external object '__cpu_features2', \
+                         but '__cpu_features2' names a function here",
+                    ),
+                ] {
+                    assert_refused(&compile(source, &args), message, &args);
+                }
+                for source in objects {
+                    assert_compiles(&compile(source, &args), &args);
+                }
+            }
+        }
+    }
+
     /// The native back end calls libgcc's `__powidf2` for the IR's `powi`,
     /// so it refuses a module whose `powi` call would reach a static
     /// function or an object of that name, as for its other runtime

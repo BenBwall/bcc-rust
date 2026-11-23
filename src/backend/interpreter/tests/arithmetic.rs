@@ -518,3 +518,85 @@ fn powi_squares_and_multiplies_as_libgcc_does() {
     );
     assert_eq!(power("f64", RuntimeValue::Poison, 2), RuntimeValue::Poison);
 }
+
+/// libgcc's `__powisf2`, `__powidf2`, `__powixf2` and `__powitf2`, which a
+/// GCC-identity `__builtin_powi` calls on Windows, give the `powi`
+/// intrinsic's bits: the same squares multiplied in the same order. A call
+/// with other types is undefined.
+#[test]
+fn powi_helpers_compute_as_the_intrinsic_does() {
+    // A NaN result compares by its bits.
+    let bits = |value: RuntimeValue| match value {
+        | RuntimeValue::F32(value) => u128::from(value.to_bits()),
+        | RuntimeValue::F64(value) => u128::from(value.to_bits()),
+        | RuntimeValue::F80(value) => value.to_bits(),
+        | RuntimeValue::F128(bits) => bits,
+        | other => panic!("{other:?}"),
+    };
+    let one_point_one_f128 = 0x3FFF_1999_9999_9999_A000_0000_0000_0000;
+    for (helper, ty, bases) in [
+        (
+            "__powisf2",
+            "f32",
+            [
+                RuntimeValue::F32(1.1),
+                RuntimeValue::F32(-2.5),
+                RuntimeValue::F32(-0.0),
+            ],
+        ),
+        (
+            "__powidf2",
+            "f64",
+            [
+                RuntimeValue::F64(1.1),
+                RuntimeValue::F64(-2.5),
+                RuntimeValue::F64(f64::from_bits(0x7FF4_0000_0000_0000)),
+            ],
+        ),
+        (
+            "__powixf2",
+            "f80",
+            [
+                RuntimeValue::F80(X87::from_f64(1.1)),
+                RuntimeValue::F80(X87::from_f64(-2.5)),
+                RuntimeValue::F80(X87::from_bits(0x3FFD_AAAA_AAAA_AAAA_AAAB)),
+            ],
+        ),
+        (
+            "__powitf2",
+            "f128",
+            [
+                RuntimeValue::F128(one_point_one_f128),
+                RuntimeValue::F128(0x4000 << 112),
+                RuntimeValue::F128(0x8000 << 112),
+            ],
+        ),
+    ] {
+        let text = format!(
+            "function @{helper}({ty}, i32) -> {ty} external\nfunction @call({ty}, i32) -> {ty} \
+             external {{\nblock0(v0: {ty}, v1: i32):\n    v2 = call @{helper}(v0, v1)\n    return \
+             v2\n}}\nfunction @intrinsic({ty}, i32) -> {ty} external {{\nblock0(v0: {ty}, v1: \
+             i32):\n    v2 = intrinsic powi.{ty} v0, v1\n    return v2\n}}\n"
+        );
+        for base in bases {
+            for exponent in [0, 1, 2, 15, -1, -3, i32::MAX, i32::MIN] {
+                #[expect(clippy::cast_sign_loss, reason = "The exponent's bits.")]
+                let args = [base, int(u128::from(exponent as u32))];
+                assert_eq!(
+                    bits(returned_with(&text, "call", &args)),
+                    bits(returned_with(&text, "intrinsic", &args)),
+                    "{helper}({base:?}, {exponent})"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        undefined(
+            "function @__powidf2(f64, i64) -> f64 external\nfunction @main() -> i32 external \
+             {\nblock0:\n    v0 = fconst.f64 0x4000000000000000\n    v1 = iconst.i64 3\n    v2 = \
+             call @__powidf2(v0, v1)\n    v3 = iconst.i32 0\n    return v3\n}\n",
+            "main"
+        ),
+        UbKind::SignatureMismatch
+    );
+}

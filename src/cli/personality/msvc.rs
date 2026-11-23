@@ -261,6 +261,10 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             clang_options.extend(front_end_option(clang));
             continue;
         }
+        if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
+            state.imsvc(invocation, text, directory, &mut arguments);
+            continue;
+        }
         let remaining = arguments.len();
         if state.option(invocation, option, &mut arguments) {
             // The bare name of an option clang-cl reads with the next
@@ -310,7 +314,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         } else {
             // An option clang-cl knows takes its value from the next
-            // argument after its bare name (`/imsvc /usr/include`), which
+            // argument after its bare name (`/vctoolsdir /opt/vc`), which
             // is then no input.
             let mut text = text.to_owned();
             if known == Some(ClOption::TakesNext)
@@ -428,16 +432,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
         common.push("-D_DEBUG".into());
     }
-    if !state.ignore_include_variable
-        && let Some(include) = std::env::var_os("INCLUDE")
-    {
-        for directory in std::env::split_paths(&include) {
-            if !directory.as_os_str().is_empty() {
-                common.push("--isystem".into());
-                common.push(directory.into_os_string());
-            }
-        }
-    }
+    common.append(&mut state.system_directories());
     // Intel's defaults come before the command line's own options.
     if let Some(intel) = &intel {
         intel.apply(&invocation.name, &mut common, target);
@@ -1022,6 +1017,8 @@ struct State {
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
     ignore_include_variable: bool,
+    /// clang-cl's `/imsvc` directories, in order.
+    imsvc:                   Vec<OsString>,
     standard:                &'static str,
     /// `/std:` named the standard, as `/std:c11` does, rather than `cl`'s
     /// default dialect.
@@ -1077,6 +1074,7 @@ impl Default for State {
             nologo:                  false,
             verbose:                 false,
             ignore_include_variable: false,
+            imsvc:                   Vec::new(),
             standard:                "c17",
             standard_given:          false,
             diagnostics:             "msvc-caret",
@@ -1114,6 +1112,55 @@ impl Runtime {
 }
 
 impl State {
+    /// The options for the system directories the driver adds before the
+    /// command line's options: clang-cl's `/imsvc` directories, then those
+    /// of `%INCLUDE%` unless `/X` leaves them out, both ahead of bcc's
+    /// built-in headers. clang-cl's driver adds them after its resource
+    /// headers instead (`MSVCToolChain::AddClangSystemIncludeArgs`), but
+    /// bcc's intrinsic headers do not yet coexist with the MSVC headers,
+    /// which include `<intrin.h>` (driver-modes.md, "clang-cl"). The command
+    /// line's `/I` directories are still searched first, so a header found
+    /// here is a system header, whose warnings are not shown.
+    fn system_directories(&mut self) -> Vec<OsString> {
+        let mut directories = std::mem::take(&mut self.imsvc);
+        if !self.ignore_include_variable
+            && let Some(include) = std::env::var_os("INCLUDE")
+        {
+            directories.extend(
+                std::env::split_paths(&include)
+                    .filter(|directory| !directory.as_os_str().is_empty())
+                    .map(PathBuf::into_os_string),
+            );
+        }
+        directories
+            .into_iter()
+            .flat_map(|directory| ["--isystem".into(), directory])
+            .collect()
+    }
+
+    /// clang-cl's `/imsvc DIR`, `-imsvc DIR` or `/imsvcDIR` (`argument`),
+    /// which `CMake` gives it for a `SYSTEM` include directory: `directory`,
+    /// or the next of `rest` when that is empty
+    /// ([`Self::system_directories`]).
+    fn imsvc<'r>(
+        &mut self,
+        invocation: &Invocation,
+        argument: &str,
+        directory: &str,
+        rest: &mut impl Iterator<Item = &'r OsStr>,
+    ) {
+        if !directory.is_empty() {
+            self.imsvc.push(directory.into());
+        } else if let Some(directory) = rest.next() {
+            self.imsvc.push(directory.to_os_string());
+        } else {
+            invocation.error(format_args!(
+                "argument to '{argument}' is missing (expected 1 value)"
+            ));
+            self.errors += 1;
+        }
+    }
+
     /// Translates the option `option` (without its `/` or `-`), reading a
     /// separate operand from `rest`. Returns whether it is a `cl` option.
     fn option<'r>(

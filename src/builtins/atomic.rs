@@ -796,8 +796,9 @@ const fn descriptor(id: Id, spelling: &'static str, atomic: AtomicBuiltin) -> Bu
         id,
         spelling,
         availability: Availability {
-            feature: None,
-            naming:  NamingPolicy::Reserved,
+            feature:    None,
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         syntax: SyntaxForm::OrdinaryCall,
         designator: DesignatorPolicy::DirectCallOnly,

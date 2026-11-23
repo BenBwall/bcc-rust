@@ -71,6 +71,57 @@ mod tests {
         assert_eq!(text(&interpreted.stdout), expected, "interpreter");
     }
 
+    /// On Windows the GCC identity calls libgcc's `__powidf2` and its
+    /// relatives by name, which the interpreter provides: it prints the bits
+    /// GCC and Clang print on Linux, where `long double` is x87's on the
+    /// GNU target, and on the MSVC target, whose `long double` is `double`,
+    /// the `double` bits in that column too. The fixture's headers are
+    /// replaced by declarations, since a cross target has no C library.
+    #[test]
+    fn the_interpreter_runs_libgccs_power_routines_on_windows() {
+        let source = std::fs::read_to_string(fixture("powi.c")).unwrap();
+        let source = source
+            .replace(
+                "#include <stdio.h>\n#include <string.h>\n",
+                "int printf(const char *, ...);\nvoid *memcpy(void *, const void *, \
+                 __SIZE_TYPE__);\n",
+            )
+            .replace(
+                "#include <math.h>\n",
+                "#define INFINITY __builtin_inff()\n#define NAN __builtin_nanf(\"\")\n",
+            );
+        let path = temporary("powi.c");
+        std::fs::write(&path, source).unwrap();
+        let expected = std::fs::read_to_string(fixture("powi.x86_64.expected")).unwrap();
+        for target in ["x86_64-w64-windows-gnu", "x86_64-pc-windows-msvc"] {
+            let interpreted = bcc(&[
+                "--interpret",
+                "--compiler-identity=gcc",
+                &format!("--target={target}"),
+                path.to_str().unwrap(),
+            ]);
+            assert_eq!(
+                interpreted.status.code(),
+                Some(0),
+                "{target}: {}",
+                text(&interpreted.stderr)
+            );
+            let output = text(&interpreted.stdout);
+            if target == "x86_64-w64-windows-gnu" {
+                assert_eq!(output, expected, "{target}");
+                continue;
+            }
+            assert_eq!(output.lines().count(), expected.lines().count(), "{target}");
+            for (line, wanted) in output.lines().zip(expected.lines()) {
+                let (head, long_double) = line.split_once(" l=").unwrap();
+                let (wanted_head, _) = wanted.split_once(" l=").unwrap();
+                assert_eq!(head, wanted_head, "{target}");
+                let double = head.split_once(" d=").unwrap().1.split_once(' ').unwrap().0;
+                assert_eq!(long_double, double, "{target}: {line}");
+            }
+        }
+    }
+
     /// The WebAssembly back end calls the bundled runtime's `__powitf2`,
     /// whose bits are libgcc's; without `node` on the path this is skipped.
     #[test]

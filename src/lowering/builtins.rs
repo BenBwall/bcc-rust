@@ -576,7 +576,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 Operand::Value(self.emit_object_size(size, pointer, source)?)
             },
+            // Clang adds `!unpredictable` metadata to a branch on
+            // `__builtin_unpredictable`, which the IR has no place for.
             | CommonBuiltin::Expect(_)
+            | CommonBuiltin::Unpredictable
             | CommonBuiltin::Aligned
             | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::AssocBarrier => items[0].operand,
@@ -1404,11 +1407,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         let (name, _) = self.unit.context.literal_text_lossy_in(self.scratch, text);
         let name = crate::target::cpu_query_name(name, clang);
+        let caller = super::errors::RuntimeCaller::Builtin(if processor {
+            "__builtin_cpu_is"
+        } else {
+            "__builtin_cpu_supports"
+        });
         if processor {
             let (field, value) = crate::target::cpu_processor(name, clang).ok_or_else(|| {
                 LoweringError::missing("an unknown processor name was not refused", source)
             })?;
-            let word = self.cpu_word("__cpu_model", 16, field.offset(), source)?;
+            let word = self.cpu_word("__cpu_model", caller, 16, field.offset(), source)?;
             let wanted = self.iconst(Type::I32, i128::from(value));
             let same = self.icmp(IntCC::Eq, word, wanted);
             return Ok(Operand::Value(self.convert(Opcode::Zext, Type::I32, same)));
@@ -1417,8 +1425,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             return Ok(Operand::Value(self.iconst(Type::I32, 0)));
         };
         let word = match bit / 32 {
-            | 0 => self.cpu_word("__cpu_model", 16, 12, source)?,
-            | index => self.cpu_word("__cpu_features2", 12, 4 * (u64::from(index) - 1), source)?,
+            | 0 => self.cpu_word("__cpu_model", caller, 16, 12, source)?,
+            | index => self.cpu_word(
+                "__cpu_features2",
+                caller,
+                12,
+                4 * (u64::from(index) - 1),
+                source,
+            )?,
         };
         let mask = self.iconst(Type::I32, i128::from(1_u32 << (bit % 32)));
         let masked = self.binary_inst(Opcode::And, InstFlags::empty(), word, mask);
@@ -1433,33 +1447,30 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// Loads a word of the runtime library's processor data, which an ordinary
     /// memory access may read since `__cpu_indicator_init` is an external call
-    /// that the optimizer keeps before it.
+    /// that the optimizer keeps before it. `caller` names the query, for the
+    /// refusal when the unit gives the object's name to something else
+    /// (`runtime_calls.rs`).
     fn cpu_word(
         &mut self,
-        name: &str,
+        name: &'static str,
+        caller: super::errors::RuntimeCaller,
         size: u64,
         offset: u64,
         source: crate::translation_phases::SourceVectors,
     ) -> Result<Value, LoweringError> {
         let align = Align::from_bytes(4).expect("a power of two");
-        let global = match self.unit.module.symbol(name) {
-            | Some(crate::ir::Symbol::Global(global)) => global,
-            | Some(_) =>
-                return Err(LoweringError::missing(
-                    "the processor data is not an object",
-                    source,
-                )),
-            | None => self.unit.module.declare_global(
-                name,
-                crate::ir::GlobalDecl {
-                    linkage: crate::ir::Linkage::External,
-                    size,
-                    align,
-                    constant: false,
-                    thread_local: false,
-                },
-            ),
-        };
+        let global = self.unit.runtime_object(
+            name,
+            crate::ir::GlobalDecl {
+                linkage: crate::ir::Linkage::External,
+                size,
+                align,
+                constant: false,
+                thread_local: false,
+            },
+            caller,
+            source,
+        )?;
         let base = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
         let addr = self.offset_address(base, offset);
         Ok(self.inst(

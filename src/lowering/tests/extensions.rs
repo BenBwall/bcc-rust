@@ -220,6 +220,61 @@ fn msvc_setjmp_takes_the_callers_frame() {
     }
 }
 
+/// A `_setjmp` that is not the Microsoft runtime's, because its parameter
+/// is no pointer or it has internal linkage, takes no frame, as in Clang,
+/// which adds it only for the library function called with a pointer.
+/// A file without `<setjmp.h>` may declare such a function (the name is
+/// reserved only at file scope, C99 §7.1.3p1); lowering once passed the
+/// frame to its `int` parameter and produced invalid IR.
+#[test]
+fn msvc_setjmp_frame_is_only_for_the_runtimes() {
+    for (declaration, call) in [
+        ("static int _setjmp(int a) { return a + 4; }", "_setjmp(1)"),
+        (
+            "static int _setjmpex(int a) { return a + 4; }",
+            "_setjmpex(1)",
+        ),
+        (
+            "static int _setjmp(void *p) { return p != 0 ? 5 : 0; }",
+            "_setjmp(&n)",
+        ),
+        ("int _setjmp(int a) { return a + 4; }", "_setjmp(1)"),
+        ("int _setjmp(long a) { return (int)a + 4; }", "_setjmp(1)"),
+    ] {
+        let source = format!(
+            "{declaration}\nint main(void) {{ volatile int n = 0; (void)n; return {call}; }}"
+        );
+        let text =
+            lower_for(&source, Target::WindowsMsvc).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert_eq!(text.matches("frame_address").count(), 0, "{text}");
+        assert_eq!(
+            run_text(&text, "main").result.unwrap().termination,
+            Termination::Returned(Some(RuntimeValue::Int(5))),
+            "{text}"
+        );
+    }
+}
+
+/// Clang's `__builtin_assume` lowers as `__assume` does, to the IR's
+/// `assume` (LLVM's `llvm.assume`), leaving an operand with side effects
+/// unevaluated; `__builtin_unpredictable` is its operand, Clang's
+/// `!unpredictable` branch metadata having no place in the IR.
+/// Clang extension: Clang Language Extensions, "`__builtin_assume`" and
+/// "`__builtin_unpredictable`".
+#[test]
+fn clang_assumptions_lower_to_assume() {
+    let source = "int f(int x) { __builtin_assume(x > 2); __builtin_assume(x++ > 0); if \
+                  (__builtin_unpredictable(x > 3)) x += 1; return \
+                  (int)__builtin_unpredictable(x); }\nint main(void) { return f(4) + f(3); }";
+    let text = lower_for(source, Target::LinuxGnu).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    assert_eq!(text.matches(" assume.i1 ").count(), 1, "{text}");
+    assert_eq!(
+        run_text(&text, "main").result.unwrap().termination,
+        Termination::Returned(Some(RuntimeValue::Int(8))),
+        "{text}"
+    );
+}
+
 #[test]
 fn nondefault_calling_conventions_are_refused() {
     for (target, attribute) in [

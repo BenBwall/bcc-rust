@@ -27,21 +27,32 @@ pub(crate) struct BuiltinDescriptor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Availability {
-    pub(crate) feature: Option<Feature>,
-    pub(crate) naming:  NamingPolicy,
+    pub(crate) feature:    Option<Feature>,
+    pub(crate) naming:     NamingPolicy,
+    /// Only the Clang identities, Clang and clang-cl, have the builtin: one
+    /// of Clang's own that GCC 14 lacks, whose `__has_builtin` is 0 there
+    /// (`__builtin_assume`).
+    pub(crate) clang_only: bool,
 }
 
 impl Availability {
     /// Whether the configuration accepts the builtin's feature, so that it
-    /// exists at all: `__builtin_inff32` only where `_Float32` is a type.
+    /// exists at all: `__builtin_inff32` only where `_Float32` is a type,
+    /// and a Clang builtin only for the Clang identities.
     pub(crate) const fn accepted(
         self,
         configuration: crate::configuration::CompilerConfiguration,
     ) -> bool {
-        match self.feature {
+        let feature = match self.feature {
             | Some(feature) => configuration.accepts(feature),
             | None => true,
-        }
+        };
+        feature
+            && (!self.clang_only
+                || matches!(
+                    configuration.compiler_identity().rules(),
+                    crate::configuration::RuleSet::Clang
+                ))
     }
 }
 
@@ -330,6 +341,12 @@ pub(crate) enum BuiltinOperation {
     /// GCC infinity (`false`) and quiet NaN (`true`) constructors.
     FloatConstant(Scalar, bool),
     Expect(bool),
+    /// Clang's `__builtin_unpredictable`: its operand, which says only that
+    /// a branch on it is hard to predict. Clang does not fold it in a
+    /// constant expression.
+    /// Clang extension: Clang Language Extensions,
+    /// "`__builtin_unpredictable`".
+    Unpredictable,
     Aligned,
     Unreachable,
     Trap,
@@ -401,8 +418,10 @@ pub(crate) enum BuiltinOperation {
     /// Microsoft `__assume(e)`: a promise that `e` is true where the call
     /// is reached, which the optimizer may use and code never evaluates; an
     /// operand with side effects is ignored, and `__assume(0)` marks the
-    /// point unreachable. MSVC extension: Microsoft Learn, "__assume".
+    /// point unreachable. Clang's `__builtin_assume` is the same.
+    /// MSVC extension: Microsoft Learn, "__assume".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/assume>
+    /// Clang extension: Clang Language Extensions, "`__builtin_assume`".
     Assume,
     /// Microsoft `__annotation`: wide strings for the debug information,
     /// with no effect on execution. MSVC extension: Microsoft Learn,

@@ -1050,8 +1050,9 @@ const fn descriptor(
         ),
         effects: BuiltinEffectClass::Library,
         availability: Availability {
-            feature: None,
-            naming:  NamingPolicy::Reserved,
+            feature:    None,
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
     }
 }
