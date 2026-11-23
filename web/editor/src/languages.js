@@ -138,6 +138,9 @@ const llvm = {
       // (`[ %v1, %block0 ]`), is a label, as where it is defined.
       [/(label)(\s+)(%[\w.$]+)/, ['keyword', '', 'label']],
       [/%[\w.$]+(?=\s*\])/, 'label'],
+      // bcc names the memory each alloca reserves `%slotN`, as its own IR
+      // names the stack slot `slotN`.
+      [/%slot\d+\b/, 'variable.slot'],
       [/%[\w.$]+/, 'variable'],
       [/^[\w.$]+:/, 'label'],
       [/\b(i\d+|ptr|void|half|float|double)\b/, 'type'],
@@ -313,14 +316,19 @@ const wat = {
       [/;;.*$/, 'comment'],
       [/\(;[^;]*;\)/, 'comment'],
       [/"([^"\\]|\\.)*"/, 'string'],
-      [/(call)(\s+)(\$[\w.$]+)/, ['keyword.instruction', '', 'function']],
-      [/(func)(\s+)(\$[\w.$]+)/, ['keyword', '', 'function']],
+      // A function's name where it is defined or called, as in the IRs and
+      // the assembly.
+      [/(call)(\s+)(\$[\w.$]+)/, ['keyword.instruction', '', 'function.name']],
+      [/(func)(\s+)(\$[\w.$]+)/, ['keyword', '', 'function.name']],
       [/\$__stack_pointer\b/, 'variable.slot'],
       [/\$[\w.$]+/, 'variable'],
-      [/\b(i32|i64|f32|f64)\.[a-z0-9_]+/, 'keyword.instruction'],
+      // `i32.add`: the type it works on, as bcc IR's `iadd.i32` colours it,
+      // then the operation.
+      [/\b(i32|i64|f32|f64)(\.)([a-z0-9_]+)/, ['type', 'delimiter', 'keyword.instruction']],
       [/\b(memory|local|global|table|ref|data|elem)\.[a-z_]+/, 'keyword.instruction'],
       [/\b(i32|i64|f32|f64|v128)\b/, 'type'],
-      [/\b(offset|align)(=)/, ['keyword', 'operator']],
+      // Qualifiers recede behind the instruction, as in the IRs.
+      [/\b(offset|align)(=)/, ['keyword.modifier', 'operator']],
       [/[a-z_][\w.]*/, { cases: { '@control': 'keyword.instruction', '@keywords': 'keyword', '@default': 'identifier' } }],
       [/-?(0x[0-9a-fA-F]+|\d+(\.\d*)?([eE][-+]?\d+)?|inf|nan(:0x[0-9a-fA-F]+)?)/, 'number'],
       [/[()]/, '@brackets'],
