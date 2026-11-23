@@ -216,6 +216,13 @@ impl CompilerConfiguration {
             | DiagnosticGroup::ImplicitFunctionDeclaration =>
                 &[DiagnosticGroup::ImplicitLibraryFunction],
             | DiagnosticGroup::ReturnMismatch => &[DiagnosticGroup::VoidReturnMismatch],
+            // Clang's `-Wreturn-type` holds `-Wreturn-mismatch`, so
+            // `-Wno-return-type` accepts C89's `return;` in a function
+            // returning a value (C99 §6.8.6.4p1); GCC 14 keeps them apart.
+            | DiagnosticGroup::ReturnType if clang => &[
+                DiagnosticGroup::ReturnMismatch,
+                DiagnosticGroup::VoidReturnMismatch,
+            ],
             | DiagnosticGroup::IncompatiblePointerTypes =>
                 &[DiagnosticGroup::GccConditionalPointerMismatch],
             | DiagnosticGroup::Normalized => &[DiagnosticGroup::PedanticNormalized],
