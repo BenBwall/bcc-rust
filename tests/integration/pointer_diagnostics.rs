@@ -275,4 +275,92 @@ mod tests {
         }
         std::fs::remove_file(executable).unwrap();
     }
+
+    /// A builtin's pointer parameter converts its argument as a prototyped
+    /// call does: Clang and GCC warn when it discards the pointed-to
+    /// object's `volatile` or `const`, where bcc refused the call (the LLVM
+    /// test-suite's gcc-c-torture/execute/builtin-prefetch-3.c).
+    #[test]
+    fn builtin_pointer_parameters_warn_about_discarded_qualifiers() {
+        const SOURCE: &str = concat!(
+            "volatile int v[4]; const char c[8];\n",
+            "int main(void) {\n",
+            "    __builtin_prefetch(v, 0, 0); __builtin_prefetch(v + 1);\n",
+            "    __builtin___clear_cache(c, c + 1);\n",
+            "    return __builtin_object_size(v, 0) != sizeof v\n",
+            "        || __builtin_dynamic_object_size(v + 1, 0) != 12;\n",
+            "}\n",
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let input = root.join(format!(
+            "target/builtin-qualifiers-{}.c",
+            std::process::id()
+        ));
+        std::fs::write(&input, SOURCE).unwrap();
+        // The personalities word the warnings as each compiler does.
+        let personality = |mode: &str| {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([mode, "-fsyntax-only"])
+                .arg(&input)
+                .env("NO_COLOR", "1")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CPATH")
+                .env_remove("C_INCLUDE_PATH")
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            assert!(output.status.success(), "{mode}: {stderr}");
+            assert!(!stderr.contains("error"), "{mode}: {stderr}");
+            stderr
+        };
+        let stderr = personality("--clang-mode");
+        // bcc gives `__builtin___clear_cache` GCC's older `char *`
+        // parameters, so only its warnings' positions are Clang's.
+        for site in ["4:29: warning: passing", "4:32: warning: passing"] {
+            assert!(stderr.contains(site), "{site}\n{stderr}");
+        }
+        for (line, column, from, to) in [
+            (3, 24, "volatile int[4]", "const void *"),
+            (3, 53, "volatile int *", "const void *"),
+            (5, 34, "volatile int[4]", "const void *"),
+            (6, 42, "volatile int *", "const void *"),
+        ] {
+            let warning = format!(
+                "{line}:{column}: warning: passing '{from}' to parameter of type '{to}' discards \
+                 qualifiers [-Wincompatible-pointer-types-discards-qualifiers]"
+            );
+            assert!(stderr.contains(&warning), "{warning}\n{stderr}");
+        }
+        // GCC 14 warns too (`-Wdiscarded-qualifiers`), in words bcc's GCC
+        // personality does not yet give an ordinary call either.
+        let stderr = personality("--gcc-mode");
+        assert!(stderr.contains("3:24: warning: "), "{stderr}");
+        std::fs::remove_file(input).unwrap();
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let executable = root.join(format!(
+            "target/builtin-qualifiers-{}.exe",
+            std::process::id()
+        ));
+        for flags in [&["--interpret"][..], &["--interpret", "--opt=bcc"]] {
+            let output = bcc(SOURCE, flags);
+            assert_eq!(output.status.code(), Some(0), "{flags:?}: {output:?}");
+        }
+        for flags in [
+            &["-O0"][..],
+            &["-O2"],
+            &["--backend=native"],
+            &["--backend=native", "--opt=bcc"],
+        ] {
+            let output = bcc(
+                SOURCE,
+                &[&["-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(output.status.success(), "{flags:?}: {output:?}");
+            let run = crate::native::run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}: {run:?}");
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
 }

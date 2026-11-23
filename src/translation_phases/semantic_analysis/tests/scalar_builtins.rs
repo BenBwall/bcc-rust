@@ -778,13 +778,19 @@ fn builtin_longjmp_values_must_be_the_constant_one() {
             "__builtin_longjmp(b,1.0)",
             SemanticErrorKind::InvalidLongjmpValue,
         ),
+        // The buffers convert as prototyped arguments: GCC 14 and Clang 23
+        // refuse an `int` under `-Wint-conversion`.
         (
             "__builtin_longjmp(n,1)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::PointerConstraint(
+                crate::configuration::DiagnosticGroup::IntConversion,
+            ),
         ),
         (
             "__builtin_setjmp(5)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::PointerConstraint(
+                crate::configuration::DiagnosticGroup::IntConversion,
+            ),
         ),
         (
             "__builtin_longjmp(b)",

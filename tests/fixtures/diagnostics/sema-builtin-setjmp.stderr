@@ -30,13 +30,13 @@ error: the value argument must be the integer constant 1: `__builtin_longjmp`
   |
   = note: GNU extension: GCC Nonlocal Gotos requires the second argument of __builtin_longjmp to be the integer constant 1
 
-error: function argument cannot be converted to its parameter type
+error: incompatible integer and pointer conversion [-Wint-conversion]
  --> sema-builtin-setjmp.c:8:22
   |
 8 |     __builtin_setjmp(5);
-  |                      ^ argument does not convert to the parameter type
+  |                      ^ pointer constraint violation
   |
-  = note: C99 §6.5.2.2p2: each argument has a type assignable to its corresponding parameter
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 error: function call has the wrong number of arguments
   --> sema-builtin-setjmp.c:9:5

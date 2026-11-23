@@ -690,9 +690,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The carry of `__builtin_addc` and `__builtin_subc` converts as a
         // prototyped argument does: GCC 14 and Clang 23 warn for a pointer
         // to the signed type or to a `const` one (`-Wpointer-sign`,
-        // discarded qualifiers) and refuse one to another width.
-        let compatible = if matches!(descriptor.operation, CommonBuiltin::Carry(..)) {
-            self.prototype_argument(argument, ty)
+        // discarded qualifiers) and refuse one to another width. So does
+        // any other pointer parameter (C99 §6.5.2.2p7): both warn when the
+        // argument points to a `volatile` or `const` object that the
+        // parameter's type does not qualify (`__builtin_prefetch` of a
+        // `volatile` array, gcc.c-torture/execute/builtin-prefetch-3.c).
+        let compatible = if matches!(descriptor.operation, CommonBuiltin::Carry(..))
+            || self.pointer_target(ty).is_some()
+        {
+            self.prototype_argument(argument, ty, index, name)
         } else {
             self.common_argument(argument, ty)
         };
@@ -819,12 +825,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         compatible
     }
 
-    /// `e` converted to the parameter type `ty` as a prototyped call's
-    /// argument, with that conversion's warnings and errors.
+    /// `e`, the builtin `name`'s argument at 0-based `index`, converted to
+    /// the parameter type `ty` as a prototyped call's argument, with that
+    /// conversion's warnings and errors in a call's words.
     /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
-    fn prototype_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
+    fn prototype_argument(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        ty: TypeId,
+        index: usize,
+        name: crate::util::string_cache::StringCacheId,
+    ) -> bool {
         let info = self.expression_info(e);
-        let compatible = self.types.unanalyzed(info.ty) || self.assignment_conversion(ty, info);
+        let site = super::super::compiler_wording::ConversionSite::Argument {
+            position: index + 1,
+            callee:   Some(name),
+        };
+        let compatible =
+            self.types.unanalyzed(info.ty) || self.assignment_conversion_for(ty, info, site);
         if !compatible {
             self.error(
                 SemanticErrorKind::InvalidArgumentType,
