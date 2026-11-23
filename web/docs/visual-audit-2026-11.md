@@ -5503,7 +5503,8 @@ wraps in the narrow listing. The steps that carry the lesson:
   ([`machine-designator-1440-light`](screenshots/part18/machine-designator-1440-light.png)).
 - **Note 16, the call of `sum_of`.** Its parameter `f` gets a copy of the
   pointer, as `v` gets a copy of `&v[0]`: the value flow reads "&v[0] →
-  copied to → v, 2 → n, &twice → f int (*)(int)".
+  copied to → v", "2 → copied to → n" and "&twice → copied to → f", typed
+  `int (*)(int)`.
 - **Note 43, "Call twice through `f` (frame #3)".** The expression before
   the parentheses gave a pointer to the function, and the call runs the
   function it points to (§6.5.2.2p1 and p3, p. 71; PDF p. 83). In compiled
@@ -5576,13 +5577,15 @@ at `-O0` and `-O2`.
   modules do.
 - **The lesson walk.** Part 9's walk at 1440x900 light and 390x844 dark,
   on the deployed site (`main` at `0d5cf90f6`) and on CI's Pages build of
-  this branch: the 16 existing machine lessons' 1,571 notes are the same in
-  title, lead, value flow, "why it matters" note and next step at both
-  sizes. The new lesson walks 188 states with its current line and lead in
-  view at each. Neither build scrolled sideways or raised a page error.
-- **The scenes.** At 1440x900, 1366x768, 1024x768 and 390x844 in both
-  themes, the machine reached notes 15, 43 and 126, the three compiler
-  stages showed their indirect call with no stop, and the WebAssembly view
+  this branch at `6ae8af61f`: the 16 existing machine lessons' 1,571 notes
+  are the same in title, lead, value flow, "why it matters" note and next
+  step at both sizes. The new lesson walks 188 states with its current line
+  and lead in view at each, and each but the last names the step that
+  follows. Neither build scrolled sideways or raised a page error.
+- **The scenes.** On the same build, at 1440x900, 1366x768, 1024x768 and
+  390x844 in both themes, the machine reached notes 15, 43 and 126, the
+  three compiler stages showed their indirect call with no stop, and the
+  WebAssembly view
   reached `call_indirect` with each compiler. No sideways scroll, no
   console error or warning.
 - **Contrast.** The notes' text measures 15.82:1 (light) and 13.34:1
