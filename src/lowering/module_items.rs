@@ -971,20 +971,27 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// unwinds to, 0 for none. `cl` treats them as intrinsics that pass the
     /// caller's frame, and Clang passes `llvm.frameaddress(0)`, so a call
     /// gets that argument too ([`Self::signature_for_binding`]); without it
-    /// `longjmp` unwinds to whatever the register held.
+    /// `longjmp` unwinds to whatever the register held. Like Clang, which
+    /// adds the frame only when the call's one argument is a pointer and the
+    /// function is the library's, this leaves alone a `_setjmp` of another
+    /// parameter type or with internal linkage: a file that does not include
+    /// `<setjmp.h>` may give the name to a function of its own.
     /// MSVC extension: Microsoft Learn, "setjmp" (x64 unwinding);
-    /// C99: §7.13.1.1, p. 243; PDF p. 255.
+    /// C99: §7.13.1.1, p. 243; PDF p. 255; §7.1.3 paragraph 1, p. 166;
+    /// PDF p. 178.
     pub(super) fn msvc_setjmp(&self, binding: usize) -> bool {
+        let data = &self.sema.bindings[binding];
         self.target == Target::WindowsMsvc
+            && data.linkage == Linkage::External
             && matches!(self.symbol_name(binding), "_setjmp" | "_setjmpex")
             && matches!(
-                self.sema.types.kind(self.sema.bindings[binding].ty),
+                self.sema.types.kind(data.ty),
                 TypeKind::Function {
-                    parameters: [_],
+                    parameters: [buffer],
                     prototype: true,
                     variadic: false,
                     ..
-                }
+                } if matches!(self.sema.types.kind(*buffer), TypeKind::Pointer(_))
             )
     }
 
