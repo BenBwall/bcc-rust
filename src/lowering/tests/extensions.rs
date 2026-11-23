@@ -571,10 +571,12 @@ block2:
 
 /// GCC's outer frame and return addresses walk the frame-pointer chain:
 /// one load per level from the frame address, and the return address in
-/// the word above the frame reached. Windows, whose frames keep no chain,
-/// and a level beyond the bound stay refused, and the interpreter, whose
-/// frames link no machine frames, stops with its own reason. GNU extension:
-/// GCC manual, "Return Address".
+/// the word above the frame reached, up to Clang's level 65535. Windows,
+/// whose frames keep no chain, WebAssembly's outer return addresses and a
+/// deeper level stay refused by name; WebAssembly's outer frame address is
+/// null, as Clang makes it. The interpreter, whose frames link no machine
+/// frames, stops with its own reason. GNU extension: GCC manual, "Return
+/// Address".
 #[test]
 fn outer_frame_addresses_walk_the_frame_chain() {
     let source = "void *frame(void) { return __builtin_frame_address(2); }\nvoid *ret(void) { \
@@ -614,24 +616,29 @@ block0:
             | other => panic!("{entry}: {other:?}"),
         }
     }
-    let deepest = "void *f(void) { return __builtin_frame_address(64); }";
+    // Clang's deepest level. Any outer level where no frame-pointer chain
+    // links the frames is refused by name; a deeper level is Clang's error
+    // under its identity and refused by name under GCC's
+    // (`deep_frame_levels_walk_the_whole_chain` in the command-line tests).
+    let deepest = "void *f(void) { return __builtin_frame_address(65535); }";
     let text = lower_for(deepest, Target::LinuxGnu).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(text.matches("load.ptr").count(), 64, "{text}");
-    for (target, source) in [
-        (
-            Target::LinuxGnu,
-            "void *f(void) { return __builtin_frame_address(65); }",
-        ),
-        (Target::WindowsGnu, source),
-        (Target::WindowsMsvc, source),
+    assert_eq!(text.matches("load.ptr").count(), 65535);
+    for (target, source, refusal) in [
+        (Target::WindowsGnu, source, "above level 0 on this target"),
+        (Target::WindowsMsvc, source, "above level 0 on this target"),
+        (Target::Wasm32Wasi, source, "above level 0 on this target"),
     ] {
         let errors = lower_for(source, target).expect_err(source);
         assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("not yet supported by lowering: this builtin")),
+            errors.iter().any(|e| e.contains(refusal)),
             "{target:?}: {errors:?}"
         );
+    }
+    let frame_only = "void *frame(void) { return __builtin_frame_address(2); }";
+    for target in [Target::Wasm32Unknown, Target::Wasm32Wasi] {
+        let text = lower_for(frame_only, target).unwrap_or_else(|e| panic!("{target:?}: {e:?}"));
+        assert!(text.contains("= null"), "{target:?}: {text}");
+        assert!(!text.contains("load.ptr"), "{target:?}: {text}");
     }
 }
 

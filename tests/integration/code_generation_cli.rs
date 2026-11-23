@@ -2317,6 +2317,119 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
         }
     }
 
+    /// Levels far above 0, past the 64 bcc used to stop at, walk as many
+    /// frames as Clang's and GCC's walks do: `__builtin_frame_address(80)`
+    /// 80 frames of recursion down is the frame of the function above them
+    /// (LLVM test-suite `20030323-1.c` asks for levels up to 100). Under
+    /// the Clang identity a level above 65535 is Clang's error; above it
+    /// under GCC's, and on a target whose frames no frame-pointer chain
+    /// links (Windows, WebAssembly), lowering refuses the call by name.
+    /// GNU extension: GCC manual, "Return Address".
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn deep_frame_levels_walk_the_whole_chain() {
+        const SOURCE: &str = r#"extern int printf(const char *, ...);
+static void *base;
+__attribute__((noinline)) void *frame2(void) { return __builtin_frame_address(2); }
+__attribute__((noinline)) void *return2(void) { return __builtin_return_address(2); }
+__attribute__((noinline)) void *middle(int which) { void *r = which ? return2() : frame2(); __asm__ volatile(""); return r; }
+__attribute__((noinline)) int deep(int n) {
+  if (n) { int r = deep(n - 1); __asm__ volatile(""); return r; }
+  return __builtin_frame_address(80) == base && __builtin_return_address(80) != 0; }
+__attribute__((noinline)) int top(void) { base = __builtin_frame_address(0);
+  int frame = middle(0) == base; int address = middle(1) == __builtin_return_address(0);
+  int deeper = deep(79); __asm__ volatile(""); return frame + 2 * address + 4 * deeper; }
+int main(void) { printf("%d\n", top()); return 0; }
+"#;
+        let target = "--target=x86_64-unknown-linux-gnu";
+        let executable = temporary("deep-frames.exe");
+        let mut failures = Vec::new();
+        for flags in [
+            &["-O0", "--backend=llvm"][..],
+            &["-O2", "-fno-omit-frame-pointer", "--backend=llvm"][..],
+            &["-O0", "--backend=native"][..],
+            &["-fno-omit-frame-pointer", "--backend=native", "--opt=bcc"][..],
+        ] {
+            let built = bcc(
+                SOURCE,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            if run.status.code() != Some(0) || text(&run.stdout) != "7\n" {
+                failures.push(format!(
+                    "{flags:?}: {:?}\n{}",
+                    run.status.code(),
+                    text(&run.stdout)
+                ));
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        let levels = "void *f(void) { return __builtin_return_address(65535); }\nvoid *g(void) { \
+                      return __builtin_frame_address(65536); }\nvoid *h(void) { return \
+                      __builtin_return_address(-1); }\n";
+        let clang = bcc(
+            levels,
+            &[target, "--compiler-identity=clang", "-fsyntax-only"],
+        );
+        let errors: Vec<String> = text(&clang.stderr)
+            .lines()
+            .filter_map(|line| {
+                line.split_once("error: ")
+                    .map(|(_, error)| error.to_owned())
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            [
+                "argument value 65536 is outside the valid range [0, 65535]",
+                "argument value 4294967295 is outside the valid range [0, 65535]",
+            ],
+            "{}",
+            text(&clang.stderr)
+        );
+        let gcc = bcc(
+            levels,
+            &[target, "--compiler-identity=gcc", "-S", "-o", "-"],
+        );
+        assert!(
+            text(&gcc.stderr)
+                .contains("__builtin_frame_address and __builtin_return_address above level 65535"),
+            "{}",
+            text(&gcc.stderr)
+        );
+        for other in ["--target=x86_64-pc-windows-msvc", "--target=wasm32-wasip1"] {
+            let refused = bcc(
+                "void *f(void) { return __builtin_return_address(1); }",
+                &[other, "-S", "-o", "-"],
+            );
+            assert!(!refused.status.success(), "{other}");
+            assert!(
+                text(&refused.stderr).contains(
+                    "__builtin_frame_address and __builtin_return_address above level 0 on this \
+                     target, whose frames no frame-pointer chain links"
+                ),
+                "{other}: {}",
+                text(&refused.stderr)
+            );
+        }
+        // WebAssembly keeps no caller's frame in memory: an outer frame
+        // address is null, as Clang's WebAssembly back end makes it.
+        let wasm = bcc(
+            "void *f(void) { return __builtin_frame_address(1); }\nvoid *g(void) { return \
+             __builtin_frame_address(3); }",
+            &["--target=wasm32-unknown-unknown", "--emit=asm"],
+        );
+        assert!(wasm.status.success(), "{}", text(&wasm.stderr));
+        assert_eq!(
+            text(&wasm.stdout).matches("i32.const 0").count(),
+            2,
+            "{}",
+            text(&wasm.stdout)
+        );
+    }
+
     /// C11 atomics under contention
     /// (`tests/fixtures/programs/atomic_threads.c`): counters that only atomic
     /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`

@@ -70,10 +70,11 @@ use crate::{
 };
 
 /// The deepest outer frame `__builtin_frame_address` and
-/// `__builtin_return_address` walk to; GCC takes any constant, and a level
-/// deeper than the program's call chain reads past its first frame either
-/// way.
-const OUTER_FRAMES: i128 = 64;
+/// `__builtin_return_address` walk to: Clang's largest level, which its
+/// back end walks with one load per frame, as this does. GCC takes any
+/// constant, and a level deeper than the program's call chain reads past
+/// its first frame either way.
+const OUTER_FRAMES: i128 = 65535;
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Varargs and offsetof keyword forms execute their checked instance;
@@ -585,18 +586,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::AssocBarrier => items[0].operand,
             // Only the current frame has a defined address everywhere; GCC
             // calls outer levels unpredictable, and walks the frame-pointer
-            // chain for them, as this does outside Windows: each x86-64
-            // frame address holds the caller's, and the return address is
-            // the word after it. GNU extension: GCC "Return Address".
+            // chain for them, as this does on Linux: each x86-64 frame
+            // address holds the caller's, and the return address is the
+            // word after it. A function that asks keeps its frame pointer
+            // in every back end, and an unoptimized compilation keeps all
+            // of them, as GCC's and Clang's do. GNU extension: GCC "Return
+            // Address".
             // <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
             | CommonBuiltin::Address(return_address) => {
                 let level = match instance.operands[0].expression {
                     | Some(level) => self.info(level)?.integer.map(|level| level.value),
                     | None => None,
                 };
-                let windows = matches!(
-                    self.unit.target,
-                    crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+                let target = self.unit.target;
+                let chained = matches!(
+                    target,
+                    crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+                );
+                let wasm = matches!(
+                    target,
+                    crate::target::Target::Wasm32Unknown | crate::target::Target::Wasm32Wasi
                 );
                 match level {
                     | Some(0) => Operand::Value(self.nullary(if return_address {
@@ -604,7 +613,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     } else {
                         Opcode::FrameAddress
                     })),
-                    | Some(outer @ 1..=OUTER_FRAMES) if !windows => {
+                    // WebAssembly keeps no caller's frame in linear memory, so
+                    // an outer frame address is null, as Clang's WebAssembly
+                    // back end makes it; an outer return address stays
+                    // refused below.
+                    | Some(1..=OUTER_FRAMES) if wasm && !return_address =>
+                        Operand::Value(self.nullary(Opcode::Null)),
+                    | Some(1..=OUTER_FRAMES) if !chained =>
+                        return Err(LoweringError::unsupported(
+                            super::Construct::OuterFrameTarget,
+                            source,
+                        )),
+                    | Some(outer @ 1..=OUTER_FRAMES) => {
                         let mut frame = self.nullary(Opcode::FrameAddress);
                         for _ in 0..outer {
                             frame = self.load_frame_word(frame);
@@ -618,7 +638,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     },
                     | _ =>
                         return Err(LoweringError::unsupported(
-                            super::Construct::Builtin,
+                            super::Construct::OuterFrameLevel,
                             source,
                         )),
                 }
