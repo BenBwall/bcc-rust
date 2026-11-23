@@ -340,6 +340,17 @@ def cl_unknown_options(driver, label, option, candidates):
 
 MISSING_VALUE = re.compile(r"argument to '(?P<name>.*)' is missing \(expected (?P<count>\d+) values?\)")
 TD_SPELLING = re.compile(r'<\[((?:"-{1,2}",?\s*)+)\],\s*"([^"]+)"')
+UNUSED = re.compile(r"argument unused during compilation: '(.*)' \[-Wunused-command-line-argument\]")
+# The kinds of step clang-cl runs, each as the tag that says an option is
+# unused in it and the options that ask for it, of which every one must
+# leave the option unused: only compiling, preprocessing, only checking,
+# and linking.
+UNUSED_STEPS = (
+    ("unused-c", (["/c"],)),
+    ("unused-E", (["/E"], ["/EP"], ["/P"])),
+    ("unused-Zs", (["/Zs"],)),
+    ("unused-link", ([],)),
+)
 
 
 def clang_driver_options(gcc, options_td):
@@ -352,8 +363,10 @@ def clang_driver_options(gcc, options_td):
     listed for too. An option that is both is listed twice. A line ends in
     `cl` where clang-cl's driver also takes the option bare, outside
     `/clang:`, as its mode shows it, and does not ignore it as unknown, and
-    in `unused` where clang-cl warns that the option, given after `/clang:`
-    to a step that only compiles (`/c`), is unused during compilation. The
+    in `unused-c`, `unused-E`, `unused-Zs` and `unused-link` where clang-cl
+    warns that the option, given after `/clang:`, is unused during
+    compilation in that kind of step (`/c`, each of `/E`, `/EP` and `/P`,
+    `/Zs`, a link), with its values or, joined, both alone and with one. The
     candidates are `--autocomplete=-`, which leaves out the aliases
     (`-target`), the spellings in `Options.td` and GCC's options."""
     import concurrent.futures
@@ -390,23 +403,39 @@ def clang_driver_options(gcc, options_td):
             refused = (f"unknown argument: '{argument}'", f"unknown argument '{argument}';")
             return any(text in result.stderr for text in refused), result.stderr
 
-        def cl_tags(line):
-            kind, name, *count = line.split(" ")
-            argument = f"{name}Zq" if kind == "joined" else name
-            ignored, _ = unknown_to_cl([str(CLANG), "--driver-mode=cl"], directory, argument)
-            if not ignored:
-                line += " cl"
-            words = [argument] + ["x"] * int(count[0] if count else 0)
+        def unused_in(step, words):
+            """Whether clang-cl calls the `/clang:` option `words` unused in
+            the step `step` asks for (`/c`, `/E`, none to link): any
+            `argument unused during compilation` but about the step's own
+            option, which an option that changes the step leaves unused
+            (`/c` beside `-S`), in whatever spelling Clang renders the
+            option (`'-T Zq'` for `-TZq`)."""
             result = subprocess.run(
-                [str(CLANG), "--driver-mode=cl", "-###", "/c", str(directory / "a.c")]
+                [str(CLANG), "--driver-mode=cl", "-###", *step, str(directory / "a.c")]
                 + [f"/clang:{word}" for word in words],
                 capture_output=True,
                 text=True,
                 cwd=directory,
                 timeout=60,
             )
-            if f"argument unused during compilation: '{' '.join(words)}'" in result.stderr:
-                line += " unused"
+            return any(match.group(1) not in step for match in UNUSED.finditer(result.stderr))
+
+        def cl_tags(line, separate):
+            kind, name, *count = line.split(" ")
+            argument = f"{name}Zq" if kind == "joined" else name
+            ignored, _ = unknown_to_cl([str(CLANG), "--driver-mode=cl"], directory, argument)
+            if not ignored:
+                line += " cl"
+            # A joined option is measured with a value and without one
+            # (`-dD`, which `-d` absorbs with a value), unless its bare name
+            # takes its value from the next argument instead (`-T`).
+            if kind == "joined":
+                forms = [[argument]] if separate else [[name], [argument]]
+            else:
+                forms = [[argument] + ["x"] * int(count[0] if count else 0)]
+            for tag, steps in UNUSED_STEPS:
+                if all(unused_in(step, words) for step in steps for words in forms):
+                    line += f" {tag}"
             return line
 
         def survey(name):
@@ -423,7 +452,8 @@ def clang_driver_options(gcc, options_td):
                     if not joined:
                         lines = [line for line in lines if not line.startswith("flag ")]
                         lines.append(f"joined {name}")
-            return [cl_tags(line) for line in lines]
+            separate = any(line.startswith("separate ") for line in lines)
+            return [cl_tags(line, separate) for line in lines]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(survey, names))

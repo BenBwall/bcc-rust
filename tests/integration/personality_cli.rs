@@ -8703,6 +8703,110 @@ mod tests {
         }
     }
 
+    /// A `/clang:` option is dropped with clang-cl's `argument unused` only
+    /// where clang-cl's driver calls it unused in that kind of step, and
+    /// none that could change what the step writes: `/E` keeps `-dD`'s
+    /// definitions, which bcc refuses, every spelling of `-o` names the
+    /// file clang-cl's does, and `-S` and `-M`, which would write assembly
+    /// or dependencies where clang-cl does not, are refused (#452).
+    #[test]
+    fn clang_cl_drops_only_what_the_step_leaves_unused() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        let refused = |shown: &str| {
+            format!(
+                "clang-cl: error: '{shown}' is not supported: bcc does not implement it, and \
+                 ignoring it could change the program\n"
+            )
+        };
+        for (options, shown) in [
+            (&["/E", "/clang:-dD"][..], "-dD"),
+            (&["/E", "/clang:-dI"], "-dI"),
+            (&["/c", "/clang:-dumpmachine"], "-dumpmachine"),
+            (&["/c", "/clang:-S"], "-S"),
+            (&["/c", "/clang:-M"], "-M"),
+            (&["/E", "/clang:-MM"], "-MM"),
+            (&["/E", "/clang:-Wp,-DX=10"], "-Wp,-DX=10"),
+        ] {
+            let mut args = vec!["a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(stderr(&output), refused(shown), "{options:?}");
+            assert_eq!(output.status.code(), Some(1), "{options:?}");
+        }
+        // Beside `/c`, clang-cl says nothing of `-dD`, and `-shared` and
+        // `-Wl,` are unused; beside `/E`, so is `-S`.
+        for (options, warning) in [
+            (&["/c", "/clang:-dD"][..], String::new()),
+            (
+                &["/c", "/clang:-shared"],
+                "clang-cl: warning: argument unused during compilation: '-shared' \
+                 [-Wunused-command-line-argument]\n"
+                    .to_owned(),
+            ),
+            (
+                &["/c", "/clang:-Wl,-foo"],
+                "clang-cl: warning: -Wl,-foo: 'linker' input unused \
+                 [-Wunused-command-line-argument]\n"
+                    .to_owned(),
+            ),
+            (
+                &["/E", "/clang:-S"],
+                "clang-cl: warning: argument unused during compilation: '-S' \
+                 [-Wunused-command-line-argument]\n"
+                    .to_owned(),
+            ),
+        ] {
+            let mut args = vec!["a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), warning, "{options:?}");
+        }
+        // Every spelling of `-o` names the object, as clang-cl's does:
+        // Clang's `-o` as it is, over `/Fo`; `cl`'s `/o` as `/Fo` does.
+        drop(std::fs::remove_file(directory.path("a.obj")));
+        for (options, object) in [
+            (&["-o", "out0.obj"][..], "out0.obj"),
+            (&["-oout1.obj"], "out1.obj"),
+            (&["/o", "out2"], "out2.obj"),
+            (&["/clang:-o", "/clang:out3.obj"], "out3.obj"),
+            (&["/clang:-oout4.obj", "/Foother.obj"], "out4.obj"),
+            (&["/clang:--output=out5.obj"], "out5.obj"),
+            (&["/clang:--output", "/clang:out6"], "out6"),
+        ] {
+            let mut args = vec!["/c", "a.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{options:?}");
+            assert!(directory.path(object).is_file(), "{options:?}");
+            assert!(!directory.path("a.obj").exists(), "{options:?}");
+            assert!(!directory.path("other.obj").exists(), "{options:?}");
+        }
+        // `/E` writes to Clang's `-o`, and ignores `cl`'s `/o`.
+        let output = directory.bcc("--clang-cl-mode", &["/E", "a.c", "/clang:-o", "/clang:a.i"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "");
+        assert!(
+            std::fs::read_to_string(directory.path("a.i"))
+                .unwrap()
+                .contains("int main(void)")
+        );
+        let output = directory.bcc("--clang-cl-mode", &["/E", "a.c", "-o", "b.i"]);
+        succeeds(&output);
+        assert!(stdout(&output).contains("int main(void)"));
+        assert!(!directory.path("b.i").exists());
+        // clang-cl's driver refuses Clang's `-o` for several outputs.
+        directory.write("b.c", "int b;\n");
+        let output = directory.bcc("--clang-cl-mode", &["/c", "a.c", "b.c", "/clang:-ox.obj"]);
+        assert_eq!(
+            stderr(&output),
+            "clang-cl: error: cannot specify -o when generating multiple output files\n"
+        );
+        assert_eq!(output.status.code(), Some(1));
+    }
+
     /// The GCC-style options clang-cl ignores bcc ignores too, rather than
     /// honoring them: `-ffreestanding` leaves the hosted environment,
     /// `-std=c11` the C17 default and `-funsafe-math-optimizations` the

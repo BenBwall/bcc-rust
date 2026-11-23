@@ -25,8 +25,8 @@
 //! The options Clang's own driver takes besides its `-W`, `-f` and `-m`
 //! flags, and those whose bare name takes the next arguments as values,
 //! are frozen from the pinned Clang in `options/clang-driver.list`, with
-//! the ones clang-cl shows bare and the ones it calls unused in a step that
-//! only compiles.
+//! the ones clang-cl shows bare and, for each kind of step it runs, the
+//! ones it calls unused there.
 
 /// Which compiler's names to look in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -340,11 +340,44 @@ pub(super) fn clang_spelling(argument: &str) -> Option<(&'static str, Option<&st
         })
 }
 
+/// The kinds of step clang-cl runs, for which `options/clang-driver.list`
+/// records the options it calls unused in each: only compiling (`/c`),
+/// preprocessing (`/E`, `/EP` and `/P` alike), only checking (`/Zs`), and
+/// linking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClangStep {
+    Compile,
+    Preprocess,
+    Syntax,
+    Link,
+}
+
+impl ClangStep {
+    pub(super) const ALL: [Self; 4] = [Self::Compile, Self::Preprocess, Self::Syntax, Self::Link];
+
+    /// The tag `scripts/update_driver_options.py` gives an option clang-cl
+    /// calls unused in this kind of step.
+    const fn unused_tag(self) -> &'static str {
+        match self {
+            | Self::Compile => "unused-c",
+            | Self::Preprocess => "unused-E",
+            | Self::Syntax => "unused-Zs",
+            | Self::Link => "unused-link",
+        }
+    }
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
 /// Whether clang-cl warns `argument unused during compilation` about
 /// `words`, a Clang option and the values its bare name takes, given after
-/// `/clang:` to a step that only compiles (`-shared`, `-sectcreate a b c`),
-/// as the pinned Clang's table records.
-pub(super) fn clang_unused(words: &[&str]) -> bool {
+/// `/clang:` to a step of kind `step` (`-shared` beside `/c`, `-sectcreate
+/// a b c`), as the pinned Clang's table records it for that kind of step
+/// and for the option as spelled: a joined option's tag holds for its name
+/// alone and with a value (`-dD` is no unused `-d` with the value `D`).
+pub(super) fn clang_unused(words: &[&str], step: ClangStep) -> bool {
     let [argument, values @ ..] = words else {
         return false;
     };
@@ -352,13 +385,15 @@ pub(super) fn clang_unused(words: &[&str]) -> bool {
         return clang_spelling(argument).is_some_and(|(name, joined)| {
             clang_driver_entries().any(|entry| {
                 entry.name == name
-                    && entry.unused
+                    && entry.unused & step.bit() != 0
                     && (entry.kind == ClangKind::Joined) == joined.is_some()
             })
         });
     }
     clang_driver_entries().any(|entry| {
-        entry.name == *argument && entry.kind == ClangKind::Separate(values.len()) && entry.unused
+        entry.name == *argument
+            && entry.kind == ClangKind::Separate(values.len())
+            && entry.unused & step.bit() != 0
     })
 }
 
@@ -371,14 +406,15 @@ enum ClangKind {
 }
 
 /// An entry of `options/clang-driver.list`: `KIND NAME [COUNT] [cl]
-/// [unused]`, the last two the tags `scripts/update_driver_options.py`
-/// gives an option clang-cl shows bare and one it calls unused in a step
-/// that only compiles.
+/// [unused-STEP...]`, the tags `scripts/update_driver_options.py` gives an
+/// option clang-cl shows bare and one it calls unused in each kind of step
+/// ([`ClangStep`]).
 struct ClangEntry {
     kind:     ClangKind,
     name:     &'static str,
     clang_cl: bool,
-    unused:   bool,
+    /// The [`ClangStep::bit`]s of the kinds of step it is unused in.
+    unused:   u8,
 }
 
 fn clang_driver_entries() -> impl Iterator<Item = ClangEntry> {
@@ -398,13 +434,18 @@ fn clang_driver_entries() -> impl Iterator<Item = ClangEntry> {
                 },
                 name,
                 clang_cl: false,
-                unused: false,
+                unused: 0,
             };
             for word in words {
-                match word {
-                    | "cl" => entry.clang_cl = true,
-                    | "unused" => entry.unused = true,
-                    | count => entry.kind = ClangKind::Separate(count.parse().ok()?),
+                if word == "cl" {
+                    entry.clang_cl = true;
+                } else if let Some(step) = ClangStep::ALL
+                    .into_iter()
+                    .find(|step| step.unused_tag() == word)
+                {
+                    entry.unused |= step.bit();
+                } else {
+                    entry.kind = ClangKind::Separate(word.parse().ok()?);
                 }
             }
             Some(entry)
@@ -608,20 +649,43 @@ mod tests {
         }
     }
 
-    /// clang-cl calls a linker option unused in a step that only compiles.
+    /// clang-cl calls a linker option unused in a step that does not link,
+    /// each as the pinned Clang's table records it for that kind of step
+    /// and for the option as spelled.
     #[test]
-    fn clang_cl_calls_linker_options_unused_beside_c() {
-        for (words, unused) in [
-            (&["-sectcreate", "a", "b", "c"][..], true),
-            (&["-whatsloaded"], true),
-            (&["-specs=x"], true),
-            (&["-shared"], true),
-            (&["-D", "X"], false),
-            (&["-imacros", "x"], false),
-            (&["-isysroot", "x"], false),
-            (&["-ffreestanding"], false),
+    fn clang_cl_calls_options_unused_by_the_step() {
+        use ClangStep::{
+            Compile,
+            Link,
+            Preprocess,
+            Syntax,
+        };
+        for (words, step, unused) in [
+            (&["-sectcreate", "a", "b", "c"][..], Compile, true),
+            (&["-whatsloaded"], Compile, true),
+            (&["-specs=x"], Compile, true),
+            (&["-shared"], Compile, true),
+            (&["-shared"], Preprocess, true),
+            (&["-shared"], Syntax, true),
+            // Linking, `-shared` makes a DLL.
+            (&["-shared"], Link, false),
+            // `-S` changes the step beside `/c`, and is unused beside `/E`.
+            (&["-S"], Compile, false),
+            (&["-S"], Preprocess, true),
+            // `-Tx` is `-T x`, as Clang renders it.
+            (&["-Tx"], Compile, true),
+            // `-dD` is its own option, which `-d` does not absorb without a
+            // value; `/E` prints the definitions.
+            (&["-dD"], Compile, false),
+            (&["-dD"], Preprocess, false),
+            (&["-dI"], Compile, false),
+            (&["-dumpmachine"], Compile, false),
+            (&["-D", "X"], Compile, false),
+            (&["-imacros", "x"], Compile, false),
+            (&["-isysroot", "x"], Compile, false),
+            (&["-ffreestanding"], Compile, false),
         ] {
-            assert_eq!(clang_unused(words), unused, "{words:?}");
+            assert_eq!(clang_unused(words, step), unused, "{words:?} {step:?}");
         }
     }
 
