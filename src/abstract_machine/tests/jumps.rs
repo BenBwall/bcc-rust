@@ -424,6 +424,38 @@ fn a_goto_back_over_a_declaration_reaches_it_again() {
             "error",
         );
     assert_eq!(last.diagnostics[0].kind, "indeterminate");
+    let message = &last.diagnostics[0].message;
+    assert!(
+        message.starts_with(
+            "a value was stored in `x` earlier, but execution then reached the declaration of `x` \
+             on line 4 again"
+        ),
+        "{message}"
+    );
+    assert_eq!(last.event.kind, EventKind::Fault);
+    assert!(
+        last.event
+            .summary
+            .starts_with("The program stored a value in this object earlier, but reaching its"),
+        "{}",
+        last.event.summary
+    );
+    assert!(!last.event.summary.contains("never set"));
+    assert_eq!(last.event.clauses[0].id, "6.8p3");
+    // Without an earlier store, the read is of a value never set.
+    let last =
+        stopped(
+            "int main(void) {\n    int pass = 0;\ntop:;\n    int x;\n    if (pass == 1) return \
+             x;\n    pass++;\n    goto top;\n}\n",
+            "error",
+        );
+    assert!(
+        last.diagnostics[0]
+            .message
+            .starts_with("nothing has been stored in `x` yet"),
+        "{}",
+        last.diagnostics[0].message
+    );
     for (source, words) in [
         (
             "int main(void) {\n    goto nowhere;\n    return 0;\n}\n",

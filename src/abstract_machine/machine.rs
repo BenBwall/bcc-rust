@@ -59,6 +59,11 @@ pub(super) struct Machine {
     pub next_frame:   usize,
     pub cells:        usize,
     pub metadata:     Vec<ObjectMetadata>,
+    /// The objects whose declarations, reached again without an
+    /// initializer, made their values indeterminate once more (C99
+    /// §6.8p3), each with what it held before: kept apart from the
+    /// metadata, which every retained step copies for every object.
+    pub forgotten:    Vec<(usize, Value)>,
     /// The program's structure types, for layouts and member names.
     pub structures:   Arc<[Structure]>,
     /// The program's function types, for spelling pointers to functions.
@@ -726,6 +731,10 @@ impl Machine {
         let before = self.state.objects[id - 1].value.clone();
         if !initialized {
             self.state.objects[id - 1].value = ty.indeterminate(&self.structures);
+        }
+        self.forgotten.retain(|&(object, _)| object != id);
+        if again && !initialized {
+            self.forgotten.push((id, before.clone()));
         }
         let event = self.declare(range, id, ty, (initialized, named));
         Ok(if again {
@@ -1806,6 +1815,7 @@ impl Machine {
             next_frame: 2,
             cells: 0,
             metadata: Vec::new(),
+            forgotten: Vec::new(),
             structures: Arc::clone(&program.structures),
             signatures: Arc::clone(&program.signatures),
             functions: program
@@ -1897,7 +1907,11 @@ impl Machine {
             + self.metadata.capacity() * size_of::<ObjectMetadata>()
             + self.state.objects.capacity() * size_of::<super::Object>()
             + self.activations.capacity() * size_of::<Activation>()
-            + self.state.frames.capacity() * size_of::<Frame>();
+            + self.state.frames.capacity() * size_of::<Frame>()
+            + self.forgotten.capacity() * size_of::<(usize, Value)>();
+        for (_, value) in &self.forgotten {
+            bytes += value_bytes(value);
+        }
         for object in &self.state.objects {
             bytes += object.name.capacity()
                 + object.r#type.capacity()

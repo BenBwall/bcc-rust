@@ -303,6 +303,9 @@ impl Machine {
             .cloned()
             .unwrap_or(Value::Indeterminate);
         if value == Value::Indeterminate {
+            if let Some(diagnostic) = self.forgotten_read(target, offset, index) {
+                return Err(diagnostic);
+            }
             // C99 indeterminate values may be unspecified or trap
             // representations; the machine stops conservatively, without
             // asserting that every indeterminate read is undefined.
@@ -318,6 +321,33 @@ impl Machine {
         }
         self.check_pointer_lifetime(&value)?;
         Ok(value)
+    }
+
+    /// The stop for a read of leaf `index` of object `target`, at
+    /// `offset`, that held a value until execution reached the object's
+    /// declaration again: without an initializer, that declaration stored
+    /// an indeterminate value once more (C99 §6.8p3).
+    fn forgotten_read(&self, target: usize, offset: i32, index: usize) -> Option<Diagnostic> {
+        let (_, before) = self.forgotten.iter().find(|&&(id, _)| id == target)?;
+        if layout::leaf(before, index)? == &Value::Indeterminate {
+            return None;
+        }
+        let at = match self.metadata[target - 1].line {
+            | 0 => String::new(),
+            | line => format!(" on line {line}"),
+        };
+        Some(Diagnostic::indeterminate(
+            self.state.source_range,
+            &format!(
+                "a value was stored in {} earlier, but execution then reached the declaration of \
+                 `{}`{at} again, and a declaration without an initializer makes the value \
+                 indeterminate each time it is reached; the machine stops instead of making up a \
+                 value",
+                self.location(target, offset),
+                self.state.objects[target - 1].name,
+            ),
+            &clauses::DECLARATION_REACHED,
+        ))
     }
 
     /// The value of the whole structure `structure` at leaf `offset`: a copy

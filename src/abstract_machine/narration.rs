@@ -830,6 +830,9 @@ fn lowered(text: &str) -> String {
 /// titled by what went wrong, from the paragraph that makes it undefined.
 pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     let dangling = diagnostic.clause == Some(&clauses::LIFETIME);
+    // A read of a value that reaching a declaration again made
+    // indeterminate, after the program had stored one (C99 §6.8p3).
+    let forgotten = diagnostic.clause == Some(&clauses::DECLARATION_REACHED);
     let (title, summary, explanation, topic) = match diagnostic.kind {
         | "undefined_behavior" => {
             let (title, summary) = undefined(diagnostic);
@@ -859,10 +862,14 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         ),
         | "indeterminate" => (
             "Read of an indeterminate value",
-            String::from(
-                "The read would use a value the program never set, so the result could differ \
-                 from run to run and between compilers.",
-            ),
+            String::from(if forgotten {
+                "The program stored a value in this object earlier, but reaching its declaration \
+                 again, with no initializer, made the value indeterminate once more, so the result \
+                 could differ from run to run and between compilers."
+            } else {
+                "The read would use a value the program never set, so the result could differ from \
+                 run to run and between compilers."
+            }),
             String::from(
                 "An indeterminate value is either an unspecified value or a trap representation, \
                  a bit pattern that is no value at all, and reading a trap representation is \
