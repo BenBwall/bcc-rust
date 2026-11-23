@@ -126,8 +126,6 @@ pub(crate) enum TakenName {
     OtherType,
     /// A function, where the runtime's is an object.
     Function,
-    /// An object with internal linkage, which is not the runtime's.
-    InternalObject,
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -444,10 +442,6 @@ impl ToDiagnostic for LoweringError {
                         "is declared with another type",
                     ),
                     | TakenName::Function => ("reads the external object", "names a function"),
-                    | TakenName::InternalObject => (
-                        "reads the external object",
-                        "names an object with internal linkage",
-                    ),
                 };
                 match caller {
                     | RuntimeCaller::Builtin(caller) => format_in!(

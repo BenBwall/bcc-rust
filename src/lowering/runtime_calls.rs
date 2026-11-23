@@ -10,10 +10,9 @@
 //! with internal linkage, or an object, is something else that only
 //! shares the name, as a file that does not include the header may give
 //! `pow` to a static function. Lowering refuses the call then, where Clang
-//! calls the static function with the routine's arguments. An object is
-//! read where it stands when it is external, whatever its type, as Clang
-//! and GCC read it; a function, or an object with internal linkage, is
-//! refused alike.
+//! calls the static function with the routine's arguments. An object of
+//! the name is read where it stands, whatever its type or linkage, as Clang
+//! and GCC read it; a function of the name is refused.
 //! C99: §7.1.3 paragraphs 1-2, p. 166; PDF p. 178.
 
 use super::{
@@ -90,9 +89,9 @@ impl Unit<'_, '_, '_> {
         }
     }
 
-    /// The external object `name`, declared as `declaration` on first use.
-    /// `caller` names what reads it, for the refusal when the unit gives the
-    /// name to a function or to an object with internal linkage.
+    /// The object `name`, declared as `declaration` on first use. `caller`
+    /// names what reads it, for the refusal when the unit gives the name to
+    /// a function.
     pub(super) fn runtime_object(
         &mut self,
         name: &'static str,
@@ -110,9 +109,6 @@ impl Unit<'_, '_, '_> {
         };
         match self.module.symbol(name) {
             | None => Ok(self.module.declare_global(name, declaration)),
-            | Some(Symbol::Global(global))
-                if self.module.global(global).linkage == Linkage::Internal =>
-                Err(refuse(TakenName::InternalObject)),
             | Some(Symbol::Global(global)) => Ok(global),
             | Some(Symbol::Function(_)) => Err(refuse(TakenName::Function)),
         }

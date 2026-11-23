@@ -225,23 +225,26 @@ mod tests {
     }
 
     /// libgcc's processor data, `__cpu_model` and `__cpu_features2`, which
-    /// the processor queries read, given to a function or to an object with
-    /// internal linkage is not that data; lowering refuses the query with
-    /// both names, as for the runtime functions. An external object of the
-    /// name is read where it stands, whatever its type, as Clang and GCC
-    /// read it.
+    /// the processor queries read, given to a function is not that data;
+    /// lowering refuses the query with both names, as for the runtime
+    /// functions. An object of the name, static or external and of any type,
+    /// is read where it stands, as Clang and GCC read it.
     #[test]
-    fn processor_data_named_by_a_function_or_a_static_object_is_refused() {
+    fn processor_data_named_by_a_function_is_refused() {
         let function = "int __cpu_model(int a) { return a; }\nint f(void) { return \
                         __builtin_cpu_supports(\"sse4.2\"); }\n";
         let declared = "int __cpu_model(int);\nint g(void) { return __cpu_model(1); }\nint \
                         f(void) { return __builtin_cpu_is(\"intel\"); }\n";
-        let object = "static int __cpu_model = 3;\nint f(void) { return \
-                      __builtin_cpu_supports(\"sse4.2\") + __cpu_model; }\n";
-        let features = "static int __cpu_features2[3];\nint f(void) { return \
-                        __builtin_cpu_supports(\"avx512bf16\") + __cpu_features2[0]; }\n";
-        let external = "extern char __cpu_model[64];\nint f(void) { return \
-                        __builtin_cpu_supports(\"sse4.2\") + __cpu_model[0]; }\n";
+        let features = "int __cpu_features2(void);\nint g(void) { return __cpu_features2(); \
+                        }\nint f(void) { return __builtin_cpu_supports(\"avx512bf16\"); }\n";
+        let objects = [
+            "static int __cpu_model = 3;\nint f(void) { return __builtin_cpu_supports(\"sse4.2\") \
+             + __cpu_model; }\n",
+            "static int __cpu_features2[3];\nint f(void) { return \
+             __builtin_cpu_supports(\"avx512bf16\") + __cpu_features2[0]; }\n",
+            "extern char __cpu_model[64];\nint f(void) { return \
+             __builtin_cpu_supports(\"sse4.2\") + __cpu_model[0]; }\n",
+        ];
         for target in [WINDOWS[0], WINDOWS[1], LINUX] {
             for args in compilations(target) {
                 for (source, message) in [
@@ -256,19 +259,16 @@ mod tests {
                          '__cpu_model' names a function here",
                     ),
                     (
-                        object,
-                        "'__builtin_cpu_supports' reads the external object '__cpu_model', but \
-                         '__cpu_model' names an object with internal linkage here",
-                    ),
-                    (
                         features,
                         "'__builtin_cpu_supports' reads the external object '__cpu_features2', \
-                         but '__cpu_features2' names an object with internal linkage here",
+                         but '__cpu_features2' names a function here",
                     ),
                 ] {
                     assert_refused(&compile(source, &args), message, &args);
                 }
-                assert_compiles(&compile(external, &args), &args);
+                for source in objects {
+                    assert_compiles(&compile(source, &args), &args);
+                }
             }
         }
     }
