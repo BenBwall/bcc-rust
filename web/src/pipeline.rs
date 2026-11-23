@@ -661,6 +661,7 @@ impl Stage {
 
     /// A short explanation for programmers new to compilers of what the
     /// stage decides and how; what goes in and comes out is its [`Brief`].
+    #[expect(clippy::too_many_lines, reason = "One paragraph per stage.")]
     pub fn explanation(self) -> &'static str {
         match self {
             | Self::Lines =>
@@ -731,8 +732,14 @@ impl Stage {
                  need memory, so they get a stack_slot.",
             | Self::IrAbi =>
                 "Decided here: which arguments travel in registers, which in memory, and how \
-                 values are returned. For programs that pass only ints and pointers, very little \
-                 changes; structs and wide values are where this stage earns its keep.",
+                 values are returned, by the System V ABI that x86-64 Linux follows. Ints and \
+                 pointers already fit a register, so for them little changes. Structures are \
+                 where this stage earns its keep: the IR passes one as ptr aggregate(…), a copy \
+                 the caller made, and returns one by storing it through ptr result(…). Lowering \
+                 decides how each really travels. In the structs lesson an 8-byte struct point \
+                 goes as one i64, in a register, and registers(i64, align 4) on the first \
+                 parameter says the result comes back in one 64-bit register: that parameter is \
+                 only where the function builds its result, and is not passed.",
             | Self::Llvm =>
                 "Decided here: nothing new, since bcc only translates; LLVM, bcc-rust's default \
                  back end, picks the instructions later. LLVM IR is also in SSA form: %names are \
