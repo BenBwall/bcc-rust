@@ -1653,7 +1653,7 @@ impl Census {
                     }
                 },
                 | Stage::Llvm => {
-                    if !line.starts_with(' ') && trimmed.ends_with(':') {
+                    if llvm_label(line) {
                         census.blocks += 1;
                     }
                     if trimmed.contains("= alloca") {
@@ -1697,6 +1697,17 @@ impl Census {
             }
         }
         census
+    }
+}
+
+/// Whether an LLVM IR line labels a basic block: `block0:`, or `block1:`
+/// followed by the comment LLVM writes after a block that other blocks
+/// branch to, `; preds = %block3, %block0`.
+fn llvm_label(line: &str) -> bool {
+    let (label, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+    label.len() > 1 && label.ends_with(':') && {
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with(';')
     }
 }
 

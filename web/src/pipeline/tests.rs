@@ -540,6 +540,58 @@ fn the_optimizer_comparison_names_what_changed() {
 }
 
 #[test]
+fn every_lesson_counts_each_basic_block_once() {
+    // Each basic block ends in exactly one terminator, so counting the
+    // terminators checks the count of block labels.
+    fn terminators(text: &str, indent: &str, names: &[&str]) -> usize {
+        text.lines()
+            .filter_map(|line| line.strip_prefix(indent))
+            .filter(|instruction| {
+                let operation = instruction
+                    .split_once("= ")
+                    .map_or(*instruction, |(_, operation)| operation);
+                operation
+                    .split([' ', '.'])
+                    .next()
+                    .is_some_and(|name| names.contains(&name))
+            })
+            .count()
+    }
+    let ir = ["jump", "brif", "switch", "return", "indirect_br", "unreachable"];
+    let llvm = ["br", "switch", "ret", "indirectbr", "unreachable", "resume"];
+    for demo in &DEMOS {
+        let stem = demo.name.trim_end_matches(".c");
+        for optimize in [false, true] {
+            let compilation = crate::explorer::compile(demo.source, optimize);
+            let listing = compilation.output(Stage::Ir).expect("bcc IR");
+            assert_eq!(
+                Census::of(Stage::Ir, listing).blocks,
+                terminators(listing, "    ", &ir),
+                "{stem} bcc IR at -O{}",
+                u8::from(optimize) * 2
+            );
+            let listing = precomputed_llvm(stem, optimize).expect("LLVM IR is bundled");
+            assert_eq!(
+                Census::of(Stage::Llvm, listing).blocks,
+                terminators(listing, "  ", &llvm),
+                "{stem} LLVM IR at -O{}",
+                u8::from(optimize) * 2
+            );
+        }
+    }
+    // A block that others branch to carries a comment after its label.
+    let callbacks = Compilation {
+        llvm: precomputed_llvm("callbacks", false).map(Into::into),
+        ..Compilation::default()
+    };
+    assert_eq!(
+        example(Stage::Llvm, &callbacks, "").expect("an example"),
+        "Here the LLVM IR is 27 instructions in 8 basic blocks, with 1 stack slot and 3 loads or \
+         stores."
+    );
+}
+
+#[test]
 fn the_page_refuses_programs_larger_than_the_compiler_takes() {
     assert_eq!(too_large(&"x".repeat(MAX_COMPILE_BYTES)), None);
     let refusal = too_large(&"x".repeat(MAX_COMPILE_BYTES + 1)).expect("one byte too many");
