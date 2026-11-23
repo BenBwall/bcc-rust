@@ -262,22 +262,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             clang_options.extend(front_end_option(clang));
             continue;
         }
-        // clang-cl's `/imsvc DIR`, `-imsvc DIR` or `/imsvcDIR`, which CMake
-        // gives it for a `SYSTEM` include directory.
         if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
-            let directory = if directory.is_empty() {
-                let Some(directory) = arguments.next() else {
-                    invocation.error(format_args!(
-                        "argument to '{text}' is missing (expected 1 value)"
-                    ));
-                    state.errors += 1;
-                    continue;
-                };
-                directory.to_os_string()
-            } else {
-                directory.into()
-            };
-            state.imsvc.push(directory);
+            state.imsvc(invocation, text, directory, &mut arguments);
             continue;
         }
         let remaining = arguments.len();
@@ -447,26 +433,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
         common.push("-D_DEBUG".into());
     }
-    // `cl` searches `%INCLUDE%` before the command line's directories;
-    // clang-cl after them and its resource headers, with its own system
-    // directories ([`State::clang_cl_system_directories`]).
-    if !clang_cl {
-        for directory in state.include_variable() {
-            common.push("--isystem".into());
-            common.push(directory);
-        }
-    }
+    common.append(&mut state.system_directories(false));
     // Intel's defaults come before the command line's own options.
     if let Some(intel) = &intel {
         intel.apply(&invocation.name, &mut common, target);
     }
     common.append(&mut state.bcc);
-    if clang_cl {
-        for directory in state.clang_cl_system_directories() {
-            common.push("--idirafter".into());
-            common.push(directory);
-        }
-    }
+    common.append(&mut state.system_directories(true));
     if X86Features::from_options(&x86_options.iter().copied(), true).unknown_vector_abi()
         == Some(32)
     {
@@ -1160,19 +1133,53 @@ impl State {
             .collect()
     }
 
-    /// The system directories clang-cl's driver adds after its resource
-    /// headers, in its order: the `/imsvc` directories, those of the
-    /// `/external:env:` variables, and `%INCLUDE%`'s unless `/X` is given,
-    /// which leaves the others (`MSVCToolChain::AddClangSystemIncludeArgs`).
-    /// The command line's `/I` and `/external:I` directories, which come
-    /// before them all, and the resource headers keep their places, so a
-    /// header found here is a system header, whose warnings clang-cl does
-    /// not show.
-    fn clang_cl_system_directories(&mut self) -> Vec<OsString> {
-        let mut directories = std::mem::take(&mut self.imsvc);
-        directories.append(&mut self.external_env);
-        directories.extend(self.include_variable());
+    /// The options for the system directories the driver adds before the
+    /// command line's options or, for `after_options`, after them. `cl`
+    /// searches `%INCLUDE%` first. clang-cl's driver adds its own after its
+    /// resource headers, in its order: the `/imsvc` directories, those of
+    /// the `/external:env:` variables, and `%INCLUDE%`'s unless `/X` is
+    /// given, which leaves the others
+    /// (`MSVCToolChain::AddClangSystemIncludeArgs`). The command line's
+    /// `/I` and `/external:I` directories come before them all, so a header
+    /// found here is a system header, whose warnings clang-cl does not show.
+    fn system_directories(&mut self, after_options: bool) -> Vec<OsString> {
+        let (option, directories) = match (self.clang_cl, after_options) {
+            | (false, false) => ("--isystem", self.include_variable()),
+            | (true, true) => {
+                let mut directories = std::mem::take(&mut self.imsvc);
+                directories.append(&mut self.external_env);
+                directories.extend(self.include_variable());
+                ("--idirafter", directories)
+            },
+            | _ => return Vec::new(),
+        };
         directories
+            .into_iter()
+            .flat_map(|directory| [option.into(), directory])
+            .collect()
+    }
+
+    /// clang-cl's `/imsvc DIR`, `-imsvc DIR` or `/imsvcDIR` (`argument`),
+    /// which `CMake` gives it for a `SYSTEM` include directory: `directory`,
+    /// or the next of `rest` when that is empty
+    /// ([`Self::system_directories`]).
+    fn imsvc<'r>(
+        &mut self,
+        invocation: &Invocation,
+        argument: &str,
+        directory: &str,
+        rest: &mut impl Iterator<Item = &'r OsStr>,
+    ) {
+        if !directory.is_empty() {
+            self.imsvc.push(directory.into());
+        } else if let Some(directory) = rest.next() {
+            self.imsvc.push(directory.to_os_string());
+        } else {
+            invocation.error(format_args!(
+                "argument to '{argument}' is missing (expected 1 value)"
+            ));
+            self.errors += 1;
+        }
     }
 
     /// Translates the option `option` (without its `/` or `-`), reading a
@@ -1488,7 +1495,7 @@ impl State {
                 } else if let Some(variable) = option.strip_prefix("external:env:") {
                     // The directories in VARIABLE are system directories,
                     // which clang-cl searches after its `/imsvc` ones
-                    // ([`Self::clang_cl_system_directories`]).
+                    // ([`Self::system_directories`]).
                     for directory in std::env::var_os(variable)
                         .map_or_default(|value| std::env::split_paths(&value).collect::<Vec<_>>())
                     {

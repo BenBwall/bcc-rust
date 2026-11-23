@@ -11491,7 +11491,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         ));
     }
 
-    /// clang-cl's `/imsvc DIR` (also `-imsvc` and joined), which CMake gives
+    /// clang-cl's `/imsvc DIR` (also `-imsvc` and joined), which `CMake` gives
     /// it for a `SYSTEM` include directory, is a system directory its
     /// driver adds after the resource headers: after `/I` and `/external:I`,
     /// before the `/external:env:` variables' directories and `%INCLUDE%`,
