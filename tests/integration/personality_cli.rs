@@ -11167,6 +11167,135 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         }
     }
 
+    /// The Clang personality takes the GCC optimization flags Clang ignores
+    /// with a warning for each source it compiles, the retired flags it
+    /// warns are deprecated, the options it ignores without a word and its
+    /// unnamed aliases, as the pinned Clang does: the same words, warning
+    /// groups and status, and `-Werror` makes the warnings errors. Each row
+    /// is checked against the pinned Clang when it is there.
+    #[test]
+    fn clang_ignores_gcc_optimization_flags_as_clang_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        directory.write("b.c", "int b(void) { return 0; }\n");
+        let warn = |option: &str| {
+            format!(
+                "clang: warning: optimization flag '{option}' is not supported \
+                 [-Wignored-optimization-argument]\n"
+            )
+        };
+        let error = |option: &str| {
+            format!(
+                "clang: error: optimization flag '{option}' is not supported \
+                 [-Werror,-Wignored-optimization-argument]\n"
+            )
+        };
+        let deprecated = |option: &str| {
+            format!(
+                "clang: warning: the flag '{option}' has been deprecated and will be ignored \
+                 [-Wunused-command-line-argument]\n"
+            )
+        };
+        let rows: [(&[&str], String, i32); 16] = [
+            (&["-fno-ipa-cp"], warn("-fno-ipa-cp"), 0),
+            (
+                &["-fexpensive-optimizations"],
+                warn("-fexpensive-optimizations"),
+                0,
+            ),
+            (
+                &["-ftree-vectorize", "-fno-vect-cost-model"],
+                warn("-fno-vect-cost-model"),
+                0,
+            ),
+            (&["-finline-limit=50"], warn("-finline-limit=50"), 0),
+            (
+                &["-fgcse", "-mmpx", "-fno-gcse"],
+                warn("-fgcse") + &warn("-fno-gcse") + &deprecated("-mmpx"),
+                0,
+            ),
+            (&["-fgcse", "-Werror"], error("-fgcse"), 1),
+            (
+                &[
+                    "-fgcse",
+                    "-Werror",
+                    "-Wno-error=ignored-optimization-argument",
+                ],
+                warn("-fgcse"),
+                0,
+            ),
+            (
+                &["-fgcse", "-Wno-ignored-optimization-argument"],
+                String::new(),
+                0,
+            ),
+            (&["-fgcse", "-w"], String::new(), 0),
+            (
+                &["-fgcse", "-ffoo"],
+                "clang: error: unknown argument: '-ffoo'\n".to_owned() + &warn("-fgcse"),
+                1,
+            ),
+            (
+                &[
+                    "-finline",
+                    "-fno-var-tracking",
+                    "-mieee-fp",
+                    "-frandom-seed=x",
+                ],
+                String::new(),
+                0,
+            ),
+            (
+                &["-ftree-vectorize", "-fno-tree-slp-vectorize"],
+                String::new(),
+                0,
+            ),
+            (
+                &["-fno-ipa-cp=1"],
+                "clang: error: unknown argument: '-fno-ipa-cp=1'\n".to_owned(),
+                1,
+            ),
+            (&["-fgcse", "b.c"], warn("-fgcse") + &warn("-fgcse"), 0),
+            (&["-fgcse", "-E"], warn("-fgcse"), 0),
+            (&["-fgcse", "-fsyntax-only"], warn("-fgcse"), 0),
+        ];
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        let reference = Command::new(clang)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        for (options, expected, status) in &rows {
+            // Each source compiled draws the warnings again.
+            let mut args = vec!["-c", "a.c", "-o", "a.o"];
+            if options.contains(&"b.c") {
+                args.truncate(2);
+            } else if options.contains(&"-E") || options.contains(&"-fsyntax-only") {
+                args = vec!["a.c"];
+            }
+            args.extend(options.iter().copied());
+            let output = directory.bcc("--clang-mode", &args);
+            assert_eq!(stderr(&output), *expected, "{options:?}");
+            assert_eq!(output.status.code(), Some(*status), "{options:?}");
+            if reference {
+                let output = Command::new(clang)
+                    .args(&args)
+                    .current_dir(directory.path("."))
+                    .output()
+                    .unwrap();
+                assert_eq!(stderr(&output), *expected, "pinned Clang {options:?}");
+                assert_eq!(
+                    output.status.code(),
+                    Some(*status),
+                    "pinned Clang {options:?}"
+                );
+            }
+        }
+        // A link has no compiler to warn.
+        let link = directory.bcc("--clang-mode", &["a.o", "-fgcse", "-o", "a.out"]);
+        succeeds(&link);
+        assert_eq!(stderr(&link), "");
+    }
+
     /// `-ftrapv` traps on signed `+`, `-` and `*` overflow and on `abs` of
     /// the most negative value instead of marking them `nsw`; with
     /// `-fwrapv` the last option given decides under the GCC identity, as

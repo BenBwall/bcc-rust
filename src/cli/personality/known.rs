@@ -11,6 +11,12 @@
 //! clang-cl, the `cl` and clang-cl personalities read an argument that
 //! starts with `/` and names none of them as an input file.
 //!
+//! The options of the pinned Clang's ignored groups, which its
+//! `--autocomplete` does not list, are frozen from its `Options.td` in
+//! `options/clang-ignored.list`, with how its driver reports each, beside
+//! the aliases `Options.td` defines without a name of their own
+//! (`-ftree-vectorize` for `-fvectorize`).
+//!
 //! The GCC and Clang options clang-cl's driver does not take, which it
 //! ignores with the warning `unknown argument ignored in clang-cl`, are
 //! frozen from the pinned Clang's clang-cl and from icx-cl 2026.2.0 in
@@ -83,6 +89,51 @@ fn knows_name(compiler: Compiler, option: &str, negative: bool) -> bool {
                 }
             })
     })
+}
+
+/// What the pinned Clang's driver does with an option it takes and
+/// `--autocomplete` does not list: one of its ignored groups in
+/// `Options.td`, or an unnamed alias.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClangIgnored {
+    /// A GCC optimization flag, ignored with the warning `optimization
+    /// flag '-fgcse' is not supported` (`-Wignored-optimization-argument`).
+    Optimization,
+    /// A retired flag, ignored with the warning `the flag '-mmpx' has been
+    /// deprecated and will be ignored` (`-Wunused-command-line-argument`).
+    Deprecated,
+    /// Ignored without a word.
+    Silent,
+    /// Another spelling of the option named.
+    Alias(&'static str),
+}
+
+/// What the pinned Clang does with `option` if it is one of its ignored
+/// options or unnamed aliases (`options/clang-ignored.list`). An entry
+/// that ends in `*` is a joined option, which matches any argument it
+/// begins (`-finline-limit=100`); any other matches the whole argument.
+pub(super) fn clang_ignored(option: &str) -> Option<ClangIgnored> {
+    include_str!("options/clang-ignored.list")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| {
+            let mut words = line.split(' ');
+            let (kind, pattern) = (words.next()?, words.next()?);
+            let matches = match pattern.strip_suffix('*') {
+                | Some(prefix) => option.starts_with(prefix),
+                | None => option == pattern,
+            };
+            if !matches {
+                return None;
+            }
+            match kind {
+                | "warn" => Some(ClangIgnored::Optimization),
+                | "deprecated" => Some(ClangIgnored::Deprecated),
+                | "ignore" => Some(ClangIgnored::Silent),
+                | "alias" => words.next().map(ClangIgnored::Alias),
+                | _ => None,
+            }
+        })
 }
 
 /// How clang-cl reads an argument that is one of its `cl` options.
@@ -252,6 +303,27 @@ mod tests {
         assert!(!knows(Compiler::Clang, "-Wno-not-a-clang-warning"));
         assert!(knows(Compiler::Clang, "-fcolor-diagnostics"));
         assert!(!knows(Compiler::Clang, "-fnot-a-clang-flag"));
+    }
+
+    #[test]
+    fn clang_ignored_options_match_their_spellings() {
+        assert_eq!(
+            clang_ignored("-fno-ipa-cp"),
+            Some(ClangIgnored::Optimization)
+        );
+        assert_eq!(
+            clang_ignored("-finline-limit=100"),
+            Some(ClangIgnored::Optimization)
+        );
+        assert_eq!(clang_ignored("-mmpx"), Some(ClangIgnored::Deprecated));
+        assert_eq!(clang_ignored("-finline"), Some(ClangIgnored::Silent));
+        assert_eq!(
+            clang_ignored("-ftree-vectorize"),
+            Some(ClangIgnored::Alias("-fvectorize"))
+        );
+        // A flag matches only whole.
+        assert_eq!(clang_ignored("-fno-ipa-cp=1"), None);
+        assert_eq!(clang_ignored("-fvectorize"), None);
     }
 
     #[test]
