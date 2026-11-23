@@ -92,6 +92,15 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
                 .flatten()
         })
     };
+    // A lesson that includes `<stdio.h>` is a WASI command linked with
+    // wasi-libc (`web/wasm/generate.sh`); the others have no C library.
+    let linked = move || {
+        wasm.program.with(|program| {
+            program
+                .as_ref()
+                .is_some_and(|program| program.command.contains(crate::wasm::COMMAND_FLAGS))
+        })
+    };
     let command = move || {
         wasm.program.with(|program| {
             program
@@ -137,15 +146,23 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
                          (`wasm32-wasip1`), on your computer: nothing was sent to a server. Edit the program and \
                          choose Run edited code, and bcc compiles your version.",
                     ),
+                    | _ if linked() => rich_text(
+                        "Clang, from the wasi-sdk toolchain, built this lesson's module when the site was built, at `-O0`. \
+                         The lesson calls `printf`, so Clang linked it with wasi-libc, the C library for WASI, whose \
+                         `$_start` calls `main`. Only the lessons have a Clang module.",
+                    ),
                     | _ => rich_text(
                         "Clang, from the wasi-sdk toolchain, built this lesson's module when the site was built, at `-O0` \
-                         and without a C library. Only the lessons have one.",
+                         and without a C library, so the module starts in `main`. Only the lessons have a Clang module.",
                     ),
                 }}
-                {move || both().then(|| rich_text(
+                {move || both().then(|| rich_text(if linked() {
                     " Switch compilers to compare: the same C becomes different instructions, because each compiler \
-                     makes its own choices. bcc's module also starts in `$_start`, which its small C library adds.",
-                ))}
+                     makes its own choices. bcc's module also starts in `$_start`, which its own small C library adds."
+                } else {
+                    " Switch compilers to compare: the same C becomes different instructions, because each compiler \
+                     makes its own choices. bcc's module starts in `$_start`, which its small C library adds."
+                }))}
             </p>
             <div class="wasm-fallback" hidden=move || problem().is_none()>
                 <p>{move || problem().map_or_default(|problem| problem.headline)}</p>

@@ -468,6 +468,8 @@ impl Machine {
                 match statement {
                     | "if" => clauses::IF_STATEMENT,
                     | "do" => clauses::DO_STATEMENT,
+                    | "while" => clauses::WHILE_STATEMENT,
+                    | "for" => clauses::FOR_STATEMENT,
                     | _ => clauses::ITERATION,
                 },
             ),

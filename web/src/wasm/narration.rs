@@ -839,7 +839,8 @@ impl Context<'_> {
                 "`loop` opens a region too, but a branch to it jumps backward, to its start. \
                  Without optimization, a C `while` or `for` loop tests its condition at the top \
                  of the `loop` and ends each pass with a `br` back to that test; a `do` loop \
-                 tests at the bottom, so its pass ends in a conditional branch back to the top."
+                 tests at the bottom, so its pass ends in a branch back to the top that is taken \
+                 only while the condition holds: a `br_if`, or a `br` inside an `if`."
                     .to_owned(),
             ),
             | _ => {

@@ -91,17 +91,77 @@ fn a_do_statement_runs_its_body_before_its_first_test() {
         );
 }
 
+// C99 §6.8.5.1p1: a while statement tests its condition before each run of
+// its body. §6.8.5.3p1: a for statement tests its condition before each run
+// and its third clause after each, and its first clause's names are scoped to
+// the loop. Each loop's tests and jumps back cite its own paragraph beside
+// §6.8.5p4.
+#[test]
+fn while_and_for_steps_cite_their_own_paragraphs() {
+    let cited = |state: &State| -> Vec<&str> {
+        state.event.clauses.iter().map(|clause| clause.id).collect()
+    };
+    let states = finished(
+        "int main(void) {\n    int i = 0;\n    while (i < 2)\n        i++;\n    int s = 0;\n    \
+         for (int k = 0; k < 2; k++)\n        s += k;\n    return i + s;\n}\n",
+        3,
+    );
+    let tests: Vec<Vec<&str>> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Branch)
+        .map(cited)
+        .collect();
+    assert_eq!(tests.len(), 6, "three tests of each loop");
+    assert!(
+        tests[..3]
+            .iter()
+            .all(|ids| ids[..2] == ["6.8.5p4", "6.8.5.1p1"]),
+        "{tests:?}"
+    );
+    assert!(
+        tests[3..]
+            .iter()
+            .all(|ids| ids[..2] == ["6.8.5p4", "6.8.5.3p1"]),
+        "{tests:?}"
+    );
+    let back: Vec<Vec<&str>> = states
+        .iter()
+        .filter(|state| state.event.title == "Jump back to the loop condition")
+        .map(cited)
+        .collect();
+    assert_eq!(
+        back,
+        [
+            vec!["6.8.5p4", "6.8.5.1p1"],
+            vec!["6.8.5p4", "6.8.5.1p1"],
+            vec!["6.8.5p4", "6.8.5.3p1"],
+            vec!["6.8.5p4", "6.8.5.3p1"],
+        ]
+    );
+    let begun = step(&states, EventKind::EnterBlock, "Begin the lifetime of `k`");
+    assert!(cited(begun).contains(&"6.8.5.3p1"), "{:?}", cited(begun));
+    let omitted = finished(
+        "int main(void) {\n    int s = 0;\n    for (;;) { s++; if (s == 3) break; }\n    return \
+         s;\n}\n",
+        3,
+    );
+    let test = step(&omitted, EventKind::Branch, "No condition");
+    assert_eq!(cited(test), ["6.8.5.3p2", "6.8.5.3p1"]);
+}
+
 // C99 §6.8.6.2p2: a continue jumps to the end of the loop's body: a while's
-// and a do's test come next, a for's third clause.
+// and a do's test come next, a for's third clause (§6.8.5.1p1, §6.8.5.2p1,
+// §6.8.5.3p1, each cited beside it).
 #[test]
 fn continue_goes_on_to_each_loops_next_test() {
-    for (source, expected, then, next) in [
+    for (source, expected, then, next, own) in [
         (
             "int main(void) {\n    int i = 0;\n    int s = 0;\n    while (i < 6) {\n        \
              i++;\n        if (i % 2) continue;\n        s += i;\n    }\n    return s;\n}\n",
             12,
             "goes straight to the condition `i < 6`",
             "`i` names an object to read",
+            "6.8.5.1p1",
         ),
         (
             "int main(void) {\n    int s = 0;\n    for (int i = 0; i < 6; i++) {\n        int \
@@ -110,6 +170,7 @@ fn continue_goes_on_to_each_loops_next_test() {
             24,
             "goes to the for statement's third clause, `i++`, and then to the condition",
             "`i` is the object to update",
+            "6.8.5.3p1",
         ),
         (
             "int main(void) {\n    int i = 0;\n    int s = 0;\n    do {\n        i++;\n        if \
@@ -117,6 +178,7 @@ fn continue_goes_on_to_each_loops_next_test() {
             8,
             "goes to the test `i < 4` after the body",
             "`i` names an object to read",
+            "6.8.5.2p1",
         ),
     ] {
         let states = finished(source, expected);
@@ -127,6 +189,7 @@ fn continue_goes_on_to_each_loops_next_test() {
             states[jump].event.summary
         );
         assert_eq!(states[jump].event.clauses[0].id, "6.8.6.2p2");
+        assert_eq!(states[jump].event.clauses[1].id, own, "{source}");
         assert_eq!(states[jump + 1].event.title, next, "{source}");
         // The body's block ends first, said of the continue.
         let leave = &states[jump - 1];

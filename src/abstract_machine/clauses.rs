@@ -719,6 +719,15 @@ clauses! {
     LOOP_BODY = "6.8.5p5", "p. 135; PDF p. 147", "Iteration statements",
         "A loop is a block, and its body is a block inside it, so the body's objects begin and \
          end with each pass.";
+    /// C99: §6.8.5.1 paragraph 1, p. 136; PDF p. 148.
+    WHILE_STATEMENT = "6.8.5.1p1", "p. 136; PDF p. 148", "The while statement",
+        "A while statement evaluates its controlling expression before each run of its body, so \
+         the body may not run at all.";
+    /// C99: §6.8.5.3 paragraph 1, p. 136; PDF p. 148.
+    FOR_STATEMENT = "6.8.5.3p1", "p. 136; PDF p. 148", "The for statement",
+        "A for statement runs its first clause once, then evaluates its condition before each run \
+         of its body and its third clause after each; a name declared in the first clause can be \
+         used in the whole loop.";
     /// C99: §6.8.5.3 paragraph 2, p. 136; PDF p. 148.
     OMITTED_CONDITION = "6.8.5.3p2", "p. 136; PDF p. 148", "The for statement",
         "A for statement's omitted controlling expression is replaced by a nonzero constant.";

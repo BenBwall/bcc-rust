@@ -1296,6 +1296,13 @@ impl Machine {
                     clauses::SELECTION_BLOCK,
                 )
             };
+            // A for statement's first clause is scoped to the loop by its
+            // own paragraph.
+            let cited: &[Clause] = if written == "for" {
+                &[clause, clauses::FOR_STATEMENT, clauses::BLOCK_SCOPE]
+            } else {
+                &[clause, clauses::BLOCK_SCOPE]
+            };
             return noted(
                 explained(
                     Event::new(EventKind::EnterBlock, range, String::from("Enter a block")),
@@ -1308,7 +1315,7 @@ impl Machine {
                          block declares no objects of its own, so no lifetimes begin here.",
                         sentence_case(what)
                     ),
-                    &[clause, clauses::BLOCK_SCOPE],
+                    &cited,
                 ),
                 Topic::Scope,
             );
@@ -1384,6 +1391,9 @@ impl Machine {
                  the last pass ended at its closing brace, and these are new ones.",
             );
             cited.insert(1, clauses::LOOP_BODY);
+        }
+        if written == "for" {
+            cited.push(clauses::FOR_STATEMENT);
         }
         let mut event = noted(
             explained(
@@ -5269,10 +5279,11 @@ impl Machine {
                  so this is a sequence point."
             )
         };
-        let cited: &[Clause] = if omitted {
-            &[clauses::OMITTED_CONDITION]
-        } else {
-            &[clause, clauses::FULL_EXPRESSION]
+        let cited: &[Clause] = match statement {
+            | _ if omitted => &[clauses::OMITTED_CONDITION, clauses::FOR_STATEMENT],
+            | "while" => &[clause, clauses::WHILE_STATEMENT, clauses::FULL_EXPRESSION],
+            | "for" => &[clause, clauses::FOR_STATEMENT, clauses::FULL_EXPRESSION],
+            | _ => &[clause, clauses::FULL_EXPRESSION],
         };
         let mut event = noted(
             explained(
@@ -6543,7 +6554,13 @@ pub(super) fn implicit_zero(range: SourceRange, value: Operand) -> Event {
     )
 }
 
-pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
+/// A jump: back to a loop's condition, at the end of a pass through a while
+/// or for statement whose keyword is `statement`, or over an else branch.
+///
+/// C99: §6.8.5 paragraph 4, p. 135; PDF p. 147.
+/// C99: §6.8.5.1 paragraph 1, p. 136; PDF p. 148.
+/// C99: §6.8.5.3 paragraph 1, p. 136; PDF p. 148.
+pub(super) fn jump(range: SourceRange, statement: &str, backward: bool) -> Event {
     if backward {
         explained(
             Event::new(
@@ -6554,7 +6571,11 @@ pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
             "One pass through the loop is done, so control goes back to test the condition again.",
             "The loop body (and a for loop's update expression) has finished, so control returns \
              to the controlling expression, which decides whether to run the body again.",
-            &[clauses::ITERATION],
+            match statement {
+                | "while" => &[clauses::ITERATION, clauses::WHILE_STATEMENT],
+                | "for" => &[clauses::ITERATION, clauses::FOR_STATEMENT],
+                | _ => &[clauses::ITERATION],
+            },
         )
     } else {
         explained(
