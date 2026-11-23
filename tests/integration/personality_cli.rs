@@ -5656,6 +5656,77 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// Clang's `-Wreturn-type` holds `-Wreturn-mismatch`, as the LLVM
+    /// test-suite's GCC torture programs rely on (`920302-1.c`); GCC 14's
+    /// `-Wno-return-type` leaves the error alone (probed with Clang 23 and
+    /// GCC 14.2's `cc1`).
+    #[test]
+    fn clang_return_type_options_reach_return_mismatch() {
+        let directory = Directory::new();
+        directory.write(
+            "r.c",
+            "int f(int x) { if (x) return; return 1; }\nvoid g(void) { return 1; }\n",
+        );
+        let compile = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-fsyntax-only", "r.c"];
+            args.extend_from_slice(options);
+            directory.bcc(mode, &args)
+        };
+        let words = [
+            "non-void function 'f' should return a value [-Wreturn-mismatch]",
+            "void function 'g' should not return a value [-Wreturn-mismatch]",
+        ];
+        for options in [
+            &["-Wno-return-type"][..],
+            &["-Wall", "-Wno-return-type"],
+            &["-Wno-return-type", "-Wno-all"],
+        ] {
+            let silent = compile("--clang-mode", options);
+            succeeds(&silent);
+            assert_eq!(stderr(&silent), "", "{options:?}");
+        }
+        for options in [
+            &["-Wno-error=return-type"][..],
+            &["-Wno-return-type", "-Wreturn-type"],
+            &["-Wno-return-type", "-Wall"],
+            &["-Wno-return-type", "-Wreturn-mismatch"],
+        ] {
+            let warned = compile("--clang-mode", options);
+            succeeds(&warned);
+            for word in words {
+                assert!(
+                    stderr(&warned).contains(&format!("warning: {word}")),
+                    "{options:?}: {}",
+                    stderr(&warned)
+                );
+            }
+        }
+        for options in [
+            &["-Werror=return-type"][..],
+            &["-Wno-return-type", "-Werror=return-mismatch"],
+            &["-Wno-return-type", "-Werror=return-type"],
+        ] {
+            let refused = compile("--clang-mode", options);
+            assert!(!refused.status.success(), "{options:?}");
+            for word in words {
+                assert!(
+                    stderr(&refused).contains(&format!("error: {word}")),
+                    "{options:?}: {}",
+                    stderr(&refused)
+                );
+            }
+        }
+        let refused = compile("--gcc-mode", &["-Wno-return-type"]);
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains(
+                "error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]"
+            ),
+            "{}",
+            stderr(&refused)
+        );
+    }
+
     /// GCC 14 reports its permerrors in a system header too, when they are
     /// errors; Clang withholds its default errors there, and every warning
     /// stays withheld.
