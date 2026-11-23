@@ -926,17 +926,18 @@ impl CompilerConfiguration {
                 | None => group.default_severity(),
             }
         };
-        // GCC makes a pedantic warning an error before `-w` can silence
-        // it, though not one of its preprocessor's (`-Wnormalized`);
-        // Clang's `-w` silences it first.
+        // GCC makes a pedantic permerror an error before `-w` can silence
+        // it, though its `-w` silences every other warning first, a
+        // pedantic one included (`diagnostic_context::report_diagnostic`
+        // in GCC 14's `diagnostic.cc` inhibits `DK_WARNING` and
+        // `DK_PEDWARN`, not `DK_PERMERROR`); Clang's `-w` silences it first.
         let gcc = self.identity == super::CompilerIdentity::Gcc;
         let pedantic = self.pedantic_error(group);
-        let preprocessor = group == DiagnosticGroup::PedanticNormalized;
         // Clang 23's `-w` also silences its default-error
         // `-Wargument-outside-range`, though not `-Wint-conversion` or
         // `-Wincompatible-function-pointer-types`.
         if self.suppress_warnings
-            && !(gcc && pedantic && !preprocessor)
+            && !(gcc && pedantic && group.default() == GroupDefault::Permerror)
             && (default == ErrorSeverity::Warning || group == DiagnosticGroup::ArgumentOutsideRange)
         {
             return None;

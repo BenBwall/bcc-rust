@@ -2572,11 +2572,16 @@ mod tests {
                        from pointer target type [-Wdiscarded-qualifiers]\n";
         let error = "c.c:2:18: error: passing argument 1 of 'f' discards 'const' qualifier from \
                      pointer target type [-Werror=discarded-qualifiers]\n";
+        let pedantic = "c.c:2:18: error: passing argument 1 of 'f' discards 'const' qualifier \
+                        from pointer target type [-Wdiscarded-qualifiers]\n";
         for (options, pragma, expected, status) in [
             (&[][..], "", warning, 0),
             (&["-Wno-discarded-qualifiers"], "", "", 0),
             (&["-Wno-incompatible-pointer-types"], "", warning, 0),
             (&["-Werror=discarded-qualifiers"], "", error, 1),
+            (&["-pedantic-errors"], "", pedantic, 1),
+            // GCC's `-w` silences a pedantic warning, though not a permerror.
+            (&["-pedantic-errors", "-w"], "", "", 0),
             (
                 &["-Werror", "-Wno-error=discarded-qualifiers"],
                 "",
@@ -2613,7 +2618,7 @@ mod tests {
     /// GCC 14 files a qualifier lost from a pointed-to array's elements
     /// under `-Wdiscarded-array-qualifiers`, which `-Wdiscarded-qualifiers`
     /// does not reach, and makes it a pedantic warning from C23 on, which
-    /// `-pedantic-errors` makes an error. Each row
+    /// `-pedantic-errors` makes an error and `-w` still silences. Each row
     /// was checked against GCC 14 (`-std=c2x` for C23).
     #[test]
     fn gcc_files_array_qualifiers_under_their_own_option() {
@@ -2654,6 +2659,7 @@ mod tests {
                 &warning,
                 0,
             ),
+            (&["-std=c2x", "-pedantic-errors", "-w"], "", "", 0),
             (&["-std=c2x", "-pedantic"], "", &warning, 0),
             (
                 &[],
