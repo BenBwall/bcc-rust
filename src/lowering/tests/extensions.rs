@@ -255,6 +255,26 @@ fn msvc_setjmp_frame_is_only_for_the_runtimes() {
     }
 }
 
+/// Clang's `__builtin_assume` lowers as `__assume` does, to the IR's
+/// `assume` (LLVM's `llvm.assume`), leaving an operand with side effects
+/// unevaluated; `__builtin_unpredictable` is its operand, Clang's
+/// `!unpredictable` branch metadata having no place in the IR.
+/// Clang extension: Clang Language Extensions, "__builtin_assume" and
+/// "__builtin_unpredictable".
+#[test]
+fn clang_assumptions_lower_to_assume() {
+    let source = "int f(int x) { __builtin_assume(x > 2); __builtin_assume(x++ > 0); if \
+                  (__builtin_unpredictable(x > 3)) x += 1; return \
+                  (int)__builtin_unpredictable(x); }\nint main(void) { return f(4) + f(3); }";
+    let text = lower_for(source, Target::LinuxGnu).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    assert_eq!(text.matches(" assume.i1 ").count(), 1, "{text}");
+    assert_eq!(
+        run_text(&text, "main").result.unwrap().termination,
+        Termination::Returned(Some(RuntimeValue::Int(8))),
+        "{text}"
+    );
+}
+
 #[test]
 fn nondefault_calling_conventions_are_refused() {
     for (target, attribute) in [

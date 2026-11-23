@@ -203,6 +203,7 @@ const fn descriptor(
         availability: Availability {
             feature,
             naming: NamingPolicy::Reserved,
+            clang_only: false,
         },
         syntax,
         designator: DesignatorPolicy::DirectCallOnly,

@@ -2183,8 +2183,9 @@ impl SemanticErrorKind {
             ),
             | Self::ValueWarning(crate::configuration::DiagnosticGroup::Assume) => (
                 "assumption ignored",
-                "MSVC extension: Microsoft Learn, \"__assume\": an assumption is never \
-                 evaluated, so one with side effects promises nothing",
+                "MSVC extension: Microsoft Learn, \"__assume\", and Clang's \
+                 `__builtin_assume`: an assumption is never evaluated, so one with side \
+                 effects promises nothing",
             ),
             | Self::ValueWarning(_) => (
                 "constant changed by conversion",

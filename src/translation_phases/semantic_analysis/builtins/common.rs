@@ -486,6 +486,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::AllocaAligned
             | CommonBuiltin::ClearCache
             | CommonBuiltin::Expect(_)
+            | CommonBuiltin::Unpredictable
             | CommonBuiltin::Aligned
             | CommonBuiltin::Prefetch
             | CommonBuiltin::Alloca

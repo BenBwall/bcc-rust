@@ -576,7 +576,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 Operand::Value(self.emit_object_size(size, pointer, source)?)
             },
+            // Clang adds `!unpredictable` metadata to a branch on
+            // `__builtin_unpredictable`, which the IR has no place for.
             | CommonBuiltin::Expect(_)
+            | CommonBuiltin::Unpredictable
             | CommonBuiltin::Aligned
             | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::AssocBarrier => items[0].operand,

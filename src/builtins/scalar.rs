@@ -2191,6 +2191,39 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Scalar(S::Bool)))],
         1,
     ),
+    // Clang's `void __builtin_assume(bool)`, which is `__assume` under
+    // another name, for the Clang identities in every mode.
+    // Clang extension: Clang Language Extensions, "__builtin_assume".
+    descriptor(
+        Id::Assume,
+        "__builtin_assume",
+        B::Assume,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Scalar(S::Bool)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Bool)))],
+        1,
+    ),
+    // Clang's `long __builtin_unpredictable(long)`, for the Clang identities
+    // in every mode.
+    // Clang extension: Clang Language Extensions,
+    // "__builtin_unpredictable".
+    descriptor(
+        Id::Unpredictable,
+        "__builtin_unpredictable",
+        B::Unpredictable,
+        Signature {
+            result:     T::Scalar(S::Long),
+            parameters: &[T::Scalar(S::Long)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Long)))],
+        1,
+    ),
     // Microsoft's `void __annotation(const wchar_t *, ...)`: one or more
     // wide string literals, with Microsoft extensions.
     BuiltinDescriptor {
@@ -2483,6 +2516,12 @@ const fn descriptor(
             None,
             SyntaxForm::OrdinaryCall,
         ),
+        | B::Unpredictable => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Pure,
+            None,
+            SyntaxForm::OrdinaryCall,
+        ),
         | B::Annotation => (
             TypeRule::WideStrings,
             BuiltinEffectClass::Query,
@@ -2522,6 +2561,7 @@ const fn descriptor(
                     NamingPolicy::Microsoft,
                 | _ => NamingPolicy::Reserved,
             },
+            clang_only: matches!(id, Id::Assume | Id::Unpredictable),
         },
     }
 }

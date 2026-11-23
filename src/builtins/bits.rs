@@ -118,8 +118,9 @@ const fn descriptor(id: Id, spelling: &'static str, operation: G) -> BuiltinDesc
         id,
         spelling,
         availability: Availability {
-            feature: Some(feature),
-            naming:  NamingPolicy::Reserved,
+            feature:    Some(feature),
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         syntax: SyntaxForm::OrdinaryCall,
         designator: DesignatorPolicy::DirectCallOnly,

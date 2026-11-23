@@ -1386,7 +1386,9 @@ attribute catalog exactly as bundled Clang does for the selected target
 refuses or only accepts, and 0 for other names and vendors; see
 [the attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14).
 `__has_builtin` returns 1 for `__builtin_va_arg`, x86 `__rdtsc` (and
-Microsoft's `__debugbreak` and `__assume` with Microsoft extensions),
+Microsoft's `__debugbreak` and `__assume` with Microsoft extensions, and
+Clang's `__builtin_assume` and `__builtin_unpredictable` under the Clang
+identities, for which GCC 14 says 0),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -2822,6 +2824,17 @@ was run):
   implement, which would stop the compilation where the promise can simply
   be dropped. `__assume(&x)` draws Clang's
   `-Wpointer-bool-conversion`.
+  Clang's `__builtin_assume(e)` is `__assume` under another name, with the
+  same `void (bool)` type, lowering and `-Wassume`, in every mode of the
+  Clang identities (Clang and clang-cl, which `--zig-cc-mode`, `--icx-mode`
+  and `--icx-cl-mode` claim too). Its `long __builtin_unpredictable(long)`
+  gives its operand, has no side effects of its own (Clang marks it
+  `const`), and, as in Clang, is no constant expression; Clang's
+  `!unpredictable` metadata on a branch or switch that tests it has no place
+  in the IR, so bcc emits none. GCC 14 has neither: `__has_builtin` is 0
+  for both under the GCC, MSVC and TCC identities, and a call is refused
+  there as a builtin bcc does not know (GCC 14 rejects it as an implicit
+  declaration).
   `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
   Microsoft's debug-information annotation with Microsoft extensions: its
   arguments must be wide string literals and it does not execute (bcc emits

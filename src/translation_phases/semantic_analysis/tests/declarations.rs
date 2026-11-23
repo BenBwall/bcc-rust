@@ -1130,6 +1130,53 @@ fn annotation_takes_wide_string_literals() {
     }
 }
 
+/// Clang's `__builtin_assume` is `__assume` under another name, `-Wassume`
+/// included, in every mode; `__builtin_unpredictable` gives its `long`
+/// operand and has no side effects of its own. Only the Clang identities
+/// have them: GCC 14 says `__has_builtin` is 0 for both, as `cl` and TCC
+/// know neither.
+#[test]
+fn clang_assumptions_and_unpredictable_values_are_clangs() {
+    use crate::configuration::DiagnosticGroup;
+    let assume = SemanticErrorKind::ValueWarning(DiagnosticGroup::Assume);
+    let source = "int g(int);\nlong f(int x) { __builtin_assume(x > 0); __builtin_assume(x++); \
+                  __builtin_assume(g(x)); __builtin_assume(__builtin_unpredictable(x) > 1); \
+                  return __builtin_unpredictable(x); }\n";
+    for identity in [CompilerIdentity::Clang, CompilerIdentity::ClangCl] {
+        for configuration in [
+            CompilerConfiguration::default(),
+            CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Deny),
+        ] {
+            assert_eq!(
+                kinds(source, configuration.with_compiler_identity(identity)),
+                [assume; 2],
+                "{identity:?}"
+            );
+        }
+    }
+    for (identity, expected) in [
+        (CompilerIdentity::Clang, 1),
+        (CompilerIdentity::ClangCl, 1),
+        (CompilerIdentity::Gcc, 0),
+        (CompilerIdentity::Msvc, 0),
+        (CompilerIdentity::Tcc, 0),
+    ] {
+        let source = format!(
+            "#if __has_builtin(__builtin_assume) != {expected} || \
+             __has_builtin(__builtin_unpredictable) != {expected}\n#error\n#endif\nint \
+             following;\n"
+        );
+        assert_eq!(
+            kinds(
+                &source,
+                CompilerConfiguration::default().with_compiler_identity(identity)
+            ),
+            [],
+            "{identity:?}"
+        );
+    }
+}
+
 /// Microsoft's `__assume` of an operand with side effects ignores it, of
 /// which Clang warns under `-Wassume` and `cl` says nothing; without
 /// Microsoft extensions the name is undeclared.

@@ -844,8 +844,9 @@ const fn descriptor(
         arity: (contract.arguments.len(), contract.arguments.len()),
         effects: BuiltinEffectClass::Library,
         availability: Availability {
-            feature: None,
-            naming:  NamingPolicy::Reserved,
+            feature:    None,
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
     }
 }
@@ -890,8 +891,9 @@ const fn interchange_constant_descriptor(
 ) -> BuiltinDescriptor {
     BuiltinDescriptor {
         availability: Availability {
-            feature: Some(Feature::InterchangeFloatTypes),
-            naming:  NamingPolicy::Reserved,
+            feature:    Some(Feature::InterchangeFloatTypes),
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         ..constant_descriptor(id, spelling, library, contract, scalar, nan)
     }
@@ -912,8 +914,9 @@ const fn half_constant_descriptor(
 ) -> BuiltinDescriptor {
     BuiltinDescriptor {
         availability: Availability {
-            feature: Some(Feature::Float16),
-            naming:  NamingPolicy::Reserved,
+            feature:    Some(Feature::Float16),
+            naming:     NamingPolicy::Reserved,
+            clang_only: false,
         },
         ..constant_descriptor(id, spelling, library, contract, scalar, nan)
     }
