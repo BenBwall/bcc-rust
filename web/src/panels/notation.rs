@@ -256,7 +256,7 @@ pub fn StageNotation(stage: RwSignal<Stage>, #[prop(into)] hidden: Signal<bool>)
         Some(view! {
             <figure class="notation" hidden=move || hidden.get()>
                 <figcaption class="notation-title">"How to read a line"</figcaption>
-                <dl class="notation-parts">
+                <dl class="notation-parts" aria-label=format!("{}, part by part", notation.line)>
                     {notation.parts.iter().map(|part| view! {
                         <div class="notation-part">
                             <dt>{code(part)}</dt>
