@@ -472,6 +472,26 @@ fn a_goto_back_over_a_declaration_reaches_it_again() {
     }
 }
 
+// C99 §6.8.1p1, §6.8.6.3p1: a label must label a statement. `break;` is
+// suggested only after a case label, inside a switch; elsewhere it could be
+// a constraint violation itself.
+#[test]
+fn a_label_without_a_statement_is_told_what_to_write() {
+    let diagnostic = compile("int main(void) {\n    { goto L; L: }\n    return 0;\n}\n")
+        .expect_err("a label ends the block");
+    assert_eq!(
+        diagnostic.message,
+        "a label is followed by a statement; write an empty statement, `;`, after the last label"
+    );
+    let diagnostic = compile("int main(void) {\n    switch (1) { case 1: }\n    return 0;\n}\n")
+        .expect_err("a case label ends the switch");
+    assert!(
+        diagnostic.message.contains("write `break;`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
 // C99 §6.8.4.2p2-5: a case label may be anywhere in a switch's body; the
 // jump to one inside a block enters the block.
 #[test]

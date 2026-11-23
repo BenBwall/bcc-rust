@@ -123,9 +123,11 @@ impl Parser<'_> {
     pub(super) fn labeled_statement(&mut self) -> Result<(), Diagnostic> {
         let falls = self.switch_labelled();
         let mut past = None;
+        let mut cases = false;
         loop {
             if self.at("case") || self.at("default") {
                 self.case_label(falls, &mut past)?;
+                cases = true;
             } else if self.at_named_label() {
                 self.named_label()?;
             } else {
@@ -133,11 +135,19 @@ impl Parser<'_> {
             }
         }
         if self.at("}") || self.at("") {
+            // `break;` is advice only where a case label shows a switch
+            // around it; elsewhere it may be a constraint violation itself
+            // (C99 §6.8.6.3p1).
             return Err(Diagnostic::new(
                 "syntax",
                 self.current().range,
-                "a label is followed by a statement; write `break;` (or an empty statement, `;`) \
-                 after the last label",
+                if cases {
+                    "a label is followed by a statement; write `break;` (or an empty statement, \
+                     `;`) after the last label"
+                } else {
+                    "a label is followed by a statement; write an empty statement, `;`, after the \
+                     last label"
+                },
             ));
         }
         if self.at_declaration() {
