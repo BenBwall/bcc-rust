@@ -1,15 +1,19 @@
 //! The runtime functions lowering calls by name on its own: the C library's
 //! `pow` for `__builtin_powi` on Windows, libgcc's `__muldc3` and
 //! `__cpu_indicator_init`, and `_setjmp` and `longjmp` for a jump out of a
-//! nested function. The unit may already use the name. An external
-//! function of that name is the runtime's, or one the program puts in its
-//! place, so the call reaches it as Clang's and GCC's call by name does:
+//! nested function; and the runtime objects it reads, libgcc's
+//! `__cpu_model` and `__cpu_features2`. The unit may already use the name. An
+//! external function of that name is the runtime's, or one the program puts in
+//! its place, so the call reaches it as Clang's and GCC's call by name does:
 //! directly when its type is the routine's, else through its address with
 //! the routine's type, since IR calls must match their callee. A function
 //! with internal linkage, or an object, is something else that only
 //! shares the name, as a file that does not include the header may give
 //! `pow` to a static function. Lowering refuses the call then, where Clang
-//! calls the static function with the routine's arguments.
+//! calls the static function with the routine's arguments. An object is
+//! read where it stands when it is external, whatever its type, as Clang
+//! and GCC read it; a function, or an object with internal linkage, is
+//! refused alike.
 //! C99: §7.1.3 paragraphs 1-2, p. 166; PDF p. 178.
 
 use super::{
@@ -26,6 +30,8 @@ use super::{
 use crate::{
     ir::{
         FuncId,
+        GlobalDecl,
+        GlobalId,
         InstData,
         Linkage,
         SigId,
@@ -81,6 +87,34 @@ impl Unit<'_, '_, '_> {
                 retyped: self.retyped(func, wanted),
             }),
             | Some(Symbol::Global(_)) => Err(refuse(TakenName::Object)),
+        }
+    }
+
+    /// The external object `name`, declared as `declaration` on first use.
+    /// `caller` names what reads it, for the refusal when the unit gives the
+    /// name to a function or to an object with internal linkage.
+    pub(super) fn runtime_object(
+        &mut self,
+        name: &'static str,
+        declaration: GlobalDecl,
+        caller: RuntimeCaller,
+        source: SourceVectors,
+    ) -> Result<GlobalId, LoweringError> {
+        let refuse = |taken| LoweringError {
+            kind:   LoweringErrorKind::RuntimeName {
+                routine: name,
+                caller,
+                taken,
+            },
+            source: Some(source),
+        };
+        match self.module.symbol(name) {
+            | None => Ok(self.module.declare_global(name, declaration)),
+            | Some(Symbol::Global(global))
+                if self.module.global(global).linkage == Linkage::Internal =>
+                Err(refuse(TakenName::InternalObject)),
+            | Some(Symbol::Global(global)) => Ok(global),
+            | Some(Symbol::Function(_)) => Err(refuse(TakenName::Function)),
         }
     }
 

@@ -96,8 +96,9 @@ pub(crate) enum LoweringErrorKind {
         builtin: &'static str,
         feature: &'static str,
     },
-    /// `caller` calls the external function `routine` by name, which the
-    /// unit gives to something else (`runtime_calls.rs`).
+    /// `caller` calls the external function `routine` by name, or reads the
+    /// external object, which the unit gives to something else
+    /// (`runtime_calls.rs`).
     /// C99: §7.1.3 paragraphs 1-2, p. 166; PDF p. 178.
     RuntimeName {
         routine: &'static str,
@@ -114,14 +115,19 @@ pub(crate) enum RuntimeCaller {
     Operation(&'static str),
 }
 
-/// What a unit gives a runtime function's name to.
+/// What a unit gives a runtime function's or object's name to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TakenName {
     /// A function with internal linkage, which is not the runtime's.
     InternalFunction,
+    /// An object, where the runtime's is a function.
     Object,
     /// A function of another type, where the call needs the function itself.
     OtherType,
+    /// A function, where the runtime's is an object.
+    Function,
+    /// An object with internal linkage, which is not the runtime's.
+    InternalObject,
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -359,7 +365,7 @@ impl LoweringErrorKind {
                 "an always_inline function needs a target feature the calling function lacks",
             | Self::BuiltinFeature { .. } =>
                 "a builtin needs a target feature the calling function lacks",
-            | Self::RuntimeName { .. } => "a runtime function's name is taken",
+            | Self::RuntimeName { .. } => "a runtime symbol's name is taken",
         }
     }
 }
@@ -427,21 +433,30 @@ impl ToDiagnostic for LoweringError {
                 caller,
                 taken,
             } => {
-                let taken = match taken {
-                    | TakenName::InternalFunction => "names a function with internal linkage",
-                    | TakenName::Object => "names an object",
-                    | TakenName::OtherType => "is declared with another type",
+                let (uses, taken) = match taken {
+                    | TakenName::InternalFunction => (
+                        "calls the external function",
+                        "names a function with internal linkage",
+                    ),
+                    | TakenName::Object => ("calls the external function", "names an object"),
+                    | TakenName::OtherType => (
+                        "calls the external function",
+                        "is declared with another type",
+                    ),
+                    | TakenName::Function => ("reads the external object", "names a function"),
+                    | TakenName::InternalObject => (
+                        "reads the external object",
+                        "names an object with internal linkage",
+                    ),
                 };
                 match caller {
                     | RuntimeCaller::Builtin(caller) => format_in!(
                         arena,
-                        "'{caller}' calls the external function '{routine}', but '{routine}' \
-                         {taken} here"
+                        "'{caller}' {uses} '{routine}', but '{routine}' {taken} here"
                     ),
                     | RuntimeCaller::Operation(caller) => format_in!(
                         arena,
-                        "{caller} calls the external function '{routine}', but '{routine}' \
-                         {taken} here"
+                        "{caller} {uses} '{routine}', but '{routine}' {taken} here"
                     ),
                 }
             },
