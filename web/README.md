@@ -85,7 +85,7 @@ compiler; each part is captioned with what its lessons share
   value was kept or, for an int that does not fit in a char, wrapped as bcc,
   GCC and Clang do (implementation-defined), and `x += y` is narrated as `x = x +
   (y)` with `x` evaluated once. The machine knows every integer type, from
-  `char` to `unsigned long long`, with its x86-64 width (a declaration says
+  `char` to `unsigned long long`, with its x86-64 Linux width (a declaration says
   it, and that C promises only a minimum range); each cell under the
   playhead is as wide as its object's bytes and says how many, as the
   datasheet does beside each type. A value narrower than int is promoted in a
