@@ -6107,7 +6107,8 @@ is clean.
 Parts 15 and 16 taught the machine pointers to functions but left the lesson
 that would show them. A lesson needs its LLVM IR and line tables from a
 native bcc build with LLVM and its WebAssembly module from wasi-sdk, and
-twice the disk was too short for that build beside the site's. With about
+three times (Parts 15, 16 and 17) the disk was too short for that build
+beside the site's. With about
 18 GB free, this part adds the lesson "Callbacks: passing a function to a
 function" and checks it in every view. The work is on
 `agent/lesson-callbacks`.
@@ -6211,8 +6212,10 @@ names. It first checks that `$twice` has the type the instruction names,
 and traps if not; then it pops the arguments…", and it links the Tables
 concept beside Calls and frames. wasi-libc's `printf` calls its stream's
 write function the same way, so ten steps in the seven lessons that print
-now read "Call `$__stdout_write` through the table with …" too; no other
-step of theirs changed.
+now read the same way: seven "Call `$__stdout_write` through the table with
+…", and three, the flush of `stdout` when the program exits, "Call
+`$__stdio_write` through the table with …, `0`, `0`". No other step of
+theirs changed.
 
 ### How the artifacts were made
 
@@ -6233,7 +6236,7 @@ at `-O0` and `-O2`.
   modules do.
 - **The lesson walk.** Part 9's walk at 1440x900 light and 390x844 dark,
   on the deployed site (`main` at `0d5cf90f6`) and on CI's Pages build of
-  this branch at `6ae8af61f`: the 16 existing machine lessons' 1,571 notes
+  this branch at `6ae8af61f`: the 15 existing machine lessons' 1,571 notes
   are the same in title, lead, value flow, "why it matters" note and next
   step at both sizes. The new lesson walks 188 states with its current line
   and lead in view at each, and each but the last names the step that
@@ -6246,7 +6249,7 @@ at `-O0` and `-O2`.
   console error or warning.
 - **Contrast.** The notes' text measures 15.82:1 (light) and 13.34:1
   (dark); the WebAssembly step's explanation 10.59:1 and 9.40:1.
-- **Tests,** as `pages.yml` runs them: the engine's 160 and its clippy, the
+- **Tests,** as `pages.yml` runs them: the engine's 173 and its clippy, the
   site's (one new, that the lesson's `call_indirect` runs `$twice` twice
   and `$square` twice with the new text, and one extended, for the
   conversion's value flow; and the prerender's 2), the
@@ -6264,6 +6267,8 @@ at `-O0` and `-O2`.
 - **The function's type in that value flow**: the engine records no type
   on the conversion, so the chips read "twice → becomes → &twice" without
   "int (int)" and "int (*)(int)" beneath them, as the call's chips have.
-- Part 16's list stands: the lessons' opening comments, a function
-  returning a pointer to an object, static pointers to objects, hidden
-  names, and the listing's label for a pointer to a function.
+- Part 17's list stands, less the callbacks lesson: among others, the
+  lessons' opening comments, static pointers to objects, hiding a name with
+  a constant or a typedef name, the listing's label, and a lesson on the
+  three loops. Part 17 finished a function returning a pointer to an object
+  and hidden names, which Part 16's list carried.
