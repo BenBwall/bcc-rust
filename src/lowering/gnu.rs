@@ -81,18 +81,33 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.draft.edge(merge, &[])
         } else {
             let result = self.convert_value(item, ty, source)?;
-            // GCC's `_Float16` result keeps its excess in an `f32` parameter.
-            let value = if self.half(ty).is_some() && self.half_in_float() {
-                self.excess(result, source)?
+            if self.complex_half(ty) && self.half_in_float() {
+                // GCC's `_Complex _Float16` keeps its excess in `f32` parts.
+                let result = self.single_operand(result, true, source)?;
+                let parts = self.complex_parts(result, source)?;
+                self.draft.edge(merge, &parts)
+            } else if self.half(ty).is_some() && self.half_in_float() {
+                // GCC's `_Float16` result keeps its excess in an `f32`
+                // parameter.
+                let value = self.excess(result, source)?;
+                self.draft.edge(merge, &[value])
             } else {
                 let result = self.settle(result);
                 match result.operand {
+                    // A complex result passes its real and imaginary parts
+                    // (C99 §6.2.5p13), as the merge's two parameters.
+                    | Operand::Complex(id) => {
+                        let parts = self.complex_values[id as usize];
+                        self.draft.edge(merge, &parts)
+                    },
                     // A structure or a wide `_BitInt` passes its address.
-                    | Operand::Aggregate(address) => address,
-                    | _ => self.value(result, source)?,
+                    | Operand::Aggregate(address) => self.draft.edge(merge, &[address]),
+                    | _ => {
+                        let value = self.value(result, source)?;
+                        self.draft.edge(merge, &[value])
+                    },
                 }
-            };
-            self.draft.edge(merge, &[value])
+            }
         };
         let edges = [true_edge, self.draft.edge(otherwise, &[])];
         self.draft.terminate(Terminator::Brif(truth, edges));
