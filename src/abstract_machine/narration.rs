@@ -192,8 +192,8 @@ impl Topic {
             | Self::Promotion =>
                 "C never does arithmetic in a type narrower than int, the size a machine computes \
                  in most naturally. That is why two chars holding 100 add up to 200, more than a \
-                 signed char (plain char on x86-64) can hold: the sum is computed in int, and so \
-                 is `c + 1` for a char c.",
+                 signed char (plain char on x86-64 Linux) can hold: the sum is computed in int, \
+                 and so is `c + 1` for a char c.",
             | Self::Address =>
                 "`&` does not read the object, so it is fine to take the address of a variable \
                  that has no value yet. The pointer is only a way to reach the object later.",
@@ -204,9 +204,9 @@ impl Topic {
                  pointer to an object that still exists: through a null or dangling pointer it is \
                  undefined behavior, and this machine stops there.",
             | Self::PointerArithmetic =>
-                "An int is 4 bytes on x86-64, so the address grows by 4 per step, but C counts in \
-                 elements. Pointer arithmetic is defined only within one array and one past its \
-                 end; going further is undefined, even if the pointer is never used.",
+                "An int is 4 bytes on x86-64 Linux, so the address grows by 4 per step, but C \
+                 counts in elements. Pointer arithmetic is defined only within one array and one \
+                 past its end; going further is undefined, even if the pointer is never used.",
             | Self::PointerDifference =>
                 "Subtracting two pointers counts elements, not bytes: `end - begin` is how many \
                  elements lie from begin up to end, which is why the half-open range [begin, end) \
@@ -224,10 +224,10 @@ impl Topic {
                  like any other int. An if or a loop then treats 0 as false and anything else as \
                  true.",
             | Self::IntRange =>
-                "An int on x86-64 holds -2147483648 to 2147483647. A signed result outside that \
-                 range is not wrapped around: it is undefined behavior, and this machine stops on \
-                 it. Leaving it undefined lets a compiler treat `i + 1` as always larger than `i`, \
-                 which simplifies loops.",
+                "An int on x86-64 Linux holds -2147483648 to 2147483647. A signed result outside \
+                 that range is not wrapped around: it is undefined behavior, and this machine \
+                 stops on it. Leaving it undefined lets a compiler treat `i + 1` as always larger \
+                 than `i`, which simplifies loops.",
             | Self::Division =>
                 "Integer division truncates toward zero, so `-7 / 2` is -3 and `-7 % 2` is -1. \
                  Dividing by zero is undefined behavior.",
@@ -283,10 +283,11 @@ impl Topic {
                  and by returning it. A large structure is often passed by pointer instead, to \
                  avoid the copy and to let the callee change the caller's object.",
             | Self::Padding =>
-                "On x86-64 an int starts on a multiple of 4 bytes and a pointer on a multiple of \
-                 8, so a char followed by an int leaves 3 unused bytes between them. Ordering \
-                 members from largest to smallest alignment often removes the padding. Padding \
-                 holds unspecified bytes, which is why comparing structures with memcmp is unsafe.",
+                "On x86-64 Linux an int starts on a multiple of 4 bytes and a pointer on a \
+                 multiple of 8, so a char followed by an int leaves 3 unused bytes between them. \
+                 Ordering members from largest to smallest alignment often removes the padding. \
+                 Padding holds unspecified bytes, which is why comparing structures with memcmp is \
+                 unsafe.",
             | Self::ExitStatus =>
                 "The exit status is how a program reports to whoever ran it: 0 means success. A \
                  shell shows it as `$?`, and on Linux only its low 8 bits get there.",
@@ -395,12 +396,12 @@ impl Topic {
                  printf(\"%.17g\") shows enough digits to tell any two doubles apart. Compare \
                  floating results with a tolerance, not ==, and count money in integer cents.",
             | Self::FloatingSizes =>
-                "On x86-64 a float is 4 bytes and keeps 6 significant decimal digits, a double 8 \
-                 bytes and keeps 15, and a long double, the x87's 80-bit format padded to 16 \
-                 bytes, keeps 18 (<float.h> calls these FLT_DIG, DBL_DIG and LDBL_DIG). C promises \
-                 only 6, 10 and 10, and long double varies most: with Microsoft's compiler it is \
-                 just a double, on ARM64 Linux a 128-bit format. Use double unless you have a \
-                 reason not to.",
+                "On x86-64 Linux a float is 4 bytes and keeps 6 significant decimal digits, a \
+                 double 8 bytes and keeps 15, and a long double, the x87's 80-bit format padded to \
+                 16 bytes, keeps 18 (<float.h> calls these FLT_DIG, DBL_DIG and LDBL_DIG). C \
+                 promises only 6, 10 and 10, and long double varies most: with Microsoft's \
+                 compiler it is just a double, on ARM64 Linux a 128-bit format. Use double unless \
+                 you have a reason not to.",
             | Self::IntegerToFloating =>
                 "Every int converts to a double exactly, but only where the program converts it. \
                  In `double average = total / count;` the division happens first, in int, and only \
@@ -1488,7 +1489,7 @@ impl Machine {
             // C promises an enumerated type only the range of its constants
             // (C99 §6.7.2.2p4), not its compatible type's minimum range.
             | Type::Integer(integer) if let Some(enumeration) = &enumeration => format!(
-                "{} object ({} byte{} on x86-64, {} to {}; {}). Its value is",
+                "{} object ({} byte{} on x86-64 Linux, {} to {}; {}). Its value is",
                 article(enumeration),
                 integer.bytes(),
                 if integer.bytes() == 1 { "" } else { "s" },
@@ -1500,17 +1501,17 @@ impl Machine {
                     .map_or_else(String::new, enumerations::promised_range)
             ),
             | Type::Array(element, count) if let Some(enumeration) = &enumeration => format!(
-                "an array of {count} {enumeration} objects, {} bytes each ({} bytes on x86-64). \
-                 Each element's value is",
+                "an array of {count} {enumeration} objects, {} bytes each ({} bytes on x86-64 \
+                 Linux). Each element's value is",
                 element.bytes(),
                 count.saturating_mul(element.bytes())
             ),
             | Type::Pointer(..) if let Some(enumeration) = &enumeration => format!(
-                "{} object, a pointer to {enumeration} (8 bytes on x86-64). Its value is",
+                "{} object, a pointer to {enumeration} (8 bytes on x86-64 Linux). Its value is",
                 article(&object.r#type),
             ),
             | Type::Array(Arithmetic::INT, count) => format!(
-                "an array of {count} ints ({} bytes on x86-64). Each element's value is",
+                "an array of {count} ints ({} bytes on x86-64 Linux). Each element's value is",
                 count.saturating_mul(4)
             ),
             | Type::Array(Arithmetic::CHAR, count) => format!(
@@ -1518,30 +1519,30 @@ impl Machine {
                 if count == 1 { "" } else { "s" }
             ),
             | Type::Array(element, count) => format!(
-                "an array of {count} {}s, {} bytes each ({} bytes on x86-64). Each element's \
-                 value is",
+                "an array of {count} {}s, {} bytes each ({} bytes on x86-64 Linux). Each \
+                 element's value is",
                 element.spelling(),
                 element.bytes(),
                 count.saturating_mul(element.bytes())
             ),
             | Type::Pointer(element, _) => format!(
-                "{} object, a pointer to {} (8 bytes on x86-64). Its value is",
+                "{} object, a pointer to {} (8 bytes on x86-64 Linux). Its value is",
                 article(&object.r#type),
                 element.spelling()
             ),
             | Type::StructPointer(_) => format!(
-                "a {} object, a pointer to a structure (8 bytes on x86-64). Its value is",
+                "a {} object, a pointer to a structure (8 bytes on x86-64 Linux). Its value is",
                 object.r#type
             ),
             | Type::Indirect(..) => format!(
                 "{} object, a pointer to {}: it holds the address of another pointer object (8 \
-                 bytes on x86-64). Its value is",
+                 bytes on x86-64 Linux). Its value is",
                 article(&object.r#type),
                 self.pointee_words(ty)
             ),
             | Type::FunctionPointer(signature) => format!(
-                "{} object, a pointer to a function of type {} (8 bytes on x86-64): it holds \
-                 which function a call through it runs. Its value is",
+                "{} object, a pointer to a function of type {} (8 bytes on x86-64 Linux): it \
+                 holds which function a call through it runs. Its value is",
                 article(&object.r#type),
                 self.signatures
                     .get(signature)
@@ -1550,7 +1551,8 @@ impl Machine {
             ),
             | Type::PointerArray(Target::Function(signature), 1, count) => format!(
                 "an array of {count} pointers to functions of type {} (8 bytes each, {} bytes on \
-                 x86-64), a table to choose a function from by its index. Each element's value is",
+                 x86-64 Linux), a table to choose a function from by its index. Each element's \
+                 value is",
                 self.signatures
                     .get(signature)
                     .map_or_else(String::new, |known| known
@@ -1558,8 +1560,8 @@ impl Machine {
                 count.saturating_mul(8)
             ),
             | Type::PointerArray(target, depth, count) => format!(
-                "an array of {count} pointers, each {} (8 bytes each, {} bytes on x86-64). Each \
-                 element's value is",
+                "an array of {count} pointers, each {} (8 bytes each, {} bytes on x86-64 Linux). \
+                 Each element's value is",
                 article(
                     &target
                         .pointer(depth)
@@ -1574,7 +1576,7 @@ impl Machine {
             ),
             | Type::Integer(Integer::Char) => String::from("a char object (1 byte). Its value is"),
             | Type::Integer(Integer::Int) =>
-                String::from("an int object (4 bytes on x86-64). Its value is"),
+                String::from("an int object (4 bytes on x86-64 Linux). Its value is"),
             | Type::Integer(integer) => format!(
                 "{} object ({}). Its value is",
                 article(integer.spelling()),
@@ -1584,8 +1586,9 @@ impl Machine {
                 format!("{}. Its value is", floating_declaration(floating)),
             // No object has this type: the subset has `void *` only as the
             // type of `(void *)0`.
-            | Type::VoidPointer =>
-                String::from("a void * object, a pointer to void (8 bytes on x86-64). Its value is"),
+            | Type::VoidPointer => String::from(
+                "a void * object, a pointer to void (8 bytes on x86-64 Linux). Its value is",
+            ),
         };
         // A const object says so where it is created: it keeps the value its
         // initializer gives it.
@@ -2495,8 +2498,8 @@ impl Machine {
         } else {
             format!(
                 "Simple assignment works on whole structures: {} replaces the value of {location} \
-                 (previously {}), member by member, {size} bytes in all on x86-64. The two are \
-                 separate objects afterwards; changing one does not change the other.",
+                 (previously {}), member by member, {size} bytes in all on x86-64 Linux. The two \
+                 are separate objects afterwards; changing one does not change the other.",
                 self.value_text(&stored),
                 self.value_text(previous)
             )
@@ -3047,7 +3050,7 @@ impl Machine {
         let plural = if size == 1 { "" } else { "s" };
         let mut text = format!(
             "sizeof yields the size in bytes of its operand's type, {spelled}: {size} \
-             byte{plural} on x86-64."
+             byte{plural} on x86-64 Linux."
         );
         let mut cited = vec![clauses::SIZEOF, clauses::SIZEOF_RESULT, clauses::SIZE_T];
         if let (Some(element), Some(count)) = (ty.element(), ty.length()) {
@@ -4849,11 +4852,11 @@ impl Machine {
                     ),
                     format!(
                         "A cast converts its operand's value to the type it names, here from \
-                         {source_type} to char. Plain char is signed on x86-64 and holds -128 to \
-                         127, and {old} is outside that range. Converting a value that does not \
-                         fit into a signed type gives an implementation-defined result (or raises \
-                         an implementation-defined signal): each compiler must choose and \
-                         document one. GCC documents that it reduces the value modulo 256, \
+                         {source_type} to char. Plain char is signed on x86-64 Linux and holds \
+                         -128 to 127, and {old} is outside that range. Converting a value that \
+                         does not fit into a signed type gives an implementation-defined result \
+                         (or raises an implementation-defined signal): each compiler must choose \
+                         and document one. GCC documents that it reduces the value modulo 256, \
                          keeping its low 8 bits, and bcc and Clang do the same, so {old} becomes \
                          {new}. {}",
                         unsigned_char_text(&value, &converted)
@@ -6133,7 +6136,7 @@ impl Machine {
             return String::from("a structure");
         };
         let mut text = format!(
-            "{} bytes on x86-64, aligned to {}: ",
+            "{} bytes on x86-64 Linux, aligned to {}: ",
             layout.size, layout.align
         );
         for (index, member) in layout.members.iter().enumerate() {
@@ -6822,7 +6825,7 @@ fn range_text(ty: Type) -> String {
 fn width_text(integer: Integer) -> String {
     let bytes = integer.bytes();
     format!(
-        "{bytes} byte{} on x86-64, {} to {}; C promises only {}",
+        "{bytes} byte{} on x86-64 Linux, {} to {}; C promises only {}",
         if bytes == 1 { "" } else { "s" },
         integer.min(),
         integer.max(),

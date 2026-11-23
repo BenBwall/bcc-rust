@@ -715,7 +715,7 @@ pub(in crate::abstract_machine) fn floating_declaration(format: Floating) -> Str
         ""
     };
     format!(
-        "{} object ({} bytes on x86-64{padding}: {}, keeping {} significant decimal digits)",
+        "{} object ({} bytes on x86-64 Linux{padding}: {}, keeping {} significant decimal digits)",
         article(format.spelling()),
         format.bytes(),
         format.format_name(),

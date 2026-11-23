@@ -92,7 +92,7 @@ clauses! {
     /// C99: §F.2 paragraph 1, p. 444; PDF p. 456.
     FLOATING_FORMATS = "F.2p1", "p. 444; PDF p. 456", "Types (Annex F)",
         "Under Annex F, float is IEEE 754 single precision and double is double precision; long \
-         double is an extended format, on x86-64 the x87 80-bit one.";
+         double is an extended format, on x86-64 Linux the x87 80-bit one.";
     /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
     FLOATING_OPERATIONS = "F.3p1", "pp. 445-447; PDF pp. 457-459", "Operators and functions",
         "Under Annex F, +, -, * and / are IEEE 754's operations: each gives its exact result \
@@ -642,7 +642,7 @@ clauses! {
     /// C99: §6.7.2.1 paragraph 12, p. 103; PDF p. 115.
     MEMBER_ALIGNMENT = "6.7.2.1p12", "p. 103; PDF p. 115", "Structure and union specifiers",
         "Each member is aligned as its type needs, in an implementation-defined way; on x86-64 \
-         an int starts at a multiple of 4 bytes and a pointer at a multiple of 8.";
+         Linux an int starts at a multiple of 4 bytes and a pointer at a multiple of 8.";
     /// C99: §6.7.2.1 paragraph 13, p. 103; PDF p. 115.
     MEMBER_ORDER = "6.7.2.1p13", "p. 103; PDF p. 115", "Structure and union specifiers",
         "Members are laid out in the order they are declared, the first at the very start; \

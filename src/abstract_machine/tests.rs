@@ -3319,7 +3319,7 @@ fn integer_types_have_their_x86_64_sizes_and_say_what_c_promises() {
         declared
             .event
             .explanation
-            .contains("4 bytes on x86-64, 0 to 4294967295; C promises only 0 to 65535"),
+            .contains("4 bytes on x86-64 Linux, 0 to 4294967295; C promises only 0 to 65535"),
         "{}",
         declared.event.explanation
     );
