@@ -2193,7 +2193,7 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     ),
     // Clang's `void __builtin_assume(bool)`, which is `__assume` under
     // another name, for the Clang identities in every mode.
-    // Clang extension: Clang Language Extensions, "__builtin_assume".
+    // Clang extension: Clang Language Extensions, "`__builtin_assume`".
     descriptor(
         Id::Assume,
         "__builtin_assume",
@@ -2210,7 +2210,7 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     // Clang's `long __builtin_unpredictable(long)`, for the Clang identities
     // in every mode.
     // Clang extension: Clang Language Extensions,
-    // "__builtin_unpredictable".
+    // "`__builtin_unpredictable`".
     descriptor(
         Id::Unpredictable,
         "__builtin_unpredictable",

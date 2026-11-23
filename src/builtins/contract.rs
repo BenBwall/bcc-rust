@@ -345,7 +345,7 @@ pub(crate) enum BuiltinOperation {
     /// a branch on it is hard to predict. Clang does not fold it in a
     /// constant expression.
     /// Clang extension: Clang Language Extensions,
-    /// "__builtin_unpredictable".
+    /// "`__builtin_unpredictable`".
     Unpredictable,
     Aligned,
     Unreachable,
@@ -421,7 +421,7 @@ pub(crate) enum BuiltinOperation {
     /// point unreachable. Clang's `__builtin_assume` is the same.
     /// MSVC extension: Microsoft Learn, "__assume".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/assume>
-    /// Clang extension: Clang Language Extensions, "__builtin_assume".
+    /// Clang extension: Clang Language Extensions, "`__builtin_assume`".
     Assume,
     /// Microsoft `__annotation`: wide strings for the debug information,
     /// with no effect on execution. MSVC extension: Microsoft Learn,

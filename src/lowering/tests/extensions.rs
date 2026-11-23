@@ -259,8 +259,8 @@ fn msvc_setjmp_frame_is_only_for_the_runtimes() {
 /// `assume` (LLVM's `llvm.assume`), leaving an operand with side effects
 /// unevaluated; `__builtin_unpredictable` is its operand, Clang's
 /// `!unpredictable` branch metadata having no place in the IR.
-/// Clang extension: Clang Language Extensions, "__builtin_assume" and
-/// "__builtin_unpredictable".
+/// Clang extension: Clang Language Extensions, "`__builtin_assume`" and
+/// "`__builtin_unpredictable`".
 #[test]
 fn clang_assumptions_lower_to_assume() {
     let source = "int f(int x) { __builtin_assume(x > 2); __builtin_assume(x++ > 0); if \
