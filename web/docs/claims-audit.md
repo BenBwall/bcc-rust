@@ -278,3 +278,136 @@ inside "other"; the cells now break only between words.
 - bcc warns as Clang does about formats, signed/unsigned comparisons and
   constant conversions, but has no -Wuninitialized; the notes name GCC's and
   Clang's warnings.
+
+## Parts 11 to 19 (2026-11-23)
+
+Parts 11 to 19 of the [visual audit](visual-audit-2026-11.md) taught the
+machine bitwise operators, `&&`, `||`, `?:`, the comma operator, pointer
+idioms, pointers to functions, enumerations, `switch`, `goto`, `do` and
+`continue`, and added five lessons ("Short-circuit evaluation", "Bits and
+masks", "Walking a string with a pointer", "Callbacks" and "Loops three
+ways"). This pass checks every claim they added, in the same way as the
+passes above. Part 20 of the visual audit records the work.
+
+### Method
+
+- **The narration.** A throwaway test stepped the 19 lessons and the 95
+  programs of the visual audit's corpus (`corpus/`) to their ends and wrote
+  each step's title, lead, explanation, "why it matters" note, clauses and
+  next step (5.4 MB). The 17 notes Parts 11 to 19 added, the 74 clause
+  glosses they added and every sentence that names an implementation
+  (x86-64, GCC, Clang, a compiler, a crash, a warning) or one of the new
+  constructs were read against the sources below.
+- **The static text.** Every string Parts 11 to 19 changed in the landing,
+  "How it works" and its "Limits of this model", the glossary (13 new
+  terms), the lesson cards, the stage and WebAssembly panels and the
+  WebAssembly narration. Each claim in "Limits of this model" about what
+  the machine runs or refuses was tried with a program of its own (36 in
+  all).
+- **The sources.** C99 is N1256, read with the `search-standard` skill:
+  every clause's text and its printed and PDF pages. The compilers are GCC
+  14's `cc1` (14.2) driven by the host GCC 13 driver, Clang 23.1.5 and a
+  dev build of bcc from this branch, at `-O0` and `-O2` with `-std=c99
+  -Wall -Wextra`, on x86-64 Linux with glibc 2.43; other targets' type
+  facts come from `clang --target=… -dM -E`. The probes are `c29` to `c37`
+  in [`claims/`](claims/), and
+  [`claims/results-part20.txt`](claims/results-part20.txt) is the output of
+  `run.sh`'s loop over them in C99.
+
+### Results
+
+All five new lessons print what the machine prints and exit 0 under GCC,
+Clang and bcc at `-O0` and `-O2`, without a warning under `-std=c99
+-pedantic -Wall -Wextra`: `not found after 3 tries`, `4 4 4`, `mode 4: read
+1, write 0`, `walk has 4 chars` and `14 25`.
+
+Of the 52 claims in the table, 36 hold as written (four of them now also
+name Clang or the warning options), 12 over-promised and 4 were wrong; all
+16 are fixed. Three of the fixes come from the review of Part 19 (#441),
+and two (the size of `size_t` and a refusal's wording) are older text found
+on the way. The 74 new clause glosses were each checked
+against their paragraph: 71 hold, and the three that left out cases are in
+the table.
+
+| Claim | Where | Source | Verdict | Fix |
+| --- | --- | --- | --- | --- |
+| Clang built the module "at `-O0` and without a C library" | WebAssembly view, Clang's module | `web/wasm/generate.sh`: a lesson that includes `<stdio.h>` is a WASI command linked with wasi-libc, whose `_start` and `__original_main` are in the module | **Wrong** for the 9 lessons that print | Says so for those (wasi-libc, whose `$_start` calls `main`); the 10 others keep "without a C library, so the module starts in `main`", and the bcc sentence drops its "also" for them |
+| A `do` loop's pass "ends in a conditional branch back to the top" | WebAssembly view, every "Enter loop" step | Clang's module: `br_if 0`; bcc's: a `br 1` inside an `if` (review of #441) | **Over-promised**: literal only for Clang's module | "a branch back to the top that is taken only while the condition holds: a `br_if`, or a `br` inside an `if`" |
+| The while and for steps cite §6.8.5p4 only | every loop test, jump back, `continue` and for statement's block | §6.8.5.1p1 (the while test before each pass) and §6.8.5.3p1 (for's three clauses), p. 136, PDF p. 148 | **Wrong** (missing): note 176's "goes to `k++`" rests on §6.8.5.3p1 | Each now cites its own paragraph beside §6.8.5p4 (a `do`'s `continue` §6.8.5.2p1); a test pins them |
+| "continue skips the rest of one pass and goes on to the next test" | note on loops | §6.8.6.2p2, §6.8.5.3p1 | **Over-promised**: a for runs its step first | "(in a for, after its step)" |
+| `*p` through a null or dangling pointer is undefined | note on `*` | §6.5.3.2p4, §6.2.4p2 | Holds | |
+| Subtracting pointers counts elements, gives a signed ptrdiff_t, and is defined within one array | note on pointer difference | §6.5.6p9 | Holds | |
+| `a[i]` is `*(a + i)` for an array or a pointer | note on subscripts | §6.5.2.1p2 | Holds | |
+| `return` copies the value out; the address of an automatic local would dangle | note on a frame's end | §6.2.4p2, §6.8.6.4p3 | Holds | |
+| A hexadecimal digit is four bits, `010` is 8, `0755` packs three 3-bit groups | note on bases | §6.4.4.1p3-4 | Holds | |
+| `x & 1` is 1 exactly when x is odd; `2 & 1` is 0 and `2 && 1` is 1; `&` evaluates both operands | note on bitwise operators | §6.5.10p4, §6.5.13p3; GCC, Clang, bcc | Holds (for a negative x, on two's complement machines, which x86-64 and WebAssembly are) | |
+| `&&` and `||` go left to right with a sequence point, unlike `+` | note on `&&` and `||` | §6.5.13p4, §6.5.14p4, §6.5p3 | Holds | |
+| `c ? 1 : 2.5` is a double | note on `?:` | §6.5.15p5 | Holds | |
+| Arguments have no order and no sequence point between them; in `int a = 1, b = a + 1;` b is 2 | note on the comma operator | §6.5.2.2p10, §6.8p3 | Holds | |
+| A call through a null pointer, or a pointer cast to the wrong type, "and a compiled program usually crashes there" | note on pointers to functions | `c30`: the null call crashes at `-O0` under all three and at `-O2` under GCC, but exits 44 under Clang and 0 under bcc at `-O2`; `c31`: the wrong type prints 21 (GCC `-O2`: a different garbage double each run), never crashes | **Over-promised** | The first usually crashes without optimization; the second often runs on, with caller and callee disagreeing about the arguments and result |
+| A call through a null pointer: "a compiled program usually crashes here" | the stop at such a call | `c30` | **Over-promised** | Crashes without optimization, but an optimizer may assume the call never happens |
+| "In compiled code the pointer holds the address where twice's machine code starts" | every call through a pointer (callbacks, notes 43, 71, 126, 155) | `c36`: an address on x86-64; the WebAssembly view's `call_indirect` steps: a table index | **Over-promised**, and contradicted by the WebAssembly view | "In x86-64 code … ; in WebAssembly it holds an index into a table of functions" |
+| A static initializer "reading a variable … is refused there" | note on constant expressions | `c32`: `static const int a = 1; int b = a;` compiles silently under GCC and Clang, even with `-pedantic`, and bcc refuses it; `c32b`, `c33`: a plain variable or a call is refused by all three; §6.6p10 lets an implementation accept other constant expressions | **Over-promised** | Compilers refuse those, though GCC and Clang accept reading a const variable whose value they know, as C lets them |
+| "GCC accepts a const one as an extension, which §6.6p10 allows" | the machine's refusal of such an initializer | `c32` | Holds, but Clang does too | Names Clang |
+| A call's operand order "can print different things under different compilers" | the stop at `g + f()` or two printing calls | `c37`: GCC prints 11 and `ba`, Clang and bcc 1 and `ab` | Holds | |
+| Enumeration constants are int; an enumeration's object may hold any value of its type | note and steps on enumerations | §6.4.4.3p2, §6.7.2.2p4 | Holds | |
+| "GCC chooses int when a constant is negative and unsigned int otherwise" | every enumeration's declaration | `c29`: GCC, Clang and bcc all agree; GCC manual, *Structures, Unions, Enumerations, and Bit-Fields* | Holds | Names Clang too |
+| "The type  itself is compatible with unsigned int", with a blank name | an enumeration with neither a tag nor a typedef name (corpus `e03`) | | **Wrong** | "The enumeration's type itself …"; a test pins it |
+| Forgetting a `break` is a bug "compilers can warn about" | note on `switch` | `c34`: GCC warns with `-Wextra`, Clang only with `-Wimplicit-fallthrough`, bcc not at all | Holds | Names the two options |
+| An inner name hides an outer one; "GCC's -Wshadow" warns | note on hidden names | `c35`: GCC, Clang and bcc warn with `-Wshadow`, none with `-Wall -Wextra` | Holds | Names Clang's too |
+| A goto past an initializer leaves the object without its initial value | note on goto, and the jump's steps | §6.8p3, §6.8.6.1p2 | Holds | |
+| A typedef makes no new type and no object | note and steps on typedefs | §6.7.7p3 | Holds | |
+| ptrdiff_t "is long on x86-64" | pointer difference (strings, note 145) | `__PTRDIFF_TYPE__`: long for x86_64-linux-gnu, long long for x86_64-pc-windows-msvc | **Over-promised** | "on x86-64 Linux" |
+| size_t "is unsigned long on x86-64" | sizeof steps (unsigned, note 146), glossary | `__SIZE_TYPE__`: unsigned long long for x86_64-pc-windows-msvc | **Over-promised** (older text) | "on x86-64 Linux" |
+| `~2` is -3 because "x86-64 stores [negative values] in two's complement" | `~` steps | §6.5.3.3p4, §6.2.6.2p2 | Holds | |
+| `0x7FFFFFFFFFFFFFFF` is a long; decimal 4294967295 "would be a wider signed type" | constant steps | §6.4.4.1p5 | Holds | |
+| Pointers into one array compare like their subscripts; one past the end counts as the length | pointer comparisons | §6.5.8p5 | Holds | |
+| A refusal: "nested assignments/increments and unsupported syntax are rejected" | the machine's refusal of an expression it cannot parse, such as `_Bool` | Parts 13 and 14 run nested assignments and increments | **Wrong** (older text) | "expected an expression; this one uses syntax outside this subset" |
+| `?:`'s operands "must both be arithmetic, the same structure type, pointers to compatible types, or a pointer and a null pointer constant" | clause gloss, §6.5.15p3 | §6.5.15p3 also allows two void operands and a pointer with a pointer to void | **Over-promised** | Lists all six cases |
+| `==` compares "two numbers, two pointers to compatible types, or a pointer with the null pointer constant" | clause gloss, §6.5.9p2 | §6.5.9p2 also allows a pointer to an object with a pointer to void | **Over-promised** | Adds that case |
+| Two pointers "compare equal exactly when both are null, or … the same object or the same function (or one past the same array)" | clause gloss, §6.5.9p6 | §6.5.9p6 also makes one past an array equal to an object that follows it | **Over-promised** ("exactly") | Adds that case |
+| "C99 also allows two other representations, which no current machine uses" | glossary, two's complement | §6.2.6.2p2 (C99); C23 (N3220) §6.2.6.2p2 requires two's complement | **Over-promised**: not checkable | Names the two, and says C23 requires two's complement |
+| Two's complement is how "every machine bcc targets" stores a negative integer | glossary | `src/target.rs`: x86-64 and wasm32 | Holds | |
+| Glossary terms' clauses and pages (13 new) | glossary | `search-standard` pages | Holds | |
+| Phase 4 executes directives (§5.1.1.2p1, p. 10); a directive ends at its new-line (§6.10p2) | the stop before a directive | N1256 | Holds | |
+| Landing: the standard describes an abstract machine, not the CPU | landing | §5.1.2.3p1 | Holds | |
+| "Limits of this model": what the machine runs (octal and hexadecimal, enumerations as constants, the operators, pointers to pointers and functions, typedefs at either scope, static initializers from constants, literals or function names, returned pointers, nested assignments, the statements) | How it works §3 | 36 programs through the engine | Holds | |
+| "Limits of this model": what it refuses (a declaration directly in a switch's block, union, `_Bool`, void and static functions, a pointer to a library function, a static pointer to an object, arrays of structures or arrays, other library functions, a typedef of a const type, an update in an initializer list, function-like and expression macros) | How it works §3 | the same programs: each is refused before the first step, with a note | Holds | |
+| `i = i++` is refused before the first step; `a[a[0]] = 1` stops; two printing calls and `g + f()` stop | How it works §3 | the same programs | Holds | |
+| The link "C99 §6.5p3" opens PDF page 79 | How it works §3 | `search-standard` | Holds | |
+| The five new lessons' cards (what each shows) | Table 1 | the lessons' runs | Holds | |
+| `call_indirect` pops a table index, checks the function's type and traps if it differs | WebAssembly view | WebAssembly 2.0 core specification, `call_indirect`; the stepper's `indirect` traps on an undefined element or a type mismatch | Holds | |
+| "A C function pointer compiles to such an index" | WebAssembly view | Clang's and bcc's modules of the callbacks lesson | Holds | |
+| A call through a pointer "runs the function it points to, exactly as `twice(…)` would" | every call through a pointer | §6.5.2.2p1, p3 | Holds | |
+| A function's name becomes a pointer to it, except after `&` or `sizeof` | designator steps | §6.3.2.1p4 | Holds | |
+| A continue in a for "goes to the for statement's third clause, … and then to the condition" | loops, note 176 | §6.8.6.2p2, §6.8.5.3p1 | Holds (now cited) | |
+| String literals get a null character in phase 7; adjacent literals join in phase 6 | literal steps | §5.1.1.2p1, §6.4.5p5 | Holds | |
+| A switch compares the promoted value with each label's constant converted to that type, then runs on past later labels | switch steps | §6.8.4.2p5, §6.8.1p4 | Holds | |
+
+### The lessons, step by step
+
+The 18 lessons the machine runs were stepped to their ends before and
+after the fixes (the preprocessor lesson stops before its first step, as
+before). Every lesson keeps its step count. The text changed only on these
+notes:
+
+| Lesson | Notes | What changed |
+| --- | --- | --- |
+| Loops three ways | 47, 80, 110, 176 | the note on loops: a for's `continue` runs its step first |
+| Callbacks | 15, 98 | the note on pointers to functions: when a bad call crashes |
+| Callbacks | 43, 71, 126, 155 | a call through `f`: an address in x86-64 code, an index in WebAssembly |
+| Walking a string with a pointer | 145 | ptrdiff_t is long on x86-64 Linux |
+| Unsigned numbers wrap | 146 | size_t is unsigned long on x86-64 Linux |
+
+The clauses changed on every loop's tests, jumps back and `continue`s, in
+the 11 lessons with a while or a for: Objects, loops and calls (12 steps),
+Hello (11), Names for values (15), Short-circuit evaluation (11), Loops
+three ways (25), Unsigned (23), Signed overflow (6), Floating point (33),
+Pointers and arrays (14), Walking a string (28) and Callbacks (18).
+
+### Left open
+
+- bcc has no `-Wimplicit-fallthrough`: it warns about neither a missing
+  `break` nor the option.
+- `x & 1` for a negative x assumes two's complement; the note does not say
+  so, since every machine the site describes uses it.

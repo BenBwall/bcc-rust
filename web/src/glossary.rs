@@ -395,7 +395,8 @@ pub static TERMS: [Term; 62] = [
         phrases:    &["two's complement"],
         definition: "How x86-64, like every machine bcc targets, stores a negative integer: -x is \
                      the bits of x flipped, plus 1, so -1 is all 1 bits and ~x is -x - 1. C99 \
-                     also allows two other representations, which no current machine uses.",
+                     also allows sign and magnitude and ones' complement; C23 requires two's \
+                     complement.",
         clause:     "6.2.6.2p2",
         page:       50,
     },
@@ -404,7 +405,7 @@ pub static TERMS: [Term; 62] = [
         name:       "size_t",
         phrases:    &["size_t"],
         definition: "The unsigned integer type of sizeof's result, defined by <stddef.h> and \
-                     <stdio.h>: unsigned long on x86-64. printf prints it with %zu.",
+                     <stdio.h>: unsigned long on x86-64 Linux. printf prints it with %zu.",
         clause:     "7.17p2",
         page:       266,
     },

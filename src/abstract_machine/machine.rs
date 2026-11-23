@@ -641,7 +641,8 @@ impl Machine {
             | &Op::Jump(target) => {
                 let backward = target < self.activations[top].pc;
                 self.activations[top].pc = target;
-                narration::jump(range, backward)
+                let statement = source.get(range.start..range.end).unwrap_or("");
+                narration::jump(range, statement, backward)
             },
             | &Op::Break(target, statement, skipped) => {
                 self.activations[top].pc = target;

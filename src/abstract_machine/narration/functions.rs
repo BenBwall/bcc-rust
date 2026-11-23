@@ -218,10 +218,11 @@ impl Machine {
              gave a pointer to the function {name} (defined on line {line}), and the call runs \
              the function it points to, exactly as `{name}(…)` would. C leaves the order of \
              evaluating that expression and the arguments unspecified; this machine evaluates it \
-             first. In compiled code the pointer holds the address where {name}'s machine code \
+             first. In x86-64 code the pointer holds the address where {name}'s machine code \
              starts, and the call jumps there rather than to an address fixed when the program \
-             was linked. The pointer's type promised a function of type {ty}, which {name} has, \
-             so the arguments convert to {name}'s parameters as that type says. {}",
+             was linked; in WebAssembly it holds an index into a table of functions. The \
+             pointer's type promised a function of type {ty}, which {name} has, so the arguments \
+             convert to {name}'s parameters as that type says. {}",
             event.explanation
         );
         let mut cited = vec![clauses::CALLED_FUNCTION, clauses::FUNCTION_CALL];

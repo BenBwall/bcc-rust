@@ -172,8 +172,8 @@ impl Parser<'_> {
                 range,
                 &format!(
                     "a read of the object `{name}`: C99's constant expressions read no object, \
-                     not even a const one (§6.6p8); GCC accepts a const one as an extension, \
-                     which §6.6p10 allows, but this machine keeps to C99's rule"
+                     not even a const one (§6.6p8); GCC and Clang accept a const one as an \
+                     extension, which §6.6p10 allows, but this machine keeps to C99's rule"
                 ),
             )),
             | ExprKind::Call(..) | ExprKind::CallPointer(..) | ExprKind::Library(..) =>

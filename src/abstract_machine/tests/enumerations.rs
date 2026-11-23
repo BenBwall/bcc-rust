@@ -666,7 +666,7 @@ fn an_enumerations_object_promises_only_its_constants_range() {
     );
     assert!(signed.contains("values, so at least -3 to 11"), "{signed}");
     assert!(
-        signed.contains("GCC chooses int when a constant is negative, as one is here"),
+        signed.contains("GCC and Clang choose int when a constant is negative, as one is here"),
         "{signed}"
     );
     let elements = declared(
@@ -702,5 +702,48 @@ fn an_enumerations_object_promises_only_its_constants_range() {
         ),
         "{}",
         call.event.explanation
+    );
+}
+
+// C99 §6.7.2.2p4: an enumeration with neither a tag nor a typedef name
+// still has a type, which the steps name in words rather than by a
+// spelling it does not have.
+#[test]
+fn an_enumeration_without_a_name_is_named_in_words() {
+    let states = finished(
+        "enum { SIZE = 4 };\nint main(void) {\n    int a[SIZE];\n    a[0] = SIZE;\n    return \
+         a[0];\n}\n",
+        4,
+    );
+    let declared = step(
+        &states,
+        EventKind::Enumeration,
+        "Declare the constants SIZE",
+    );
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("The enumeration's type itself is compatible with unsigned int"),
+        "{}",
+        declared.event.explanation
+    );
+    let read = step(
+        &states,
+        EventKind::Constant,
+        "Evaluate the enumeration constant",
+    );
+    assert!(
+        read.event
+            .explanation
+            .contains("even though the enumeration's type itself is compatible with unsigned int."),
+        "{}",
+        read.event.explanation
+    );
+    assert!(
+        states
+            .iter()
+            .all(|state| !state.event.explanation.contains("  ")),
+        "no name left blank"
     );
 }

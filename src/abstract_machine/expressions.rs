@@ -642,10 +642,9 @@ impl Parser<'_> {
                 node
             }
         } else {
-            return Err(self.error(
-                "expected a subset expression; nested assignments/increments and unsupported \
-                 syntax are rejected",
-            ));
+            return Err(
+                self.error("expected an expression; this one uses syntax outside this subset")
+            );
         };
         Ok((node, true))
     }

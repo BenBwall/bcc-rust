@@ -4898,7 +4898,7 @@ fn the_next_operation_is_described_in_plain_words() {
         ),
         ("read `total`", "6.3.2.1p2"),
         ("compare `i < 3`", "6.5.8p6"),
-        ("test the `for` condition `i < 3`", "6.8.5p4"),
+        ("test the `for` condition `i < 3`", "6.8.5.3p1"),
         ("call `bump`", "6.5.2.2p4"),
         ("find the object `value` points to", "6.5.3.2p4"),
         ("add `before` and `1`", "6.5.6p5"),

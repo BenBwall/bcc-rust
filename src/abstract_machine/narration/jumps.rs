@@ -131,7 +131,20 @@ impl Machine {
                      as if to a label just before the body's closing brace: the rest of this pass \
                      is skipped, but unlike a break it does not leave the loop. {blocks}"
                 ),
-                &[clauses::CONTINUE, clauses::LOOP_BODY],
+                match statement {
+                    | "while" => &[
+                        clauses::CONTINUE,
+                        clauses::WHILE_STATEMENT,
+                        clauses::LOOP_BODY,
+                    ],
+                    | "do" => &[clauses::CONTINUE, clauses::DO_STATEMENT, clauses::LOOP_BODY],
+                    | "for" => &[
+                        clauses::CONTINUE,
+                        clauses::FOR_STATEMENT,
+                        clauses::LOOP_BODY,
+                    ],
+                    | _ => &[clauses::CONTINUE, clauses::LOOP_BODY],
+                },
             ),
             Topic::Loops,
         )

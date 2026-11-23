@@ -53,13 +53,24 @@ fn count(number: usize) -> String {
         .map_or_else(|| format!("{number}"), |word| String::from(*word))
 }
 
+/// How a sentence names `enumeration`'s type: its spelling, `enum color`,
+/// or for an enumeration with neither a tag nor a typedef name, "the
+/// enumeration's type".
+fn type_name(enumeration: &Enumeration) -> &str {
+    if enumeration.name.is_empty() {
+        "the enumeration's type"
+    } else {
+        &enumeration.name
+    }
+}
+
 /// Which integer type `enumeration` is compatible with, and how GCC chose
 /// it: "compatible with unsigned int: C lets …".
 pub(super) fn compatible_text(enumeration: &Enumeration) -> String {
     let negative = enumeration.integer == Integer::Int;
     format!(
         "compatible with {}: C lets each implementation choose an integer type that holds every \
-         constant, and GCC chooses int when a constant is negative{}",
+         constant, and GCC and Clang choose int when a constant is negative{}",
         enumeration.integer.spelling(),
         if negative {
             ", as one is here, and unsigned int otherwise"
@@ -175,8 +186,12 @@ impl Machine {
         }
         let _ = write!(
             text,
-            "The type {} itself is {}, so an object of it holds {} bytes.",
-            enumeration.name,
+            "{} itself is {}, so an object of it holds {} bytes.",
+            if enumeration.name.is_empty() {
+                String::from("The enumeration's type")
+            } else {
+                format!("The type {}", enumeration.name)
+            },
             compatible_text(enumeration),
             enumeration.integer.bytes()
         );
@@ -248,7 +263,7 @@ impl Machine {
             let _ = write!(
                 text,
                 ", even though {} itself is compatible with {}.",
-                declared.name,
+                type_name(declared),
                 declared.integer.spelling()
             );
         }
