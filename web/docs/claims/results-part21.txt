@@ -1,0 +1,46 @@
+# STD=c99 EXTRA=-Wimplicit-fallthrough sh web/docs/claims/run.sh c34_fallthrough
+=== c34_fallthrough
+[GCC -O0] exit=3
+    web/docs/claims/c34_fallthrough.c:6:11: warning: this statement may fall through [-Wimplicit-fallthrough=]
+[GCC -O2] exit=3
+    web/docs/claims/c34_fallthrough.c:6:11: warning: this statement may fall through [-Wimplicit-fallthrough=]
+[CLANG -O0] exit=3
+    1 warning generated.
+    web/docs/claims/c34_fallthrough.c:7:5: note: insert '__attribute__((fallthrough));' to silence this warning
+    web/docs/claims/c34_fallthrough.c:7:5: warning: unannotated fall-through between switch labels [-Wimplicit-fallthrough]
+[CLANG -O2] exit=3
+    1 warning generated.
+    web/docs/claims/c34_fallthrough.c:7:5: note: insert '__attribute__((fallthrough));' to silence this warning
+    web/docs/claims/c34_fallthrough.c:7:5: warning: unannotated fall-through between switch labels [-Wimplicit-fallthrough]
+[BCC -O0] exit=3
+    1 warning generated.
+    warning: unknown warning option '-Wimplicit-fallthrough' [-Wunknown-warning-option]
+[BCC -O2] exit=3
+    1 warning generated.
+    warning: unknown warning option '-Wimplicit-fallthrough' [-Wunknown-warning-option]
+# STD=c99 EXTRA=-Wshadow sh web/docs/claims/run.sh c35_shadow
+=== c35_shadow
+[GCC -O0] exit=1
+    web/docs/claims/c35_shadow.c:4:13: warning: declaration of ‘x’ shadows a previous local [-Wshadow]
+[GCC -O2] exit=1
+    web/docs/claims/c35_shadow.c:4:13: warning: declaration of ‘x’ shadows a previous local [-Wshadow]
+[CLANG -O0] exit=1
+    1 warning generated.
+    web/docs/claims/c35_shadow.c:4:13: warning: declaration shadows a local variable [-Wshadow]
+[CLANG -O2] exit=1
+    1 warning generated.
+    web/docs/claims/c35_shadow.c:4:13: warning: declaration shadows a local variable [-Wshadow]
+[BCC -O0] exit=1
+    1 warning generated.
+    warning: declaration shadows a local variable [-Wshadow]
+[BCC -O2] exit=1
+    1 warning generated.
+    warning: declaration shadows a local variable [-Wshadow]
+# STD=c99 sh web/docs/claims/run.sh c38_same_registers_call
+=== c38_same_registers_call
+[GCC -O0] 42| exit=0
+[GCC -O2] 42| exit=0
+[CLANG -O0] 42| exit=0
+[CLANG -O2] 42| exit=0
+[BCC -O0] 42| exit=0
+[BCC -O2] 42| exit=0

@@ -642,8 +642,8 @@ fn an_enumerations_object_promises_only_its_constants_range() {
     );
     assert!(
         color.contains(
-            "an enum color object (4 bytes on x86-64, 0 to 4294967295; C promises only that its \
-             type can represent its constants' values, so at least 0 to 6)"
+            "an enum color object (4 bytes on x86-64 Linux, 0 to 4294967295; C promises only that \
+             its type can represent its constants' values, so at least 0 to 6)"
         ),
         "{color}"
     );

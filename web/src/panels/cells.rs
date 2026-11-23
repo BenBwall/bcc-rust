@@ -241,7 +241,7 @@ enum Part {
         ty:    String,
         /// Its scalar index in the object, for an array or a structure.
         leaf:  Option<usize>,
-        /// Its size in bytes on x86-64.
+        /// Its size in bytes on x86-64 Linux.
         bytes: usize,
     },
     Padding {

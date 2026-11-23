@@ -959,8 +959,16 @@ mod tests {
             ),
             ("int", "unsigned int", "have the same rank, so the signed operand converts"),
             ("int", "unsigned long", "unsigned long is unsigned and has the higher rank"),
-            ("unsigned int", "long", "long is signed, has the higher rank and holds every"),
-            ("long long", "unsigned long", "long long has the higher rank, but it cannot hold"),
+            (
+                "unsigned int",
+                "long",
+                "long is signed, has the higher rank and on x86-64 Linux holds every",
+            ),
+            (
+                "long long",
+                "unsigned long",
+                "long long has the higher rank, but on x86-64 Linux it cannot hold",
+            ),
             ("int", "double", "The other operand is floating"),
             ("float", "double", "Both are floating, and double is the wider"),
         ];

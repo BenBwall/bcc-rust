@@ -92,7 +92,8 @@ clauses! {
     /// C99: §F.2 paragraph 1, p. 444; PDF p. 456.
     FLOATING_FORMATS = "F.2p1", "p. 444; PDF p. 456", "Types (Annex F)",
         "Under Annex F, float is IEEE 754 single precision and double is double precision; long \
-         double is an extended format, on x86-64 the x87 80-bit one.";
+         double is an extended format if there is one, else double precision: on x86-64 Linux \
+         the x87 80-bit format, and with Microsoft's compiler double.";
     /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
     FLOATING_OPERATIONS = "F.3p1", "pp. 445-447; PDF pp. 457-459", "Operators and functions",
         "Under Annex F, +, -, * and / are IEEE 754's operations: each gives its exact result \
@@ -177,8 +178,8 @@ clauses! {
         "Binary arithmetic first converts both operands to a common type. With the same \
          signedness it is the higher-ranked one. Otherwise it is the unsigned one when its rank \
          is at least as high; the signed one when it can represent every value of the other; \
-         and else the unsigned type of the signed one's rank (long long and unsigned long give \
-         unsigned long long). Two ints need no conversion.";
+         and else the unsigned type of the signed one's rank (on x86-64 Linux, long long and \
+         unsigned long give unsigned long long). Two ints need no conversion.";
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     LVALUE = "6.3.2.1p1", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
         "An lvalue is an expression that designates an object: a location, not yet a value.";
@@ -272,7 +273,8 @@ clauses! {
     CONDITIONAL_CONSTRAINT = "6.5.15p3", "p. 90; PDF p. 102", "Conditional operator",
         "The second and third operands must both be arithmetic, both void, the same structure or \
          union type, or pointers to compatible types; or one is a pointer and the other a null \
-         pointer constant or a pointer to void.";
+         pointer constant; or one is a pointer to an object or incomplete type and the other a \
+         pointer to void.";
     /// C99: §6.5.17 paragraph 2, p. 94; PDF p. 106.
     COMMA = "6.5.17p2", "p. 94; PDF p. 106", "Comma operator",
         "The comma operator evaluates its left operand and discards the value; a sequence point \
@@ -370,13 +372,15 @@ clauses! {
          unchanged; calling through the wrong type is undefined.";
     /// C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
     POINTER_EQUALITY = "6.5.9p6", "p. 87; PDF p. 99", "Equality operators",
-        "Two pointers compare equal when both are null, both point to the same object or the same \
-         function, or both point one past the same array; otherwise only when one points one past \
-         an array and the other to an object that happens to follow it.";
+        "Two pointers compare equal exactly when both are null, both point to the same object \
+         (or one to an object and the other to a subobject at its start) or the same function, \
+         both point one past the last element of the same array, or one points one past the end \
+         of an array and the other to the start of a different array that happens to follow it \
+         immediately in memory.";
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
     EQUALITY_CONSTRAINT = "6.5.9p2", "p. 86; PDF p. 98", "Equality operators",
         "== and != compare two numbers, two pointers to compatible types, a pointer to an object \
-         with a pointer to void, or a pointer with a null pointer constant.";
+         or incomplete type with a pointer to void, or a pointer with a null pointer constant.";
     /// C99: §6.5.6 paragraph 2, p. 82; PDF p. 94.
     FUNCTION_POINTER_ARITHMETIC = "6.5.6p2", "p. 82; PDF p. 94", "Additive operators",
         "Adding an integer to a pointer needs a pointer to an object type, the element of an \
@@ -639,7 +643,7 @@ clauses! {
     /// C99: §6.7.2.1 paragraph 12, p. 103; PDF p. 115.
     MEMBER_ALIGNMENT = "6.7.2.1p12", "p. 103; PDF p. 115", "Structure and union specifiers",
         "Each member is aligned as its type needs, in an implementation-defined way; on x86-64 \
-         an int starts at a multiple of 4 bytes and a pointer at a multiple of 8.";
+         Linux an int starts at a multiple of 4 bytes and a pointer at a multiple of 8.";
     /// C99: §6.7.2.1 paragraph 13, p. 103; PDF p. 115.
     MEMBER_ORDER = "6.7.2.1p13", "p. 103; PDF p. 115", "Structure and union specifiers",
         "Members are laid out in the order they are declared, the first at the very start; \

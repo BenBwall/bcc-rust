@@ -6630,3 +6630,258 @@ compilers at `-O0` and `-O2`, with no warning under `-std=c99 -pedantic
   at `-O2`, a `switch` in LLVM IR, `continue`'s "fresh ones", a dispatch
   table lesson and the function's type in the conversion's value flow,
   with Part 17's list behind them.
+
+## Part 21: the remaining loose explanations (2026-11)
+
+The reviews of Part 20 (#442) and of its results file (#443) left six
+non-blocking findings, all fixed here on `agent/site-part21`. The claims
+audit's [Part 21's follow-ups](claims-audit.md#part-21s-follow-ups-2026-11-23)
+holds the evidence. Citations were checked with `search-standard`, and the
+compiler claims against GCC 14, Clang 23.1.5 and a dev build of bcc in C99.
+
+### The fixes
+
+- **The `?:` gloss** (§6.5.15p3) let any pointer pair with a pointer to
+  void. The paragraph allows only a pointer to an object or incomplete
+  type, so a function pointer is excluded. GCC (`-pedantic`) and Clang
+  warn about `c ? fp : v` but not about an object pointer. The gloss now
+  says so. The `==` constraint's gloss (§6.5.9p2) also left out
+  incomplete types, and now includes them.
+- **Pointer equality** (§6.5.9p6) now follows the paragraph: a pointer to
+  an object equals a pointer to a subobject at its start, and a pointer
+  one past an array equals a pointer to the start of a different array
+  that immediately follows it.
+- **A call through the wrong function type.** The note on pointers to
+  functions and the stop at such a call gave "the caller and the function
+  disagree about where the arguments and the result are" as the reason.
+  A new probe, `c38`, calls `int (*)(int)` as `unsigned (*)(unsigned)`.
+  Both types use the same registers, and the probe prints 42 under all
+  three compilers at `-O0` and `-O2`. Both texts now say the call is
+  undefined (§6.5.2.2p9) even when it seems to work, and give the
+  disagreement only as one possible consequence. A test pins the stop's
+  wording.
+- **Sizes "on x86-64".** For `x86_64-pc-windows-msvc`, a long and an
+  unsigned long are 4 bytes and a long double is 8 (LLP64). For
+  x86_64-linux-gnu they are 8 and 16 (LP64). Each statement of a size,
+  range, alignment, format or type choice that differs between the two
+  now says "on x86-64 Linux", as ptrdiff_t and size_t already did; later
+  steps that only repeat a type already stated are not tagged (review
+  round 2, "Left for later"). Review round 1
+  (below) finished the engine's part of that. It covers:
+  - every object's declaration;
+  - `sizeof`;
+  - a structure's layout and a structure assignment;
+  - the cast to char;
+  - the notes on promotion, pointer arithmetic, int's range, padding and
+    the floating sizes;
+  - the glosses of §6.7.2.1p12 and §F.2p1;
+  - the glossary's alignment, unsigned type and floating type;
+  - the datasheet's byte counts;
+  - "Limits of this model";
+  - the rank panel's sentences that depend on long's width.
+
+  Statements about the processor itself are unchanged, and are the same
+  on every x86-64 target: its shift and division instructions, its
+  default NaN, FLT_EVAL_METHOD 0 and two's complement.
+- **`run.sh`** now takes three things:
+  - `STD`, the language standard. It defaults to `c17`, the standard
+    `results.txt` was made with. A default run does not give that file
+    back: the claims audit lists what differs (corrected in review round
+    1, below).
+  - `EXTRA`, options added after `-Wall -Wextra`.
+  - The names of the probes or lessons to run.
+
+  The script's header and both audit method sections document it.
+- **The warning rows.** `results-part21.txt` records two runs:
+  - `c34` with `-Wimplicit-fallthrough`: GCC and Clang warn, and bcc
+    reports the option unknown.
+  - `c35` with `-Wshadow`: all three warn.
+
+  The `c34` and `c35` rows now cite the file that backs each half.
+
+### Checks
+
+- **The lesson walk.** A throwaway test stepped all 19 lessons on `main`
+  (`d623744e2`) and on this branch, plus a wrong-type call. It wrote each
+  step's title, lead, explanation, note, clauses, next step, diagnostics
+  and output, and each cited clause's gloss. Every step count is the same.
+  The preprocessor lesson is refused before its first step on both
+  ("line splicing is outside this subset"). Every changed line differs
+  only by the added " Linux", except the note on pointers to functions
+  (Callbacks, notes 15 and 98) and the wrong-type call's stop. Explanations
+  changed at these steps:
+
+  | Lesson | Steps | What |
+  | --- | --- | --- |
+  | Bits and masks | 7, 26 | an unsigned int and an int declared |
+  | Reading past the end | 2, 12 | an array of ints, an int * |
+  | Callbacks | 4, 11, 18, 23, 94, 101, 106 | an array of ints, ints |
+  | Names for values | 6, 10, 15, 84 | ints, the cast to char |
+  | Floating point | 9, 13, 17, 44, 62, 67, 212, 216 | ints, doubles |
+  | Hello, world | 11, 16 | ints |
+  | Uninitialized reads | 2, 3 | ints |
+  | Short-circuit evaluation | 7, 17, 84 | an array of ints, an int, an int * |
+  | Loops three ways | 4, 8, 72, 76, 134, 139 | ints |
+  | Objects, loops and calls | 2, 6, 16, 23, 33, 39, 87, 93, 141, 147 | ints, an array of ints, an int * |
+  | Signed overflow | 2, 7 | ints |
+  | From source to a running program | 2, 6 | ints |
+  | Pointers and arrays | 2, 15, 19, 31 | an array of ints, int *s, an int |
+  | Integer promotions | 6 | an int |
+  | Recursion and frames | 2, 12, 25, 38 | ints |
+  | Walking a string | 6, 10, 91 | char *s |
+  | Structs and static storage | 2, 5, 10, 44, 59, 76, 119 | struct layouts, a struct point *, a structure assignment |
+  | Unsigned numbers wrap | 6, 22, 70, 80, 85, 144, 146, 148, 156 and 162 | unsigned ints, an array, the size_t object (unsigned long), sizeof of int[3], an int |
+
+  Notes changed at these steps. The site shows a note the first time
+  its topic appears.
+
+  | Note | Lessons and steps |
+  | --- | --- |
+  | Pointers to functions | Callbacks 15, 98 |
+  | Int's range | Callbacks 48, 76, 132, 161; Objects 52, 65, 78, 106, 119, 132, 160, 173, 186; Signed overflow 21; From source 11, 18; Pointers and arrays 49, 73, 97, 121; Integer promotions 14, 24, 33; Recursion 17, 30, 43, 59, 66, 73; Structs 23, 29, 38, 57, 74, 99, 105, 114, 126, 129, 133 |
+  | Pointer arithmetic | Reading past the end 16; Objects 20, 71, 125, 179; Pointers and arrays 23, 55, 79, 103, 127 |
+  | Promotion | Names for values 89; Hello 26, 41, 56, 71; Integer promotions 10, 13, 20, 23, 32; Walking a string 22, 37, 52, 67, 82 |
+  | Floating sizes | Floating point 17, 44, 62, 212 |
+  | Padding | Structs 76 |
+
+  Only two cited glosses changed in any lesson: §6.7.2.1p12 in Structs
+  and static storage, and §F.2p1 in Floating point. No lesson cites the
+  `?:`, `==` or pointer equality glosses, so those were checked against
+  their paragraphs only. No clause list or next step changed.
+- **Tests,** as `pages.yml` runs them:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 175 passed (one test also checks the stop's new wording) |
+  | Engine clippy | clean |
+  | Site tests | 177 passed, plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | passes |
+  | `cargo +nightly fmt --check` | passes |
+  | `git diff --check` | clean |
+
+  rustfmt reports nothing on the site's changed lines.
+
+### Left for later
+
+- **Doc comments.** The engine's own doc comments still say "on x86-64",
+  for example `integers.rs`'s "Size in bytes". The site never shows them.
+- **§6.5.9p7** (an object outside an array counts as an array of one) has
+  no gloss of its own. No step cites it.
+- **A Playwright walk.** Part 9's walk of the page was not run: the page
+  shows the strings the lesson walk compared, and no layout changed.
+- Part 20's list stands.
+
+### Review, round 1
+
+The review of #445 found two blockers and three nits, all fixed here.
+
+- **LP64 facts with no target.** The engine still stated a long's range
+  and a constant's type without naming x86-64 Linux, in arithmetic ("The
+  result fits in a long (-9223372036854775808 to 9223372036854775807)"),
+  in initialization and assignment ("it fits in -9223372036854775808 to
+  9223372036854775807") and for integer constants ("The integer constant
+  3000000000 has type long"). Each is false on `x86_64-pc-windows-msvc`.
+  A throwaway engine test then ran programs using `long`, `unsigned long`,
+  `long long`, `long double`, large constants, `sizeof`, `size_t` and
+  `ptrdiff_t` through every step kind, before and after, and every
+  sentence it printed was read. These now name x86-64 Linux when they
+  depend on the data model:
+  - a long's or an unsigned long's range, wherever a step states it:
+    arithmetic, unsigned wrapping, conversions on initialization,
+    assignment and cast, increments, compound assignment and the stops
+    for signed overflow, a too-wide shift and a floating value out of
+    range;
+  - its width: the bitwise operators' and `~`'s "64 bits", a shift's
+    "64-bit unsigned long" and the "modulo 2^64" of unsigned wrapping and
+    conversion;
+  - the type a constant or the usual arithmetic conversions choose: a
+    constant's type when its value needs more than 32 bits, a comparison's
+    common type, and "is wider (64 bits against 32)" or "no wider (64 bits
+    each)";
+  - `sizeof`'s size, an array's element size and a member's offset, when
+    the type is or holds a long, an unsigned long or a long double;
+  - a long double's 64 bits of precision, its largest value in the stop
+    for a constant out of range, and an integer it holds exactly only
+    because of those 64 bits;
+  - the §6.3.1.8p1 gloss's "long long and unsigned long give unsigned
+    long long".
+
+  A bare "fits" ("4294967295 fits in long") and a constant's or
+  conversion's type are tagged only for a value beyond 32 bits, which a
+  4-byte long would not hold, so `10L` and `a + 1` read as before. Facts
+  about char, short, int and their unsigned types, and about float and
+  double, are the same on every x86-64 target and are unchanged. A new
+  test pins one sentence of each kind. Clang 23.1.5 confirms each changed
+  claim with `_Static_assert`s on both targets: `LONG_MAX`, `ULONG_MAX`,
+  `sizeof(long)`, `sizeof(long double)`, `LDBL_MANT_DIG`, the member
+  offsets of `struct { char c; long l; long double d; unsigned long u; }`,
+  the types of `3000000000`, `2147483648`, `040000000000`,
+  `18446744073709551615u` and `0xFFFFFFFFFFFFFFFF`, of `1L + 1u` and
+  `1LL + 1UL`, and of `size_t` and `ptrdiff_t`. Converting
+  18446744073709551615u to long double draws
+  `-Wimplicit-const-int-float-conversion` only for the Windows target.
+- **`run.sh`'s reproducibility.** A default run does not give
+  `results.txt` back. The claims audit now lists what differs: for Clang,
+  the values the undefined probes `c03b`, `c04b` and `c07` print, the
+  `indeterminate` lesson's exit status at `-O0`, and every probe and
+  lesson added since; for GCC and bcc, also the `indeterminate` and
+  `bounds` exit statuses, a warning's line number, bcc's
+  `-Wuninitialized` warnings and the temporary paths in two errors.
+- **Nits.**
+  - `web/README.md` says x86-64 Linux width.
+  - The §F.2p1 gloss followed only half the paragraph. Annex F makes long
+    double "an IEC 60559 extended format, else a non-IEC 60559 extended
+    format, else the IEC 60559 double format" (`search-standard`, N1256
+    p. 444; PDF p. 456). The gloss now says "an extended format if there
+    is one, else double precision: on x86-64 Linux the x87 80-bit format,
+    and with Microsoft's compiler double".
+  - `sizeof`'s result type is labelled `size_t`, not `unsigned long`. The
+    site shows the label only for conversions, so no lesson changes.
+
+#### Checks
+
+- **The lesson walk.** The same throwaway test stepped all 19 lessons
+  before and after. Every step count is the same, and no step's title,
+  lead, explanation, note, clause list, next step, diagnostic or output
+  changed. Two cited glosses changed: §6.3.1.8p1 in Bits and masks,
+  Callbacks, Floating point, Objects, Signed overflow, From source,
+  Pointers and arrays, Integer promotions, Recursion, Structs and
+  Unsigned numbers wrap; and §F.2p1 in Floating point.
+- **Tests,** as `pages.yml` runs them, with `ci.yml`'s pipeline check:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed (175 and the new test) |
+  | Engine clippy | clean |
+  | Site tests | 177 passed, plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | passes |
+  | `cargo +nightly fmt --check` | passes |
+  | `git diff --check` | clean |
+
+#### Left for later
+
+- **Type labels.** The engine models `size_t` as an unsigned long and
+  `ptrdiff_t` as a long, so a step's upcoming label can still read
+  "cast `(q - p)` from `long` to `int`", and `sizeof n` for a `size_t n`
+  says "the size of an unsigned long". Both are the types on x86-64
+  Linux, and the step's sentence names it, but the label does not.
+- **Values.** Every value the machine shows for a long or a long double
+  (a sum, a rounded quotient, the low bits a conversion keeps) is the
+  value on x86-64 Linux; the steps tag the facts the values follow from,
+  not each value.
+- **Repeated types (review round 2).** Later steps that repeat a type the
+  machine already stated, without restating the rule, are not tagged,
+  though each is false on x86_64-pc-windows-msvc, where `3000000000` and
+  `2147483648` are long long: "The value to store is the long
+  3000000000", "Unary minus negates its long operand: -(2147483648)",
+  the printf check's "`3000000000`, is a long", "`3000000000 > 2` mixes
+  an int and a long", "`(long)3e9` … converts to the long 3000000000"
+  (whose conversion is undefined on Windows), and upcoming labels such as
+  "cast `18446744073709551615u` from `unsigned long`". No lesson reaches
+  them; edited code does.

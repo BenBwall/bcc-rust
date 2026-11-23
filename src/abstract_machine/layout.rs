@@ -16,6 +16,7 @@ use std::fmt::Write;
 use super::{
     floating::Real,
     model::{
+        Arithmetic,
         Member,
         Signature,
         Structure,
@@ -42,6 +43,34 @@ impl Type {
             | Self::Struct(id) => structures
                 .get(id)
                 .map_or((0, 1), |structure| (structure.size, structure.align)),
+        }
+    }
+
+    /// Whether the type's size or layout holds only on x86-64 Linux: it is,
+    /// or holds, a long, an unsigned long or a long double, which are 4, 4
+    /// and 8 bytes on x86_64-pc-windows-msvc rather than 8, 8 and 16.
+    /// Pointers are 8 bytes and the other scalars the same on both.
+    pub(super) fn model_dependent(self, structures: &[Structure]) -> bool {
+        let arithmetic = |arithmetic: Arithmetic| match arithmetic {
+            | Arithmetic::Integer(integer) => !integer.on_linux().is_empty(),
+            | Arithmetic::Floating(floating) => !floating.on_linux().is_empty(),
+        };
+        match self {
+            | Self::Integer(integer) => arithmetic(Arithmetic::Integer(integer)),
+            | Self::Floating(floating) => arithmetic(Arithmetic::Floating(floating)),
+            | Self::Array(element, _) => arithmetic(element),
+            | Self::Struct(id) => structures.get(id).is_some_and(|structure| {
+                structure
+                    .members
+                    .iter()
+                    .any(|member| member.ty.model_dependent(structures))
+            }),
+            | Self::Pointer(..)
+            | Self::StructPointer(_)
+            | Self::Indirect(..)
+            | Self::PointerArray(..)
+            | Self::FunctionPointer(_)
+            | Self::VoidPointer => false,
         }
     }
 

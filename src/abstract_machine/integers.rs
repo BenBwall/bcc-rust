@@ -115,6 +115,37 @@ impl Integer {
         }
     }
 
+    /// " on x86-64 Linux" for a statement of a long's or an unsigned long's
+    /// width, range or type, which holds only in Linux's LP64 data model,
+    /// and nothing for another type. On x86_64-pc-windows-msvc (LLP64) a
+    /// long is 4 bytes, so a constant too large for 32 bits is a long long
+    /// there, and `size_t` is an unsigned long long; every other integer type
+    /// has the same width on both.
+    pub(super) const fn on_linux(self) -> &'static str {
+        if matches!(self, Self::Long | Self::UnsignedLong) {
+            " on x86-64 Linux"
+        } else {
+            ""
+        }
+    }
+
+    /// [`Self::on_linux`] for a statement that `value` fits in the type, or
+    /// that the type is the one a constant or a conversion chose for it:
+    /// the 4-byte long of x86_64-pc-windows-msvc holds every value of 32
+    /// bits, so only a wider value needs the target.
+    pub(super) const fn fit_on_linux(self, value: i128) -> &'static str {
+        let narrow = if self.signed() {
+            Self::Int
+        } else {
+            Self::UnsignedInt
+        };
+        if narrow.fits(value) {
+            ""
+        } else {
+            self.on_linux()
+        }
+    }
+
     /// Whether the type can represent `value`.
     pub(super) const fn fits(self, value: i128) -> bool {
         value >= self.min() && value <= self.max()

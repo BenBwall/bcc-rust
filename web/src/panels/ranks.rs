@@ -153,7 +153,8 @@ pub(crate) fn rule(conversion: &Conversion) -> Option<String> {
     let (from, to) = (conversion.from.as_str(), conversion.to.as_str());
     if conversion.promotion {
         return Some(format!(
-            "On x86-64 an int holds every {from} value, so the integer promotions make it an int."
+            "On x86-64 Linux an int holds every {from} value, so the integer promotions make it \
+             an int."
         ));
     }
     let Some(other) = conversion.other.as_deref() else {
@@ -202,18 +203,18 @@ pub(crate) fn rule(conversion: &Conversion) -> Option<String> {
         )
     } else if signed && mine.0 > theirs.0 && result == (mine.0, true) {
         format!(
-            "{from} has the higher rank, but it cannot hold every {other} value, so both operands \
-             convert to {to}, the unsigned type of {from}'s rank."
+            "{from} has the higher rank, but on x86-64 Linux it cannot hold every {other} value, \
+             so both operands convert to {to}, the unsigned type of {from}'s rank."
         )
     } else if unsigned && theirs.0 > mine.0 && result == theirs {
         format!(
-            "{other} is signed, has the higher rank and holds every {from} value, so the {from} \
-             converts to it."
+            "{other} is signed, has the higher rank and on x86-64 Linux holds every {from} value, \
+             so the {from} converts to it."
         )
     } else if unsigned && theirs.0 > mine.0 && result == (theirs.0, true) {
         format!(
-            "{other} has the higher rank, but it cannot hold every {from} value, so both operands \
-             convert to {to}, the unsigned type of {other}'s rank."
+            "{other} has the higher rank, but on x86-64 Linux it cannot hold every {from} value, \
+             so both operands convert to {to}, the unsigned type of {other}'s rank."
         )
     } else {
         return None;
@@ -284,14 +285,14 @@ mod tests {
         // The signed type holds every value of the unsigned one.
         assert_eq!(
             converted("unsigned int", "long", "long"),
-            "long is signed, has the higher rank and holds every unsigned int value, so the \
-             unsigned int converts to it."
+            "long is signed, has the higher rank and on x86-64 Linux holds every unsigned int \
+             value, so the unsigned int converts to it."
         );
         // It does not: both become the unsigned type of the signed one's
         // rank, seen from either operand.
-        let both = "long long has the higher rank, but it cannot hold every unsigned long value, \
-                    so both operands convert to unsigned long long, the unsigned type of long \
-                    long's rank.";
+        let both = "long long has the higher rank, but on x86-64 Linux it cannot hold every \
+                    unsigned long value, so both operands convert to unsigned long long, the \
+                    unsigned type of long long's rank.";
         assert_eq!(
             converted("long long", "unsigned long", "unsigned long long"),
             both

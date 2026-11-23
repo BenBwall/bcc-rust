@@ -98,6 +98,18 @@ impl Floating {
         }
     }
 
+    /// " on x86-64 Linux" for a statement of a long double's size, format,
+    /// precision or range, which holds only there, and nothing for float
+    /// and double. With Microsoft's compiler (x86_64-pc-windows-msvc) a long
+    /// double is just a double.
+    pub(super) const fn on_linux(self) -> &'static str {
+        if matches!(self, Self::LongDouble) {
+            " on x86-64 Linux"
+        } else {
+            ""
+        }
+    }
+
     /// The format's name.
     pub(super) const fn format_name(self) -> &'static str {
         match self {

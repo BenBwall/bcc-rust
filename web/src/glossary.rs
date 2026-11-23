@@ -295,8 +295,8 @@ pub static TERMS: [Term; 62] = [
         name:       "Alignment",
         phrases:    &["alignment", "aligned"],
         definition: "Where an object of a type may start: at an address that is a multiple of its \
-                     alignment. On x86-64 an int is aligned to 4 and a pointer or a double to 8, \
-                     so the processor can load each in one access.",
+                     alignment. On x86-64 Linux an int is aligned to 4 and a pointer or a double \
+                     to 8, so the processor can load each in one access.",
         clause:     "3.2",
         page:       15,
     },
@@ -365,7 +365,7 @@ pub static TERMS: [Term; 62] = [
         phrases:    &["unsigned types", "unsigned type"],
         definition: "An integer type written with unsigned, the same size as its signed type, \
                      that holds only values from 0 up: unsigned int holds 0 to 4294967295 on \
-                     x86-64. Its arithmetic never overflows.",
+                     x86-64 Linux. Its arithmetic never overflows.",
         clause:     "6.2.5p6",
         page:       45,
     },
@@ -414,8 +414,8 @@ pub static TERMS: [Term; 62] = [
         name:       "Floating type",
         phrases:    &["real floating types", "floating types", "floating type"],
         definition: "A type that holds numbers with a fraction, approximately: float, double and \
-                     long double, each holding every value of the one before. On x86-64 they are \
-                     IEEE 754 binary32 and binary64 and the x87 80-bit extended format.",
+                     long double, each holding every value of the one before. On x86-64 Linux \
+                     they are IEEE 754 binary32 and binary64 and the x87 80-bit extended format.",
         clause:     "6.2.5p10",
         page:       46,
     },

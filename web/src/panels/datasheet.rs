@@ -113,7 +113,7 @@ pub fn Datasheet(
                                                     <span class="sheet-undeclared" title="Entry into its block created it; its name can be used from its declaration on">"not declared yet"</span>
                                                 })}
                                             </th>
-                                            <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
+                                            <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64 Linux">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map_or_default(ToString::to_string)}</td>
                                             <td class="sheet-value" class:is-function=function.is_some() title=function.or_else(|| dangling.then(|| "The object it pointed to has ended, so its value is indeterminate".to_owned()))>{value}</td>

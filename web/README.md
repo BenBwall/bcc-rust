@@ -85,7 +85,7 @@ compiler; each part is captioned with what its lessons share
   value was kept or, for an int that does not fit in a char, wrapped as bcc,
   GCC and Clang do (implementation-defined), and `x += y` is narrated as `x = x +
   (y)` with `x` evaluated once. The machine knows every integer type, from
-  `char` to `unsigned long long`, with its x86-64 width (a declaration says
+  `char` to `unsigned long long`, with its x86-64 Linux width (a declaration says
   it, and that C promises only a minimum range); each cell under the
   playhead is as wide as its object's bytes and says how many, as the
   datasheet does beside each type. A value narrower than int is promoted in a
@@ -103,8 +103,8 @@ compiler; each part is captioned with what its lessons share
   value, `sizeof` is a step yielding a `size_t`, and a condition may count
   down with `k-- > 0`. An object declared `size_t` keeps that name on the
   tape, in its cell and in the datasheet; its declaration's explanation
-  says it is `unsigned long` on x86-64. The floating types are there too:
-  `float`, `double` and `long double` as x86-64 stores them (IEEE 754
+  says it is `unsigned long` on x86-64 Linux. The floating types are there too:
+  `float`, `double` and `long double` as x86-64 Linux stores them (IEEE 754
   binary32 and binary64, which C99 Annex F makes them, and the x87 80-bit
   format in 16 bytes), computed in software so every host agrees. A
   floating constant's step
@@ -614,7 +614,7 @@ every C text shows, `while ((*to++ = *from++) != '\0')`: `*to++` is
 the assignment hands the char it stored to the comparison, the copied null
 character ending the loop. `length` then walks the copy with `while (*s)
 s++;` and returns `s - start`, the count of elements between two pointers
-into one array, a `ptrdiff_t` (`long` on x86-64). Each nested update says
+into one array, a `ptrdiff_t` (`long` on x86-64 Linux). Each nested update says
 what value it yields and by which sequence point its store completes, and
 the machine checks that no unsequenced access reaches the same object. It
 includes `<stdio.h>`.

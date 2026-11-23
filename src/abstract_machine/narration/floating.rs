@@ -63,9 +63,10 @@ pub(in crate::abstract_machine) fn floating_constant(
             format!("The constant {spelling} is the {name} {shown}, exactly: the type holds it."),
             format!(
                 "Its value, {stored}, is a sum of powers of two that fits in {}'s {} bits of \
-                 precision, so the {name} holds it exactly.",
+                 precision{}, so the {name} holds it exactly.",
                 name,
-                precision(format)
+                precision(format),
+                format.on_linux()
             ),
         )
     } else if hexadecimal {
@@ -75,9 +76,10 @@ pub(in crate::abstract_machine) fn floating_constant(
                  the nearest {name}, {shown}."
             ),
             format!(
-                "A {name} has {} bits of precision, so the constant is rounded correctly to the \
+                "A {name} has {} bits of precision{}, so the constant is rounded correctly to the \
                  nearest {name}, which is exactly {stored}.",
-                precision(format)
+                precision(format),
+                format.on_linux()
             ),
         )
     } else {
@@ -88,12 +90,13 @@ pub(in crate::abstract_machine) fn floating_constant(
             ),
             format!(
                 "Its decimal value has no exact binary form that fits: a {name} is a binary \
-                 fraction with {} significant bits, and {spelling} is not one. So the constant \
+                 fraction with {} significant bits{}, and {spelling} is not one. So the constant \
                  becomes the {name} nearest to it, which is exactly {stored}. C lets each \
                  implementation choose the nearest value or one of its two neighbours; bcc, like \
                  GCC and Clang, takes the nearest, as IEEE 754 does. printf with %.{}g shows it \
                  as {}.",
                 precision(format),
+                format.on_linux(),
                 format.digits() + 2,
                 value.printf(b'g', Some(format.digits() as usize + 2))
             ),
@@ -157,9 +160,15 @@ pub(in crate::abstract_machine) fn conversion_words(
     match (from, to, value, converted) {
         | (Arithmetic::Integer(_), Arithmetic::Floating(format), &Value::Integer(number), _) => {
             let exact = Real::from_integer(number, format).exact;
+            // Only the x87 format's 64 bits hold this integer exactly.
+            let model = if Real::from_integer(number, Floating::Double).exact {
+                ""
+            } else {
+                format.on_linux()
+            };
             Some(if exact {
                 (
-                    format!("the {a} {shown} converts to the {b} {new}, exactly"),
+                    format!("the {a} {shown} converts to the {b} {new}, exactly{model}"),
                     vec![clauses::INTEGER_TO_FLOATING],
                     Topic::IntegerToFloating,
                 )
@@ -167,8 +176,9 @@ pub(in crate::abstract_machine) fn conversion_words(
                 (
                     format!(
                         "the {a} {shown} has no exact {b}, which holds every integer only up to \
-                         2^{}, so it becomes the nearest {b}, {new}",
-                        format.precision()
+                         2^{}{}, so it becomes the nearest {b}, {new}",
+                        format.precision(),
+                        format.on_linux()
                     ),
                     vec![clauses::INTEGER_TO_FLOATING, clauses::ROUND_TO_NEAREST],
                     Topic::FloatingPoint,
@@ -440,11 +450,12 @@ impl Machine {
                 format!(
                     "Both operands are {}, so the machine computes in {name}, as IEEE 754 does: \
                      the exact {word} of the two values, rounded to the nearest {name}. \
-                     {shown_exact} needs more than the {} bits of precision a {name} has, so the \
-                     result is the nearest {name}, exactly {}. That rounding is why a floating \
-                     result can differ from the decimal arithmetic you would do by hand.",
+                     {shown_exact} needs more than the {} bits of precision a {name} has{}, so \
+                     the result is the nearest {name}, exactly {}. That rounding is why a \
+                     floating result can differ from the decimal arithmetic you would do by hand.",
                     plural_type(name),
                     format.precision(),
+                    format.on_linux(),
                     z.exact()
                 ),
             )
@@ -715,7 +726,7 @@ pub(in crate::abstract_machine) fn floating_declaration(format: Floating) -> Str
         ""
     };
     format!(
-        "{} object ({} bytes on x86-64{padding}: {}, keeping {} significant decimal digits)",
+        "{} object ({} bytes on x86-64 Linux{padding}: {}, keeping {} significant decimal digits)",
         article(format.spelling()),
         format.bytes(),
         format.format_name(),
