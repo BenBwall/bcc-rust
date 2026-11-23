@@ -29,7 +29,8 @@ compilers are the evidence for what implementations do.
   by zero, a store into a literal). The probes are in
   [`claims/`](claims/), with [`claims/run.sh`](claims/run.sh), which
   compiles and runs them all; [`claims/results.txt`](claims/results.txt) is
-  its output for the three compilers. Warnings were also checked with no
+  its output for the three compilers. `run.sh` uses `-std=c17` unless `STD`
+  names another standard, so this output stays reproducible. Warnings were also checked with no
   options, `-Wall`, `-Wall -Wextra` and `-Wconversion`.
 
 ## Results
@@ -311,8 +312,9 @@ passes above. Part 20 of the visual audit records the work.
   -Wall -Wextra`, on x86-64 Linux with glibc 2.43; other targets' type
   facts come from `clang --target=… -dM -E`. The probes are `c29` to `c37`
   in [`claims/`](claims/), and
-  [`claims/results-part20.txt`](claims/results-part20.txt) is the output of
-  `run.sh`'s loop over them in C99.
+  [`claims/results-part20.txt`](claims/results-part20.txt) is their output
+  in C99. Part 20 ran `run.sh`'s loop with the standard changed by hand;
+  `STD=c99 sh web/docs/claims/run.sh c29_enum_type …` now gives it.
 
 ### Results
 
@@ -344,7 +346,7 @@ the table.
 | `&&` and `\|\|` go left to right with a sequence point, unlike `+` | note on `&&` and `\|\|` | §6.5.13p4, §6.5.14p4, §6.5p3 | Holds | |
 | `c ? 1 : 2.5` is a double | note on `?:` | §6.5.15p5 | Holds | |
 | Arguments have no order and no sequence point between them; in `int a = 1, b = a + 1;` b is 2 | note on the comma operator | §6.5.2.2p10, §6.8p3 | Holds | |
-| A call through a null pointer, or a pointer cast to the wrong type, "and a compiled program usually crashes there" | note on pointers to functions | `c30`: the null call crashes at `-O0` under all three and at `-O2` under GCC, but exits 44 under Clang and 0 under bcc at `-O2`; `c31`: the wrong type prints 21 (GCC `-O2`: a different garbage double each run), never crashes | **Over-promised** | The first usually crashes without optimization; the second often runs on, with caller and callee disagreeing about the arguments and result |
+| A call through a null pointer, or a pointer cast to the wrong type, "and a compiled program usually crashes there" | note on pointers to functions | `c30`: the null call crashes at `-O0` under all three and at `-O2` under GCC, but exits 44 under Clang and 0 under bcc at `-O2`; `c31`: the wrong type prints 21 (GCC `-O2`: a different garbage double each run), never crashes | **Over-promised** | The first usually crashes without optimization; the second often runs on, and may even give the right result (Part 21: a disagreement about where the arguments and result are is only one possible consequence) |
 | A call through a null pointer: "a compiled program usually crashes here" | the stop at such a call | `c30` | **Over-promised** | Crashes without optimization, but an optimizer may assume the call never happens |
 | "In compiled code the pointer holds the address where twice's machine code starts" | every call through a pointer (callbacks, notes 43, 71, 126, 155) | `c36`: an address on x86-64; the WebAssembly view's `call_indirect` steps: a table index | **Over-promised**, and contradicted by the WebAssembly view | "In x86-64 code … ; in WebAssembly it holds an index into a table of functions" |
 | A static initializer "reading a variable … is refused there" | note on constant expressions | `c32`: `static const int a = 1; int b = a;` compiles silently under GCC and Clang, even with `-pedantic`, and bcc refuses it; `c32b`, `c33`: a plain variable or a call is refused by all three; §6.6p10 lets an implementation accept other constant expressions | **Over-promised** | Compilers refuse those, though GCC and Clang accept reading a const variable whose value they know, as C lets them |
@@ -353,8 +355,8 @@ the table.
 | Enumeration constants are int; an enumeration's object may hold any value of its type | note and steps on enumerations | §6.4.4.3p2, §6.7.2.2p4 | Holds | |
 | "GCC chooses int when a constant is negative and unsigned int otherwise" | every enumeration's declaration | `c29`: GCC, Clang and bcc all agree; GCC manual, *Structures, Unions, Enumerations, and Bit-Fields* | Holds | Names Clang too |
 | "The type  itself is compatible with unsigned int", with a blank name | an enumeration with neither a tag nor a typedef name (corpus `e03`) | | **Wrong** | "The enumeration's type itself …"; a test pins it |
-| Forgetting a `break` is a bug "compilers can warn about" | note on `switch` | `c34`: GCC warns with `-Wextra`, Clang only with `-Wimplicit-fallthrough`, bcc not at all | Holds | Names the two options |
-| An inner name hides an outer one; "GCC's -Wshadow" warns | note on hidden names | `c35`: GCC, Clang and bcc warn with `-Wshadow`, none with `-Wall -Wextra` | Holds | Names Clang's too |
+| Forgetting a `break` is a bug "compilers can warn about" | note on `switch` | `c34`: GCC warns with `-Wextra` ([`results-part20.txt`](claims/results-part20.txt)); with `-Wimplicit-fallthrough` added, GCC and Clang warn and bcc reports the option unknown ([`results-part21.txt`](claims/results-part21.txt)) | Holds | Names the two options |
+| An inner name hides an outer one; "GCC's -Wshadow" warns | note on hidden names | `c35`: none warns with `-Wall -Wextra` ([`results-part20.txt`](claims/results-part20.txt)); GCC, Clang and bcc all warn with `-Wshadow` added ([`results-part21.txt`](claims/results-part21.txt)) | Holds | Names Clang's too |
 | A goto past an initializer leaves the object without its initial value | note on goto, and the jump's steps | §6.8p3, §6.8.6.1p2 | Holds | |
 | A typedef makes no new type and no object | note and steps on typedefs | §6.7.7p3 | Holds | |
 | ptrdiff_t "is long on x86-64" | pointer difference (strings, note 145) | `__PTRDIFF_TYPE__`: long for x86_64-linux-gnu, long long for x86_64-pc-windows-msvc | **Over-promised** | "on x86-64 Linux" |
@@ -363,9 +365,9 @@ the table.
 | `0x7FFFFFFFFFFFFFFF` is a long; decimal 4294967295 "would be a wider signed type" | constant steps | §6.4.4.1p5 | Holds | |
 | Pointers into one array compare like their subscripts; one past the end counts as the length | pointer comparisons | §6.5.8p5 | Holds | |
 | A refusal: "nested assignments/increments and unsupported syntax are rejected" | the machine's refusal of an expression it cannot parse, such as `_Bool` | Parts 13 and 14 run nested assignments and increments | **Wrong** (older text) | "expected an expression; this one uses syntax outside this subset" |
-| `?:`'s operands "must both be arithmetic, the same structure type, pointers to compatible types, or a pointer and a null pointer constant" | clause gloss, §6.5.15p3 | §6.5.15p3 also allows two void operands and a pointer with a pointer to void | **Over-promised** | Lists all six cases |
-| `==` compares "two numbers, two pointers to compatible types, or a pointer with the null pointer constant" | clause gloss, §6.5.9p2 | §6.5.9p2 also allows a pointer to an object with a pointer to void | **Over-promised** | Adds that case |
-| Two pointers "compare equal exactly when both are null, or … the same object or the same function (or one past the same array)" | clause gloss, §6.5.9p6 | §6.5.9p6 also makes one past an array equal to an object that follows it | **Over-promised** ("exactly") | Adds that case |
+| `?:`'s operands "must both be arithmetic, the same structure type, pointers to compatible types, or a pointer and a null pointer constant" | clause gloss, §6.5.15p3 | §6.5.15p3 also allows two void operands and a pointer with a pointer to void | **Over-promised** | Lists all six cases (Part 21: the pointer paired with void's must point to an object or incomplete type) |
+| `==` compares "two numbers, two pointers to compatible types, or a pointer with the null pointer constant" | clause gloss, §6.5.9p2 | §6.5.9p2 also allows a pointer to an object with a pointer to void | **Over-promised** | Adds that case (Part 21: or to an incomplete type) |
+| Two pointers "compare equal exactly when both are null, or … the same object or the same function (or one past the same array)" | clause gloss, §6.5.9p6 | §6.5.9p6 also makes one past an array equal to an object that follows it | **Over-promised** ("exactly") | Adds that case (Part 21: in §6.5.9p6's own terms) |
 | "C99 also allows two other representations, which no current machine uses" | glossary, two's complement | §6.2.6.2p2 (C99); C23 (N3220) §6.2.6.2p2 requires two's complement | **Over-promised**: not checkable | Names the two, and says C23 requires two's complement |
 | Two's complement is how "every machine bcc targets" stores a negative integer | glossary | `src/target.rs`: x86-64 and wasm32 | Holds | |
 | Glossary terms' clauses and pages (13 new) | glossary | `search-standard` pages | Holds | |
@@ -407,7 +409,32 @@ Pointers and arrays (14), Walking a string (28) and Callbacks (18).
 
 ### Left open
 
-- bcc has no `-Wimplicit-fallthrough`: it warns about neither a missing
-  `break` nor the option.
+- bcc has no `-Wimplicit-fallthrough`: it does not warn about a missing
+  `break`, and reports the option unknown.
 - `x & 1` for a negative x assumes two's complement; the note does not say
   so, since every machine the site describes uses it.
+
+## Part 21's follow-ups (2026-11-23)
+
+The reviews of Part 20 and of its results file (#442, #443) left six loose
+ends, fixed in Part 21 of the visual audit. The sources are those of the
+section above: N1256 through `search-standard`, GCC 14, Clang 23.1.5 and a
+dev build of bcc, in C99.
+
+| Claim | Where | Source | Verdict | Fix |
+| --- | --- | --- | --- | --- |
+| `?:` allows "one is a pointer and the other … a pointer to void" | clause gloss, §6.5.15p3 | §6.5.15p3 pairs void's pointer only with "a pointer to an object or incomplete type"; `c ? fp : v` for a function pointer `fp` draws GCC's "ISO C forbids conditional expr between 'void *' and function pointer" (`-pedantic`) and Clang's `-Wpointer-type-mismatch`, while the object pointer is silent | **Over-promised** | "or one is a pointer to an object or incomplete type and the other a pointer to void" |
+| `==` allows "a pointer to an object with a pointer to void" | clause gloss, §6.5.9p2 | §6.5.9p2: "a pointer to an object or incomplete type"; `fp == v` draws GCC's and Clang's `-pedantic` warning, `&x == v` none | **Over-promised** (an incomplete type was left out) | "a pointer to an object or incomplete type with a pointer to void" |
+| Two pointers are equal when "one points one past an array and the other to an object that happens to follow it" | clause gloss, §6.5.9p6 | §6.5.9p6: "a pointer to the start of a different array object that happens to immediately follow the first array object", and a pointer to an object equals one to "a subobject at its beginning" | **Over-promised** | Both cases in the paragraph's own terms |
+| A wrong-type call runs on "with the caller and the function disagreeing about where the arguments and the result are" | note on pointers to functions; the stop at such a call | §6.5.2.2p9: undefined whatever the types; `c38`: `int (*)(int)` called as `unsigned (*)(unsigned)` passes and returns in the same registers and prints 42 under all three compilers at `-O0` and `-O2` ([`results-part21.txt`](claims/results-part21.txt)) | **Over-promised**: a cause stated as a fact | Undefined "even when it seems to work"; a disagreement about where the values are is one possible consequence |
+| A long is "8 bytes on x86-64", and other sizes stated "on x86-64" | every object's declaration, `sizeof`, the size and range notes, the glossary, the datasheet, the rank panel | `clang --target=x86_64-pc-windows-msvc -dM -E`: `__SIZEOF_LONG__` 4 and `__SIZEOF_LONG_DOUBLE__` 8 (LLP64), against 8 and 16 for x86_64-linux-gnu (LP64) | **Over-promised** | Every stated size, range, alignment and format says "on x86-64 Linux" |
+| `-Wshadow` and `-Wimplicit-fallthrough` in the `c35` and `c34` rows | rows above | `run.sh` passed neither option | Unbacked | `EXTRA` passes them; [`results-part21.txt`](claims/results-part21.txt) records both runs |
+
+[`claims/run.sh`](claims/run.sh) now takes `STD` (the language standard,
+`c17` by default, so [`results.txt`](claims/results.txt) stays
+reproducible), `EXTRA` (options after `-Wall -Wextra`) and the names of the
+probes or lessons to run. A run with no names and no `STD` gives
+`results.txt` again: Clang 23.1.5's lines differ only in the values printed
+by the probes whose behavior is undefined (`c03b`, `c04b`, `c07`).
+[`claims/results-part21.txt`](claims/results-part21.txt) holds the three
+runs above, each under the command that made it.
