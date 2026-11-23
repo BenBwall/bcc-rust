@@ -871,6 +871,43 @@ mod tests {
     }
 
     #[test]
+    fn the_loops_lesson_branches_back_where_each_loop_tests() {
+        let loops = DEMOS.iter().find(|demo| demo.name == "loops.c").unwrap();
+        let (_, snapshots) = trace(loops.source);
+        let titles: Vec<&str> = snapshots
+            .iter()
+            .filter(|s| s.last.as_ref().is_some_and(|place| place.source.is_some()))
+            .map(|s| s.narration.title.as_str())
+            .collect();
+        assert_eq!(
+            titles
+                .iter()
+                .filter(|title| title.starts_with("Enter loop"))
+                .count(),
+            3,
+            "one loop each for while, do and for"
+        );
+        // while and for test at the top, so a plain `br` ends each pass;
+        // do tests at the bottom, so its passes end in a taken `br_if`.
+        let back = |prefix: &str| {
+            titles
+                .iter()
+                .filter(|title| {
+                    title.starts_with(prefix) && title.contains("back to the start of loop")
+                })
+                .count()
+        };
+        assert_eq!(back("Branch back"), 6, "three passes of while and of for");
+        assert_eq!(
+            back("`1` is nonzero: branch back"),
+            2,
+            "do's two passes after the first"
+        );
+        let (_, last) = run_to_end(Precompiled.compile(loops.source).unwrap());
+        assert_eq!(stdout(&last), "4 4 4\n");
+    }
+
+    #[test]
     fn overflow_wraps_where_c_is_undefined() {
         let overflow = DEMOS.iter().find(|demo| demo.name == "overflow.c").unwrap();
         let (_, snapshots) = trace(overflow.source);
