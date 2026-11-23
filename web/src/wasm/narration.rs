@@ -836,9 +836,10 @@ impl Context<'_> {
             ),
             | Instr::Loop { .. } => (
                 format!("Enter loop @{depth}"),
-                "`loop` opens a region too, but a branch to it jumps backward, to its start. A C \
-                 `for` or `while` loop becomes a `loop` whose body ends in a conditional branch \
-                 back to the top."
+                "`loop` opens a region too, but a branch to it jumps backward, to its start. \
+                 Without optimization, a C `while` or `for` loop tests its condition at the top \
+                 of the `loop` and ends each pass with a `br` back to that test; a `do` loop \
+                 tests at the bottom, so its pass ends in a conditional branch back to the top."
                     .to_owned(),
             ),
             | _ => {
