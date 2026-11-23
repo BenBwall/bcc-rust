@@ -2610,6 +2610,81 @@ mod tests {
         }
     }
 
+    /// GCC 14 files a qualifier lost from a pointed-to array's elements
+    /// under `-Wdiscarded-array-qualifiers`, which `-Wdiscarded-qualifiers`
+    /// does not reach, and makes it a pedantic warning from C23 on, which
+    /// `-pedantic-errors` makes an error. Each row
+    /// was checked against GCC 14 (`-std=c2x` for C23).
+    #[test]
+    fn gcc_files_array_qualifiers_under_their_own_option() {
+        let directory = Directory::new();
+        let line = |severity: &str, option: &str| {
+            format!(
+                "c.c:2:30: {severity}: initialization discards 'const' qualifier from pointer \
+                 target type [{option}]\n"
+            )
+        };
+        let warning = line("warning", "-Wdiscarded-array-qualifiers");
+        let werror = line("error", "-Werror=discarded-array-qualifiers");
+        let pedantic = line("error", "-Wdiscarded-array-qualifiers");
+        for (options, pragma, expected, status) in [
+            (&[][..], "", warning.as_str(), 0),
+            (&["-Wno-discarded-qualifiers"], "", &warning, 0),
+            (&["-Werror=discarded-qualifiers"], "", &warning, 0),
+            (&["-Werror=incompatible-pointer-types"], "", &warning, 0),
+            (&["-Wno-discarded-array-qualifiers"], "", "", 0),
+            (&["-Werror=discarded-array-qualifiers"], "", &werror, 1),
+            (&["-Werror"], "", &werror, 1),
+            (
+                &["-Werror", "-Wno-error=discarded-array-qualifiers"],
+                "",
+                &warning,
+                0,
+            ),
+            (&["-pedantic-errors"], "", &warning, 0),
+            (&["-std=c2x", "-pedantic-errors"], "", &pedantic, 1),
+            (&["-std=gnu2x", "-pedantic-errors"], "", &pedantic, 1),
+            (
+                &[
+                    "-std=c2x",
+                    "-pedantic-errors",
+                    "-Wno-error=discarded-array-qualifiers",
+                ],
+                "",
+                &warning,
+                0,
+            ),
+            (&["-std=c2x", "-pedantic"], "", &warning, 0),
+            (
+                &[],
+                "#pragma GCC diagnostic ignored \"-Wdiscarded-array-qualifiers\"\n",
+                "",
+                0,
+            ),
+        ] {
+            directory.write(
+                "c.c",
+                &format!(
+                    "{pragma}void g(void);\nvoid g(void) {{ int (*p)[3] = (const int (*)[3])0; \
+                     (void)p; }}\n"
+                ),
+            );
+            let mut args = vec!["-fsyntax-only", "-fno-diagnostics-show-caret", "c.c"];
+            args.extend(options);
+            let output = directory.bcc("--gcc-mode", &args);
+            let mut text = String::new();
+            for line in stderr(&output)
+                .lines()
+                .filter(|line| line.contains("warning:") || line.contains("error:"))
+            {
+                text.push_str(line);
+                text.push('\n');
+            }
+            assert_eq!(text, expected, "{options:?} {pragma:?}");
+            assert_eq!(output.status.code(), Some(status), "{options:?} {pragma:?}");
+        }
+    }
+
     /// GCC 14's `-Wshift-negative-value` is off by default, and `-Wextra`
     /// (or `-Werror=extra`) enables it from C99 on in either order, as a
     /// warning; its own option, `-Werror=`

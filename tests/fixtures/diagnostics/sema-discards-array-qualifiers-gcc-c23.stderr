@@ -1,0 +1,14 @@
+sema-discards-array-qualifiers-gcc-c23.c: In function 'ret':
+sema-discards-array-qualifiers-gcc-c23.c:6:30: error: return discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+    6 | int (*ret(void))[3] { return cpa; }
+      |                              ^~~
+sema-discards-array-qualifiers-gcc-c23.c: In function 'f':
+sema-discards-array-qualifiers-gcc-c23.c:8:17: error: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+    8 |   int (*a)[3] = cpa;
+      |                 ^~~
+sema-discards-array-qualifiers-gcc-c23.c:9:5: error: assignment discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+    9 |   a = cpa;
+      |     ^
+sema-discards-array-qualifiers-gcc-c23.c:10:8: error: passing argument 1 of 'take' discards 'const' qualifier from pointer target type [-Wdiscarded-array-qualifiers]
+   10 |   take(cpa);
+      |        ^~~

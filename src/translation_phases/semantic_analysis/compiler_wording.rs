@@ -187,7 +187,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if format == DiagnosticFormat::Clang && group == DiagnosticGroup::PointerQualifiers {
             return self.clang_discarded_qualifiers_wording(site, target, from, source);
         }
-        if format == DiagnosticFormat::Gcc && group == DiagnosticGroup::PointerQualifiers {
+        if format == DiagnosticFormat::Gcc
+            && matches!(
+                group,
+                DiagnosticGroup::PointerQualifiers | DiagnosticGroup::DiscardedArrayQualifiers
+            )
+        {
             return self.gcc_discarded_qualifiers_wording(site, target, from);
         }
         if site == ConversionSite::Other
@@ -359,15 +364,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// as GCC names it at its site, then `discards 'const' qualifier from
     /// pointer target type`, naming the qualifiers the value's pointed-to
     /// type has and the target's lacks in GCC's order (`'_Atomic const
-    /// volatile'`), in one quote and with the singular `qualifier`.
-    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.7.3p9, p. 109; PDF p. 121.
+    /// volatile'`), in one quote and with the singular `qualifier`. A
+    /// pointed-to array's qualifiers are its elements' (GCC's
+    /// `-Wdiscarded-array-qualifiers`, in the same words).
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.7.3p8-9, p. 109; PDF p. 121.
     fn gcc_discarded_qualifiers_wording(
         &mut self,
         site: ConversionSite,
         target: TypeId,
         from: TypeId,
     ) -> Option<StringCacheId> {
-        let lost = self.pointer_target(from)?.qualifiers & !self.pointer_target(target)?.qualifiers;
+        let element = |mut ty: TypeId| {
+            while let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
+                ty = element;
+            }
+            ty.qualifiers
+        };
+        let lost = element(self.pointer_target(from)?) & !element(self.pointer_target(target)?);
         let mut qualifiers = ArenaString::new_in(self.scratch);
         for (qualifier, spelling) in [
             (TypeQualifiers::ATOMIC, "_Atomic"),

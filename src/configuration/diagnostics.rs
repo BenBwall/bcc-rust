@@ -990,12 +990,14 @@ impl CompilerConfiguration {
     /// permerrors warnings whatever `-pedantic-errors` says.
     /// GCC's C89 implicit int and `-Wmain`, and Clang's implicitly declared
     /// library function, are pedantic warnings as well, in their compilers
-    /// only.
+    /// only, and so is GCC's discarded array qualifier from C23 on.
     pub(crate) fn pedantic_error(self, group: DiagnosticGroup) -> bool {
         let promoted = group.pedantic_promoted()
             || match group {
                 | DiagnosticGroup::ImplicitInt | DiagnosticGroup::Main =>
                     self.identity == super::CompilerIdentity::Gcc,
+                | DiagnosticGroup::DiscardedArrayQualifiers =>
+                    self.standard() >= super::CStandard::C23,
                 | DiagnosticGroup::ImplicitLibraryFunction =>
                     self.identity.rules() == super::RuleSet::Clang,
                 | _ => false,
@@ -1172,6 +1174,12 @@ diagnostic_groups! {
     Nonnull => Some("nonnull"), Warning, false;
     PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;
     PointerQualifiers => Some("incompatible-pointer-types-discards-qualifiers"), Warning, true;
+    /// GCC: a conversion that loses a qualifier of a pointed-to array's
+    /// elements (`int (*)[3]` from `const int (*)[3]`), which GCC 14 files
+    /// under an option of its own; a pedantic warning from C23 on, where the
+    /// array itself has its elements' qualifiers (`WARNING_FOR_QUALIFIERS`
+    /// in `convert_for_assignment`, GCC 14's `c/c-typeck.cc`).
+    DiscardedArrayQualifiers => Some("discarded-array-qualifiers"), Warning, false;
     /// GCC's `-Wincompatible-pointer-types` holds it.
     IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Permerror, true;
     IntConversion => Some("int-conversion"), Permerror, true;
@@ -1719,6 +1727,7 @@ impl DiagnosticGroup {
                 | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul
                 | Self::SwitchOutsideRange
+                | Self::DiscardedArrayQualifiers
         )
     }
 

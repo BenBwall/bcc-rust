@@ -372,6 +372,21 @@ status match GCC 14; GCC's `note: expected 'char *' but argument is of type
 'const char *'` after an argument's diagnostic is not modelled, as for every
 argument conversion.
 
+GCC's discarded array qualifiers (2026-11-23):
+`sema-discards-array-qualifiers-gcc` pins GCC 14's
+`-Wdiscarded-array-qualifiers` for a qualifier lost from a pointed-to
+array's elements, in `-Wdiscarded-qualifiers`' words at each site (return,
+initialization, assignment, argument, to `void *` too, through a typedef, a
+two-dimensional array and a lost `restrict`), with GCC's
+`-Wno-discarded-qualifiers -Werror=discarded-qualifiers` in bcc's spelling
+of that group, which leave it a warning; a pointed-to `const void` stays
+`-Wdiscarded-qualifiers`, an error there.
+`sema-discards-array-qualifiers-gcc-c23` pins the same warning as an error
+under C23's `-pedantic-errors`. Every warning and error line and the status
+match GCC 14 (`-std=c2x` for C23); GCC's `note: expected` after an
+argument's diagnostic is not modelled, and neither is its `-Wpedantic`
+error for pointers to arrays with different qualifiers before C23.
+
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for
 `__builtin_popcountg` and its siblings: signed, `bool`, enumerated,

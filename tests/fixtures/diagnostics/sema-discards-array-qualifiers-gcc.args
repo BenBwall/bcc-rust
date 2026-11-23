@@ -1,0 +1,1 @@
+--compiler-identity=gcc --diagnostic-format=gcc -std=gnu17 -Wno-incompatible-pointer-types-discards-qualifiers -Werror=incompatible-pointer-types-discards-qualifiers

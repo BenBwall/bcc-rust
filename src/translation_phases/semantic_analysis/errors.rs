@@ -1613,6 +1613,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Nonnull => "null passed to a callee that requires a non-null argument",
                     | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
                     | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
+                    | crate::configuration::DiagnosticGroup::DiscardedArrayQualifiers => "pointer conversion discards qualifiers of array elements",
                     | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
                     | crate::configuration::DiagnosticGroup::IntConversion => "incompatible integer and pointer conversion",
                     | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
