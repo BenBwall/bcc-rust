@@ -46,11 +46,13 @@ pub fn WasmView(
     let shown = move || wasm.program.with(Option::is_some);
     let problem = move || wasm.bcc_problem();
     let retry = move || problem().is_some_and(|problem| problem.retry);
-    let wat = Signal::derive(move || {
+    // The figure's example comes from the program's own functions, not
+    // the C library linked in ahead of them.
+    let own_code = Signal::derive(move || {
         wasm.program.with(|program| {
             program
                 .as_ref()
-                .map_or_default(|program| program.wat.clone())
+                .map_or_default(crate::wasm::WasmProgram::own_code)
         })
     });
     let figure_open = opened_unless_narrow();
@@ -79,7 +81,7 @@ pub fn WasmView(
                 <Narration wasm on_jump />
                 <Provenance wasm on_choose />
                 // How to read a line of the listing beside (or above).
-                <NotationFigure notation=&WASM_TEXT text=wat hidden=Signal::stored(false) open=figure_open />
+                <NotationFigure notation=&WASM_TEXT text=own_code hidden=Signal::stored(false) open=figure_open />
                 <div class="wasm-row">
                     <state::OperandStack wasm />
                     <state::Locals wasm />

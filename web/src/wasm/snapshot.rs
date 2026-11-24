@@ -141,6 +141,40 @@ impl WasmProgram {
             .map(|line| line as usize)
     }
 
+    /// The listing's functions that hold a line of C, in order: the
+    /// program's own code, without the C library a WASI command links in
+    /// (built without line information, `web/wasm/generate.sh`), whose
+    /// `$_start` comes first. The whole listing when no function has a C
+    /// line.
+    pub fn own_code(&self) -> String {
+        let mut own = String::new();
+        let mut function = String::new();
+        let mut placed = false;
+        let mut flush = |function: &mut String, placed: bool| {
+            if placed {
+                own.push_str(function);
+            }
+            function.clear();
+        };
+        for (index, line) in self.wat.split_inclusive('\n').enumerate() {
+            if line.trim_start().starts_with("(func ") {
+                flush(&mut function, placed);
+                placed = false;
+            }
+            function.push_str(line);
+            placed |= self
+                .lines
+                .get(index)
+                .is_some_and(|line| line.source.is_some());
+        }
+        flush(&mut function, placed);
+        if own.is_empty() {
+            self.wat.clone()
+        } else {
+            own
+        }
+    }
+
     /// The listing line of the instruction at module `offset`.
     pub fn wat_line_of(&self, offset: u32) -> Option<usize> {
         self.lines
