@@ -298,9 +298,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.floating_value(operand)
             };
+            // A real operand's imaginary part stays +0, whatever sign negating
+            // it would give, as a conversion to a complex type reads it
+            // (C99 §6.3.1.7p1).
+            let complex = self.complex_type(ty);
             let value = value.map(|value| {
-                if op == U::Minus {
+                if op == U::Minus && complex {
                     Self::floating_negate(value)
+                } else if op == U::Minus {
+                    super::super::Floating::real(value.real.negate())
                 } else if conjugate {
                     super::super::Floating {
                         real: value.real,
@@ -344,8 +350,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .then(|| self.binary128_value(operand))
                 .flatten();
             info.set_binary128(folded.map(|value| {
-                if op == U::Minus {
+                if op == U::Minus && self.complex_type(ty) {
                     value.negate()
+                } else if op == U::Minus {
+                    super::super::constants::Binary128Value::real(value.real.negate())
                 } else {
                     value
                 }
