@@ -7077,9 +7077,12 @@ encodings, as each item says.
   The figure adds no control: its parts list is named "The line, part by
   part" and its key "Other colours in this view" for screen readers, and
   its example is plain text in its colours. The narrow-card layout of
-  item 3 came after that build; it was checked on the same build with only
-  that CSS added (390x844 dark, the Objects lesson, every back-end stage,
-  no error and no sideways scroll), and CI built the final head.
+  item 3 came after that build. It was checked first on that build with
+  only its CSS added (390x844 dark, the Objects lesson), then on CI's
+  build of `a2a53a1e1` (run 45305513222): the Callbacks lesson at
+  390x844 in both themes, 1024x768 light and 1440x900 light, 44 states,
+  each with the figure, none with an error or sideways scroll, and every
+  colour at least 6.88:1.
 
 ### Left for later
 
