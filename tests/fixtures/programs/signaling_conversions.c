@@ -7,7 +7,9 @@
    `__builtin_isfpclass` folds the same class. An initializer of an object
    of another format converts the value as by assignment, which quiets it:
    a scalar, a member, an `x87` array element, or a complex part. A real
-   value's imaginary part is +0 in a complex object, a negated NaN's too. */
+   value's imaginary part is +0 in a complex object, a negated NaN's too.
+   A `_Float16` NaN's real part in a `_Complex _Float16` keeps its format,
+   so it stays signaling. */
 #include <stdio.h>
 #include <string.h>
 
@@ -145,6 +147,10 @@ int main(void) {
     C(_Complex float, 4, __builtin_nansf16(""))
     C(_Complex float, 4, -(_Float16)1.0)
     C(_Complex float, 4, -__builtin_nansf16(""))
+    C(_Complex _Float16, 2, __builtin_nansf16(""))
+    C(_Complex _Float16, 2, __builtin_nansf16("0x3"))
+    C(_Complex _Float16, 2, -__builtin_nansf16(""))
+    C(_Complex _Float16, 2, (_Float16)__builtin_nansf16(""))
 #endif
     {
         static _Complex long double fixed[1] = {-__builtin_nansl("")};

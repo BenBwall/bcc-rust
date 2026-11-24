@@ -306,7 +306,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let Operand::Excess(value) = item.operand else {
             return self.convert_value(item, to, source);
         };
-        let value = self.quieted_excess(value);
         let operand = match target {
             | Repr::Void => Operand::Void,
             | Repr::Bool => {
@@ -323,9 +322,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let value = self.convert(opcode, ty, value);
                 Operand::Value(self.normalize(value, target))
             },
-            | Repr::Float { ty } =>
-                Operand::Value(self.float_from(value, Repr::Float { ty: Type::F32 }, ty, source)?),
-            // To `_Complex _Float16` the excess stays one, in `f32` parts.
+            | Repr::Float { ty } => {
+                let value = self.quieted_excess(value);
+                Operand::Value(self.float_from(value, Repr::Float { ty: Type::F32 }, ty, source)?)
+            },
+            // To `_Complex _Float16` the excess stays one, in `f32` parts, and
+            // keeps a signaling NaN: no format changes.
             | Repr::Complex { .. } if self.complex_half(to) => {
                 let imag = self.fconst(Type::F32, 0);
                 self.complex_pair([value, imag])
@@ -333,6 +335,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             // The real part converts from the excess; the imaginary part is
             // zero (C99 §6.3.1.7 paragraph 1, p. 44; PDF p. 56).
             | Repr::Complex { component } => {
+                let value = self.quieted_excess(value);
                 let real =
                     self.float_from(value, Repr::Float { ty: Type::F32 }, component, source)?;
                 let imag = self.fconst(component, 0);
