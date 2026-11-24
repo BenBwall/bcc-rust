@@ -284,11 +284,16 @@ mod tests {
         } else {
             "target/llvm/bin/clang"
         });
-        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        // An empty source file of its own: Clang on Windows cannot open `NUL`.
+        let directory = std::env::temp_dir().join(format!("bcc-no-inline-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let empty = directory.join("empty.c");
+        std::fs::write(&empty, "").unwrap();
         let no_inline = |command: &mut Command, options: &[&str]| {
             let output = command
                 .args(options)
-                .args(["-dM", "-E", "-x", "c", null])
+                .args(["-dM", "-E"])
+                .arg(&empty)
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{options:?}: {output:?}");
@@ -333,6 +338,7 @@ mod tests {
             );
             assert_eq!(actual, expected, "--gcc-mode {options:?}");
         }
+        drop(std::fs::remove_dir_all(&directory));
     }
 
     /// A read of an uninitialized local is a fixed value, so masking it clears
