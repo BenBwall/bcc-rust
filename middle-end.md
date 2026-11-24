@@ -3462,14 +3462,19 @@ way keeps a frame pointer. TinyCC's `tests/tcctest.c` relies on them
   same time either way, within run-to-run noise.
 - **Without frame pointers** (optimized, or `-fomit-frame-pointer`) bcc does
   what GCC does rather than refuse: the walk reads whatever each frame's
-  `%rbp` slot holds. A function that takes its frame address still pushes
-  `%rbp` first, so level 1 is right whenever its caller keeps a frame
-  pointer; deeper levels may be any value, and following one may fault.
-  Optimization also changes which frames exist: inlined functions have none
-  and sibling calls replace theirs. TinyCC's test prints different lines with
-  GCC 13 at `-O2 -fno-omit-frame-pointer` and crashes with Clang 18 at `-O1`
-  and `-O2`; bcc's `--opt=bcc` inlines its `bfa` functions in the same way,
-  so the command-line test marks them `noinline`.
+  `%rbp` slot holds. A System V function that takes its frame address keeps
+  a frame pointer linked to its caller's at every optimization level, in
+  the LLVM and native back ends, as GCC's and Clang's do (the native one
+  since 2026-11-24; before, it pushed `%rbp` without setting it, which
+  broke the chain at each such frame). So the walk is right through every
+  frame that keeps a frame pointer, and only a frame that omits one breaks
+  it: the levels past such a frame may be any value, and following one may
+  fault. Optimization also changes which frames exist: inlined functions
+  have none and sibling calls replace theirs. TinyCC's test prints
+  different lines with GCC 13 at `-O2 -fno-omit-frame-pointer` and crashes
+  with Clang 18 at `-O1` and `-O2`; bcc's `--opt=bcc` inlines its `bfa`
+  functions in the same way, so the command-line test marks them
+  `noinline`.
 - **Interpreter.** Its frames link no machine frames, so a load through a
   frame address (or the word above it) stops the program as unsupported: "a
   frame or return address of an outer frame (__builtin_frame_address or
