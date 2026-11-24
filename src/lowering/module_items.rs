@@ -2388,20 +2388,26 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Ok(());
         }
         if let Repr::Complex { component } = representation {
+            // A part of another format converts as by assignment
+            // (§6.7.8p11), which quiets a signaling NaN.
+            let stored = |part| {
+                self.sema
+                    .stored_float_bits(self.context, info.ty, part, component)
+            };
+            let binary128 = |part| {
+                SemanticTranslationUnit::stored_binary128_bits(self.context, part, component)
+            };
             let real = match (info.floating(), integer) {
-                | _ if let Some(value) = info.binary128() =>
-                    floats::binary128_bits(value.real, component),
-                | (Some(value), _) => floats::constant_bits(&value.real, component),
+                | _ if let Some(value) = info.binary128() => binary128(value.real),
+                | (Some(value), _) => stored(value.real),
                 | (_, Some(value)) => self.sema.integer_float_bits(value, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
             let imag = if let Some(value) = info.binary128() {
-                floats::binary128_bits(value.imag, component)
+                binary128(value.imag)
             } else {
-                info.floating().map_or(Some(0), |value| {
-                    floats::constant_bits(&value.imag, component)
-                })
+                info.floating().map_or(Some(0), |value| stored(value.imag))
             }
             .ok_or_else(unsupported)?;
             for (index, bits) in [real, imag].into_iter().enumerate() {
@@ -2416,10 +2422,15 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Ok(());
         }
         if let Repr::Float { ty: float } = representation {
+            // A value of another format converts as by assignment
+            // (§6.7.8p11), which quiets a signaling NaN.
+            let context = self.context;
             let bits = match (info.floating(), integer) {
                 | _ if let Some(folded) = info.binary128() =>
-                    floats::binary128_bits(folded.real, float),
-                | (Some(folded), _) => floats::constant_bits(&folded.real, float),
+                    SemanticTranslationUnit::stored_binary128_bits(context, folded.real, float),
+                | (Some(folded), _) =>
+                    self.sema
+                        .stored_float_bits(context, info.ty, folded.real, float),
                 | (None, Some(value)) => self.sema.integer_float_bits(value, float),
                 | (None, None) => None,
             }

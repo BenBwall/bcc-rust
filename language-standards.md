@@ -2150,8 +2150,16 @@ exist: `__builtin_huge_valfN`, `__builtin_inffN`, `__builtin_nanfN` and
 `__builtin_nansfN` for `f32`, `f64`, `f32x` and `f64x` (the `f128` ones
 already exist). The `nans` family, `__builtin_nans` included, gives a
 signaling NaN of the result's format with the tag's payload, bit for bit as
-GCC does; a conversion that cannot keep a NaN's payload makes it quiet. Without the switch these builtins are unknown to calls and
-`__has_builtin`.
+GCC does. A constant conversion within one format (a cast to the operand's
+own type, a `?:` arm of the result's type) keeps a signaling NaN, and one
+to another format quiets it, explicit or implicit, an initializer's
+included, as Clang and GCC do. Clang keeps the payload's leading bits;
+under the GCC identity a NaN whose payload is only the bit below the quiet
+bit, GCC's encoding of `__builtin_nans("")`'s empty payload, becomes the
+default quiet NaN, and so does that payload spelled out
+(`__builtin_nans("0x4000000000000")`, `__builtin_nansf("0x200000")`,
+`__builtin_nansl("0x2000000000000000")`), which GCC keeps. Without the
+switch these builtins are unknown to calls and `__has_builtin`.
 
 Verified against real glibc 2.43 headers (`<math.h>`, `<complex.h>`,
 `<stdlib.h>`, `<float.h>`, with and without `_GNU_SOURCE`) under an emulated

@@ -4,7 +4,9 @@
    quiets it. Clang keeps the payload's leading bits; GCC drops the bit
    that only encodes `__builtin_nans("")`'s empty payload. Each value is
    folded in a static initializer and in an automatic one, and Clang's
-   `__builtin_isfpclass` folds the same class. */
+   `__builtin_isfpclass` folds the same class. An initializer of an object
+   of another format converts the value as by assignment, which quiets it:
+   a scalar, a member, an `x87` array element, or a complex part. */
 #include <stdio.h>
 #include <string.h>
 
@@ -26,6 +28,46 @@ static void dump(const char *name, const void *object, int size,
         dump(#e, &fixed, size, folded);                                        \
         dump(#e, &automatic, size, __builtin_issignaling(automatic));          \
     }
+
+/* `e` stored in an object of the other real type `ty`. */
+#define S(ty, size, e)                                                         \
+    {                                                                          \
+        static ty fixed = e;                                                   \
+        ty automatic = e;                                                      \
+        dump(#ty " = " #e, &fixed, size, __builtin_issignaling(fixed));        \
+        dump(#ty " = " #e, &automatic, size,                                   \
+             __builtin_issignaling(automatic));                                \
+    }
+
+/* `e` stored in an object of the complex type `ty`, of whose parts `size`
+   bytes each are shown. */
+#define C(ty, size, e)                                                         \
+    {                                                                          \
+        static ty fixed = e;                                                   \
+        ty automatic = e;                                                      \
+        dump(#ty " = " #e, &fixed, size,                                       \
+             __builtin_issignaling(__real__ fixed));                           \
+        dump(#ty " = " #e, (char *)&fixed + sizeof fixed / 2, size,            \
+             __builtin_issignaling(__imag__ fixed));                           \
+        dump(#ty " = " #e, &automatic, size,                                   \
+             __builtin_issignaling(__real__ automatic));                       \
+    }
+
+struct members {
+    float f;
+    double d;
+    long double l;
+};
+
+#define MEMBERS                                                                \
+    { __builtin_nans(""), __builtin_nansf(""), (double)__builtin_nans("") }
+#define ELEMENTS { __builtin_nansf(""), (double)__builtin_nans("3") }
+
+static void dump_members(const char *name, const struct members *m) {
+    dump(name, &m->f, 4, __builtin_issignaling(m->f));
+    dump(name, &m->d, 8, __builtin_issignaling(m->d));
+    dump(name, &m->l, 10, __builtin_issignaling(m->l));
+}
 
 #ifdef __clang__
 _Static_assert(__builtin_isfpclass((float)__builtin_nansf(""), 1), "kept");
@@ -63,5 +105,43 @@ int main(void) {
     T(__float128, 16, 1 ? __builtin_nansf128("") : 0)
     T(double, 8, (double)__builtin_nansf128(""))
 #endif
+    S(double, 8, (float)__builtin_nansf(""))
+    S(double, 8, 1 ? __builtin_nansf("") : 0)
+    S(double, 8, __builtin_nansf("0x5"))
+    S(float, 4, __builtin_nans(""))
+    S(float, 4, -__builtin_nans("0x123"))
+    S(float, 4, __builtin_nansl(""))
+    S(long double, 10, (double)__builtin_nans(""))
+    S(long double, 10, __builtin_nansf(""))
+    S(double, 8, __builtin_complex(__builtin_nansf(""), 0.0f))
+#ifdef __x86_64__
+    S(_Float16, 2, __builtin_nans(""))
+    S(_Float16, 2, 1 ? __builtin_nans("0x123") : 0)
+#endif
+#ifdef __SIZEOF_FLOAT128__
+    S(__float128, 16, __builtin_nans(""))
+    S(double, 8, __builtin_nansf128(""))
+    S(long double, 10, __builtin_nansf128("0x5"))
+#endif
+    C(_Complex double, 8, __builtin_nansf(""))
+    C(_Complex double, 8, __builtin_complex(__builtin_nansf(""), 0.0f))
+    C(_Complex float, 4, __builtin_complex(0.0, -__builtin_nans("")))
+    C(_Complex long double, 10, __builtin_complex(__builtin_nans(""), 1.0))
+    {
+        static struct members fixed = MEMBERS;
+        struct members automatic = MEMBERS;
+        dump_members("static members", &fixed);
+        dump_members("automatic members", &automatic);
+    }
+    {
+        static long double fixed[2] = ELEMENTS;
+        long double automatic[2] = ELEMENTS;
+        for (int i = 0; i < 2; i++) {
+            dump("static elements", &fixed[i], 10,
+                 __builtin_issignaling(fixed[i]));
+            dump("automatic elements", &automatic[i], 10,
+                 __builtin_issignaling(automatic[i]));
+        }
+    }
     return 0;
 }
