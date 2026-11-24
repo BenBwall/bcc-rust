@@ -1393,6 +1393,16 @@
   .notation-key { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--screen-rule); font-size: 11px; line-height: 1.45; color: var(--screen-dim); }
   .notation-key > div { display: inline-flex; align-items: baseline; gap: 8px; }
   .notation-key dd { margin: 0; }
+  /* On a narrow card each part's meaning goes under it, not in a column
+     beside the widest part. */
+  @container insight (max-width: 560px) {
+    .notation-parts { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+    .notation-part dd { margin: 0 0 6px 2ch; }
+    .notation-key { display: grid; gap: 4px; }
+    .notation-key > div { display: block; }
+    .notation-key dt, .notation-key dd { display: inline; }
+    .notation-key dd { margin-left: 1ch; }
+  }
   .ink-instruction { color: var(--syntax-keyword); font-weight: 700; }
   .ink-type { color: var(--syntax-type); }
   .ink-value { color: var(--syntax-value); }
