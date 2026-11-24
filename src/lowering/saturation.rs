@@ -309,7 +309,10 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
 /// Binary128 holds every value of `f32`, `f64` and `f80` exactly, so the
 /// conversion goes through it. `None` for a half type, and under
 /// `-fsignaling-nans` for a signaling NaN, whose conversion raises
-/// "invalid" at run time.
+/// "invalid" at run time. GCC holds `__builtin_nans("")` with an empty
+/// payload, which only its encoding fills with the bit below the quiet
+/// bit, so a signaling NaN with that payload alone converts to the default
+/// quiet NaN (`real_convert` in GCC's `real.cc`).
 /// C99: §6.3.1.5, p. 44; PDF p. 56; §F.3 paragraph 1, pp. 445-447;
 /// PDF pp. 457-459.
 pub(super) fn convert_constant(
@@ -323,6 +326,18 @@ pub(super) fn convert_constant(
     if to.half_format().is_some() || (signaling_nans && signaling(bits, from)) {
         return None;
     }
+    let bits = match fraction_width(from) {
+        | Some(fraction_bits) if signaling(bits, from) => {
+            let quiet = 1_u128 << (fraction_bits - 1);
+            let filler = quiet >> 1;
+            if bits & (quiet - 1) == filler {
+                bits & !filler | quiet
+            } else {
+                bits
+            }
+        },
+        | _ => bits,
+    };
     let value = match from {
         | Type::F32 => Binary128::from_f32(f32::from_bits(u32::try_from(bits).ok()?)),
         | Type::F64 => Binary128::from_f64(f64::from_bits(u64::try_from(bits).ok()?)),
@@ -331,6 +346,18 @@ pub(super) fn convert_constant(
         | _ => return None,
     };
     floats::binary128_bits(value, to)
+}
+
+/// The width of the floating type `ty`'s fraction, without the x87
+/// format's explicit integer bit.
+fn fraction_width(ty: Type) -> Option<u32> {
+    Some(match ty {
+        | Type::F32 => 23,
+        | Type::F64 => 52,
+        | Type::F80 => 63,
+        | Type::F128 => 112,
+        | _ => return None,
+    })
 }
 
 /// Whether `bits` encodes a signaling NaN of the floating type `from`: an

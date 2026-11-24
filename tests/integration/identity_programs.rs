@@ -60,6 +60,14 @@ mod tests {
         matches_the_claimed_compiler("float_comparisons.c");
     }
 
+    /// Constant signaling NaNs through casts and conditionals: kept within
+    /// one format, quieted by a conversion to another, with each
+    /// compiler's payload.
+    #[test]
+    fn signaling_conversions_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("signaling_conversions.c");
+    }
+
     /// Clang's `__builtin_isfpclass`, `__builtin_issubnormal` and
     /// `__builtin_iszero` for every class of every real floating type,
     /// signaling NaNs, subnormals and x87's unsupported encodings included,

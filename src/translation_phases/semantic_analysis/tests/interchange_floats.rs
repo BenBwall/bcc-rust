@@ -261,3 +261,32 @@ fn signaling_nan_builtins_keep_their_payload() {
         },
     );
 }
+
+/// A conversion between two types of one format keeps a constant signaling
+/// NaN, as MSVC's `long double`, which is `double`, does; a conversion to
+/// another format quiets it.
+#[test]
+fn signaling_nans_convert_by_format() {
+    for (target, kept) in [(Target::LinuxGnu, false), (Target::WindowsMsvc, true)] {
+        let source = format!(
+            "_Static_assert(__builtin_issignaling((long double)__builtin_nans(\"\")) == {}, \"\");
+             _Static_assert(__builtin_issignaling((double)__builtin_nans(\"\")), \"\");
+             _Static_assert(!__builtin_issignaling((float)__builtin_nans(\"\")), \"\");
+             _Static_assert(__builtin_issignaling(1 ? __builtin_nansf(\"\") : 0.0f), \"\");",
+            i32::from(kept)
+        );
+        with_configuration(
+            &source,
+            interchange(CStandard::C17, ExtensionPolicy::Allow).with_target(target),
+            |context, _| {
+                assert_eq!(
+                    context.pending_error_count(),
+                    0,
+                    "{}: {:?}",
+                    target.triple(),
+                    messages(context)
+                );
+            },
+        );
+    }
+}
