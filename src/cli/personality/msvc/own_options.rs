@@ -132,15 +132,20 @@ impl State {
             // as for `/EH`; the vectorizer's permission and the processor to
             // tune for, which bcc's optimizer does not consult, as its
             // Clang personality ignores `-f[no-]vectorize` and `-mtune=`;
-            // C++'s member-pointer layouts and virtual-base modes (`/vd`
-            // with a number); the switches clang-cl ignores (`/Zm`, `/Zo`,
-            // `/Qgather-`, `/Qscatter-`, `/cgthreads`, `/errorReport`, and
-            // `/w` with a warning setting it does not read); and the
-            // defaults `/kernel-`, `/JMC-` and `/vlen`, which only undo an
-            // earlier option.
+            // C++'s member-pointer layouts; the switches clang-cl ignores
+            // (`/Zm`, `/Zo`, `/Qgather-`, `/Qscatter-`, `/cgthreads`,
+            // `/errorReport`); and the default `/kernel-`.
             | "FC" | "GX" | "GX-" | "Qgather-" | "Qscatter-" | "Qvec" | "Qvec-" | "Zm" | "Zo"
-            | "Zo-" | "cgthreads" | "errorReport" | "kernel-" | "tune:" | "vmb" | "vmg" => {},
+            | "Zo-" | "cgthreads" | "errorReport" | "kernel-" | "tune:" | "vmb" | "vmg"
+            // The hash of each file in the CodeView debug information; bcc
+            // writes no file checksums at all.
+            | "ZH:MD5" | "ZH:SHA1" | "ZH:SHA_256"
+            // How `__regcall` passes arguments, a calling convention bcc
+            // does not have: a program that uses it does not compile.
+            | "Gregcall4" => {},
+            // A warning setting clang-cl does not read.
             | "w" if option != "w" && warning_setting(option).is_none() => {},
+            // C++'s virtual-base mode, a number.
             | "vd" =>
                 if value.parse::<u32>().is_err() {
                     self.command_line_error(
@@ -151,12 +156,6 @@ impl State {
                         ),
                     );
                 },
-            // The hash of each file in the CodeView debug information; bcc
-            // writes no file checksums at all.
-            | "ZH:MD5" | "ZH:SHA1" | "ZH:SHA_256" => {},
-            // How `__regcall` passes arguments, a calling convention bcc
-            // does not have: a program that uses it does not compile.
-            | "Gregcall4" => {},
             // The versions clang-cl takes under `/winsysroot`, `/vctoolsdir`
             // and `/winsdkdir`, which bcc refuses: without them clang-cl
             // looks only in the registry, which bcc does not read either.
