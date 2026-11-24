@@ -635,12 +635,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
                             self.pointer_arithmetic_target(t)
-                                && self.pointer_compatible(target, t, false)
+                                && self.operand_targets_compatible(e, (lt, rt), (target, t), false)
                         })
                     {
                         self.report_void_arithmetic(e, target);
-                        let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
-                        self.gcc_array_qualifier_pedwarn(lt, rt, operator);
                         info.ty = self.types.scalar(self.types.target.ptrdiff_t);
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
@@ -752,17 +750,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))
                     {
-                        let compatible = self.pointer_compatible(lp, rp, equality)
+                        self.operand_targets_compatible(e, (lt, rt), (lp, rp), equality)
                             && (equality
-                                || !matches!(
-                                    self.types.nodes[lp.index],
-                                    TypeKind::Function { .. }
-                                ));
-                        if compatible {
-                            let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
-                            self.gcc_array_qualifier_pedwarn(lt, rt, operator);
-                        }
-                        compatible
+                                || !matches!(self.types.nodes[lp.index], TypeKind::Function { .. }))
                     } else {
                         false
                     };

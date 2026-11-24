@@ -1208,6 +1208,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// [`Self::pointer_compatible`] for the targets `lp` and `rp` of the
+    /// operands, of types `lt` and `rt`, of the comparison or subtraction
+    /// `e`, with GCC's report of arrays differing in element qualifiers at
+    /// its operator ([`Self::gcc_array_qualifier_pedwarn`]).
+    /// C99: §6.5.6 paragraph 3, pp. 82-83; PDF pp. 94-95; §6.5.8 paragraph 2,
+    /// p. 85; PDF p. 97; §6.5.9 paragraph 2, p. 86; PDF p. 98.
+    pub(in crate::translation_phases::semantic_analysis) fn operand_targets_compatible(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        (lt, rt): (TypeId, TypeId),
+        (lp, rp): (TypeId, TypeId),
+        void: bool,
+    ) -> bool {
+        let compatible = self.pointer_compatible(lp, rp, void);
+        if compatible {
+            let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+            self.gcc_array_qualifier_pedwarn(lt, rt, operator);
+        }
+        compatible
+    }
+
     /// Whether `lp` and `rp` are array types whose elements differ in
     /// qualifiers and that are compatible without them, `_Atomic` aside.
     fn differently_qualified_arrays(&mut self, lp: TypeId, rp: TypeId) -> bool {
