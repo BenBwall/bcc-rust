@@ -400,7 +400,8 @@ error, naming all the `void`'s qualifiers, which a pragma ignoring
 `-Wpedantic` does not silence. The value operands of `__atomic_store_n`,
 `__atomic_exchange_n`, `__atomic_compare_exchange_n`,
 `__sync_lock_test_and_set` and the `__sync` compare-and-swap builtins
-get neither, as GCC converts them as by a cast.
+get neither, as GCC converts them as by a cast (`sema-atomic-operands-gcc`
+pins the other operand rules).
 `sema-array-qualifiers-pedantic-warnings-gcc` pins the same reports as
 warnings under plain `-pedantic`, which exits 0. Every warning and error
 line and the status match GCC 14; carets over a cast or `&` operand span
@@ -1220,13 +1221,15 @@ cast followed by integer arithmetic, so strict modes do not need GNU folding.
 
 ### Atomic resources and type-generic operations
 
-Six fixtures cover atomic diagnostics and preserve following valid input:
+Eight fixtures cover atomic diagnostics and preserve following valid input:
 
 | Fixture | Coverage |
 | --- | --- |
 | `sema-atomic-type` | `InvalidAtomicType`: arrays, functions, qualified/already-atomic specifier operands, incomplete/void operands and invalid qualifier applications. |
 | `sema-atomic-builtin` | `InvalidAtomicOperand` and shared arity errors: non-atomic C11 pointers, const writes, incompatible expected/value operands, floating bitwise fetches and invalid GNU/sync pointees. |
-| `sema-atomic-order` | `InvalidAtomicOrder`, `InvalidAtomicFailureOrder` and `AtomicBufferQualifiers` warnings; valid runtime orders, stronger failure orders and unrestricted fences remain accepted. |
+| `sema-atomic-order` | `InvalidAtomicOrder` and `InvalidAtomicFailureOrder`; a qualified expected or generic operand is Clang's `-Wincompatible-pointer-types-discards-qualifiers` argument warning; valid runtime orders, stronger failure orders and unrestricted fences remain accepted. |
+| `sema-atomic-operands-gcc` | GCC 14's operand checks under the GCC identity with `-std=gnu11 -pedantic`: a generic builtin's pointers of the first operand's size pass whatever their types, one of another size, an integer or a function pointer is `AtomicGenericOperand` (`size mismatch in argument N`, `must be a pointer type`, `must not be a pointer to a function`), a `const` output or a `volatile` later operand is a `-Wdiscarded-qualifiers` pedwarn, `__atomic_compare_exchange_n`'s expected value is an argument of `__atomic_compare_exchange_4`'s `void *` parameter, and value operands that discard qualifiers or mix pointers and integers convert silently, as by a cast; `__sync` arithmetic and bitwise builtins and `__atomic_clear` take a pointer to an array. Every line matches GCC 14 except the expected operand's column: GCC reports it at an unrelated earlier token (the statement or function start), bcc at the call. |
+| `sema-atomic-operands-clang` | Clang 23's operand checks under the Clang identity with `-std=gnu11 -pedantic-errors`: qualified generic, expected and value operands are `-Wincompatible-pointer-types-discards-qualifiers` errors, a null expected or generic operand is `-Wnonnull` at the call, and `__atomic_test_and_set`/`__atomic_clear` take any object. Matches Clang 23.1.5 line for line. |
 | `sema-atomic-generic` | `InvalidGenericSelection`, no matching association, duplicate compatible associations, and a selected false assertion. |
 | `sema-atomic-constant` | Atomic size assertion evaluation, non-ICE atomic casts/runtime lock-free sizes, nonconstant 16-byte queries, atomic bit-fields and incomplete pointer fetches. |
 | `sema-atomic-deprecated` | `DeprecatedMacro` at direct and wrapped C17 resource/user macro uses, with expansion and pragma labels; identical redefinition, `#ifdef`/`#ifndef`, both `defined` forms, adjacent message literals, `_Pragma`, `#undef` clearing, and use-location suppression for a system-header replacement. |

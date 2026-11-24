@@ -70,7 +70,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let CommonBuiltin::Atomic(atomic) = builtin else {
                     return None;
                 };
-                return Some(self.atomic_call(e, atomic, arguments));
+                return Some(self.atomic_call(e, name.name, atomic, arguments));
             },
             // A prototyped call whose immediates `type_call` checks.
             | crate::builtins::TypeRule::X86Signature => return None,

@@ -62,20 +62,20 @@ warning: memory order argument to atomic operation is invalid
    |
    = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
 
-warning: atomic buffer argument discards pointer target qualifiers
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
   --> sema-atomic-order.c:13:50
    |
 13 |     __c11_atomic_compare_exchange_strong(atomic, qualified, 1, 5, 0);
-   |                                                  ^^^^^^^^^ pointer conversion discards qualifiers
+   |                                                  ^^^^^^^^^ pointer constraint violation
    |
-   = note: Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
-warning: atomic buffer argument discards pointer target qualifiers
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
   --> sema-atomic-order.c:14:30
    |
 14 |     __atomic_store(expected, qualified, 0);
-   |                              ^^^^^^^^^ pointer conversion discards qualifiers
+   |                              ^^^^^^^^^ pointer constraint violation
    |
-   = note: Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 10 warnings generated.

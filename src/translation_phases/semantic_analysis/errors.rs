@@ -841,6 +841,12 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC "Integer Overflow Builtins". C23: §7.20.1p3,
     /// p. 313; PDF p. 326.
     OverflowBuiltinOperand,
+    /// A pointer operand of a generic `__atomic` builtin that GCC refuses:
+    /// no pointer, a pointer to a function or to a variably modified type,
+    /// or one to an object of another size than the first operand's. The
+    /// name holds GCC's words.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    AtomicGenericOperand,
     /// The third argument of one of those builtins that does not point to
     /// a modifiable integer. Under the rules above, `ckd_*` also refuses
     /// the same types as for an operand.
@@ -881,11 +887,6 @@ pub(crate) enum SemanticErrorKind {
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
     /// C11: §7.17.7.4 paragraph 2, p. 283; PDF p. 301.
     InvalidAtomicFailureOrder,
-    /// Clang warns when expected/output buffers discard qualifiers.
-    /// GNU extension: GCC manual, "__atomic Builtins".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
-    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
-    AtomicBufferQualifiers,
     /// GCC Additional Floating Types, target availability.
     /// GNU extension: GCC manual, "Floating Types".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
@@ -1503,6 +1504,8 @@ impl SemanticErrorKind {
             | Self::AtomicOperandBytes => "more than 16 bytes",
             | Self::OverflowBuiltinBitInt => "a signed _BitInt of more than 128 bits",
             | Self::OverflowBuiltinOperand => "not an integer this operation takes",
+            | Self::AtomicGenericOperand =>
+                "not a pointer to an object of the atomic object's size",
             | Self::OverflowBuiltinResult => "not a pointer to a modifiable integer it takes",
             | Self::BitBuiltinNotInteger => "not an integer",
             | Self::BitBuiltinSigned => "has a signed type",
@@ -1512,7 +1515,6 @@ impl SemanticErrorKind {
             | Self::BitBuiltinRotateCount => "not a valid rotation count",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
-            | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
         }
     }
 
@@ -1874,10 +1876,6 @@ impl SemanticErrorKind {
                 "implicitly declaring library function",
                 "C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers",
             ),
-            | Self::AtomicBufferQualifiers => (
-                "atomic buffer argument discards pointer target qualifiers",
-                "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
-            ),
             | Self::AtomicBuiltinBitInt => (
                 "argument to atomic builtin of type '_BitInt' is not supported",
                 "Clang's __atomic builtins refuse bit-precise integers, except \
@@ -1892,6 +1890,11 @@ impl SemanticErrorKind {
                  than 128 bits",
                 "Clang's __builtin_mul_overflow multiplies at most 128 bits of a signed \
                  _BitInt; GCC accepts any width",
+            ),
+            | Self::AtomicGenericOperand => (
+                "pointer operand of a generic atomic builtin has the wrong size",
+                "GCC's generic __atomic builtins take pointers to objects of the size of \
+                 the first operand's object, whatever their types",
             ),
             | Self::OverflowBuiltinOperand => (
                 "operand of an overflow builtin must have an integer type",
@@ -3342,7 +3345,8 @@ impl SemanticError {
             | (
                 F::Gcc | F::Clang,
                 SemanticErrorKind::OverflowBuiltinOperand
-                | SemanticErrorKind::OverflowBuiltinResult,
+                | SemanticErrorKind::OverflowBuiltinResult
+                | SemanticErrorKind::AtomicGenericOperand,
             ) if self.name.is_some() => return Some((arena.alloc_str(name), None)),
             // GCC words an attribute it drops by its name, under its one
             // `-Wattributes`.
@@ -4166,7 +4170,6 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
-                | SemanticErrorKind::AtomicBufferQualifiers
                 | SemanticErrorKind::UnknownAttribute
                 | SemanticErrorKind::IgnoredAttribute
                 | SemanticErrorKind::CpuFeatureUnknown
