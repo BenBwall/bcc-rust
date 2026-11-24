@@ -192,7 +192,13 @@ fn back_end_stages_link_line_by_line() {
         }],
         ..Compilation::default()
     };
-    let asm = links(Stage::Asm, &compilation, source, Unfolded::default());
+    // The assembly as the compiler wrote it, its call-frame directive in
+    // place (`folded_call_frame_directives_keep_the_links` folds it).
+    let unfolded = Unfolded {
+        frames: true,
+        ..Unfolded::default()
+    };
+    let asm = links(Stage::Asm, &compilation, source, unfolded);
     assert!(asm.is_exact() && asm.has_origins());
     assert_eq!(asm.outputs_for(2), [4, 6]);
     assert_eq!(
@@ -350,6 +356,63 @@ fn folded_target_lines_keep_the_links_below_them() {
     assert_eq!(
         links(Stage::Ir, &compilation, TARGETED_SOURCE, shown).outputs_for(2),
         [6, 7]
+    );
+}
+
+/// The assembly's call-frame directives fold into one line at the top that
+/// links nowhere, and every instruction keeps its link to the source.
+#[test]
+fn folded_call_frame_directives_keep_the_links() {
+    let none = LineOrigin::default();
+    let code = LineOrigin {
+        line: 2,
+        call: 0,
+        code: true,
+    };
+    let compilation = Compilation {
+        asm: Some(
+            "\t.text\nf:\n\t.cfi_startproc\n\tmovl\t%edi, %eax\n\timull\t%edi, \
+             %eax\n\tretq\n\t.cfi_endproc\n"
+                .into(),
+        ),
+        asm_lines: vec![none, none, none, code, code, code, none],
+        functions: vec![FunctionLines {
+            name: "f".into(),
+            source: (1, 3),
+            asm: Some((2, 7)),
+            ..FunctionLines::default()
+        }],
+        ..Compilation::default()
+    };
+    let (text, _) = displayed(Stage::Asm, &compilation, Unfolded::default()).unwrap();
+    assert!(frames::is_summary(text.lines().next().unwrap()), "{text}");
+    assert_eq!(text.lines().nth(4), Some("\timull\t%edi, %eax"));
+    let folded = links(
+        Stage::Asm,
+        &compilation,
+        TARGETED_SOURCE,
+        Unfolded::default(),
+    );
+    assert_eq!(folded.outputs_for(2), [4, 5, 6]);
+    assert_eq!(
+        folded.sources_for(3),
+        [1, 2, 3],
+        "the label stands for the function"
+    );
+    assert_eq!(
+        folded.sources_for(1),
+        Vec::<usize>::new(),
+        "no source line made them"
+    );
+    let shown = Unfolded {
+        frames: true,
+        ..Unfolded::default()
+    };
+    let (text, _) = displayed(Stage::Asm, &compilation, shown).unwrap();
+    assert_eq!(Some(text.as_str()), compilation.asm.as_deref());
+    assert_eq!(
+        links(Stage::Asm, &compilation, TARGETED_SOURCE, shown).outputs_for(2),
+        [4, 5, 6]
     );
 }
 
@@ -591,12 +654,101 @@ fn the_optimizer_comparison_names_what_changed() {
         ],
         "{changes:?}"
     );
+    // So does the assembly, whose calls are `callq` lines.
+    let lesson = |name: &str| {
+        let demo = crate::demos::find(name).expect("the lesson");
+        (
+            crate::explorer::compile(demo.source, false),
+            crate::explorer::compile(demo.source, true),
+        )
+    };
+    let (callbacks_plain, callbacks_optimized) = lesson("callbacks");
+    for stage in [Stage::Asm, Stage::MachineCode] {
+        let changes = optimizer_changes(stage, &callbacks_plain, &callbacks_optimized);
+        assert!(
+            changes
+                .iter()
+                .any(|change| change.starts_with("sum_of is no longer called"))
+                && changes
+                    .last()
+                    .is_some_and(|change| change.ends_with("is kept as well.")),
+            "{stage:?}: {changes:?}"
+        );
+    }
+    // The loops lesson's assembly grows with no call inlined: its back end
+    // copies more blocks at -O2.
+    let (loops_plain, loops_optimized) = lesson("loops");
+    let changes = optimizer_changes(Stage::Asm, &loops_plain, &loops_optimized);
+    assert!(
+        changes
+            .last()
+            .is_some_and(|change| change.contains("loop rotation")),
+        "{changes:?}"
+    );
+    // Fewer instructions in more bytes say why.
+    let (constants_plain, constants_optimized) = lesson("constants");
+    let changes = optimizer_changes(Stage::MachineCode, &constants_plain, &constants_optimized);
+    assert!(
+        changes
+            .iter()
+            .any(|change| change.starts_with("Fewer instructions can still take more bytes")),
+        "{changes:?}"
+    );
     let same = optimizer_changes(Stage::Ir, &optimized, &optimized);
     assert_eq!(same.len(), 1);
     assert!(same[0].contains("nothing to improve"));
     assert_eq!(
         optimizer_changes(Stage::Tokens, &plain, &optimized),
         Vec::<String>::new()
+    );
+}
+
+/// The note on inlined code says a function is kept only when -O2 still
+/// defines it, and that other files could call it only when its linkage
+/// lets them: a `static` function inlined and kept is only kept.
+#[test]
+fn the_inlining_note_says_kept_only_of_what_is_kept() {
+    let functions = vec![FunctionLines {
+        name: "f".into(),
+        ..FunctionLines::default()
+    }];
+    let plain = Compilation {
+        ir: Some(
+            "function @f(i32) -> i32 internal {\nblock0(v0: i32):\n    return v0\n}\nfunction \
+             @main() -> i32 external {\nblock0:\n    v0 = iconst.i32 1\n    v1 = call @f(v0)\n    \
+             return v1\n}\n"
+                .into(),
+        ),
+        functions,
+        ..Compilation::default()
+    };
+    let main = "function @main() -> i32 external {\nblock0:\n    v0 = iconst.i32 1\n    v1 = \
+                iconst.i32 2\n    v2 = iadd.i32 v0, v1\n    v3 = iadd.i32 v2, v1\n    return \
+                v3\n}\n";
+    let kept = Compilation {
+        ir: Some(format!(
+            "function @f(i32) -> i32 internal {{\nblock0(v0: i32):\n    return v0\n}}\n{main}"
+        )),
+        ..Compilation::default()
+    };
+    let gone = Compilation {
+        ir: Some(main.into()),
+        ..Compilation::default()
+    };
+    let note = |optimized: &Compilation| {
+        optimizer_changes(Stage::Ir, &plain, optimized)
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        note(&kept),
+        "That is why there is more code at -O2: each inlined call gets its own copy of the body, \
+         and the inlined function is kept as well."
+    );
+    assert_eq!(
+        note(&gone),
+        "That is why there is more code at -O2: each inlined call gets its own copy of the body."
     );
 }
 

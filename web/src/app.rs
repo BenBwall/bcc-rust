@@ -252,7 +252,7 @@ pub(crate) struct State {
     mode:            RwSignal<Mode>,
     stage:           RwSignal<Stage>,
     /// What the reader unfolded: the preprocessed text's headers, the IRs'
-    /// target lines.
+    /// target lines, the assembly's call-frame directives.
     unfolded:        RwSignal<Unfolded>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,
@@ -2624,7 +2624,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 aria-hidden="true"
                 hidden=move || state.mode.get() != Mode::Pipeline
             >
-                {move || state.link_reading()}
+                {move || state.link_reading().map(|text| crate::panels::touch_words(&text))}
             </p>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
                 <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or click a line to find what it became"</span>

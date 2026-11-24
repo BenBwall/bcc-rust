@@ -355,7 +355,8 @@ impl State {
 }
 
 /// What line 1 of `stage`'s view, `name`, is when it stands for the folded
-/// target lines (`pipeline::target`); `None` for any other line.
+/// target lines (`pipeline::target`) or call-frame directives
+/// (`pipeline::frames`); `None` for any other line.
 fn folded_target(
     stage: Stage,
     compilation: &pipeline::Compilation,
@@ -363,7 +364,21 @@ fn folded_target(
     line: usize,
     name: &str,
 ) -> Option<String> {
-    if unfolded.target || line != 1 {
+    if line != 1 {
+        return None;
+    }
+    if stage == Stage::Asm {
+        let count = pipeline::frames::count(compilation.output(stage)?);
+        return (!unfolded.frames && count > 0).then(|| {
+            format!(
+                "Line 1 of the {name} stands for the {count} .cfi_ directives folded out of it: \
+                 call-frame information, which tells a debugger and the unwinder where each \
+                 function's caller's frame is. No source line made them; Show call frames puts \
+                 them back."
+            )
+        });
+    }
+    if unfolded.target {
         return None;
     }
     let opening = pipeline::target::opening(stage, compilation.output(stage)?)?;

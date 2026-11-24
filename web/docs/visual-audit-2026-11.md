@@ -7122,3 +7122,236 @@ encodings, as each item says.
   in the key that labels and padding lines are not bytes; a reason for
   the assembly and machine code growing at `-O2`; the inlining note's
   "kept" clause on user code that inlines a `static` function.
+
+## Part 23: Part 22's "Left for later" (2026-11)
+
+Part 22 (#454) gave every back-end stage a "How to read a line" figure and
+left a list for later, which its review added to. This part does that
+list, on `agent/site-part23`, in the brief's order.
+
+### What changed
+
+1. **The WebAssembly text has a "How to read a line" of its own.** The
+   WebAssembly view puts the figure after the module's provenance
+   ([before](screenshots/part23/before-wasm-1440-dark.png),
+   [after](screenshots/part23/after-wasm-1440-dark.png)). Its line is a
+   load or a store, the instructions that show the stack machine and
+   linear memory together: `i32.load offset=4 align=4` reads "Pop an
+   address, read the 32-bit integer 4 bytes past that address, and push
+   it." Each part is glossed: the type, the instruction (pop an address
+   off the operand stack, read memory there and push the value; a store
+   pops a value, then an address), `offset=` (added to the address) and
+   `align=` (a hint that the address is a multiple of 4, which changes
+   nothing the instruction does). Its key names `$v0` (a local, kept
+   outside linear memory), `$__stack_pointer` (the global that holds the
+   top of the C stack, which lives in linear memory), `$main`,
+   `local.get`, a constant and bcc's `;; block0` comments. The claims
+   were checked against the WebAssembly specification as
+   webassembly.github.io serves it (3.0, 2026-11-23):
+   - text format, "Memory Instructions": "The offset defaults to 0, the
+     alignment to the storage size of the respective memory access", and
+     `align=` is written in bytes, the binary holding its exponent; bcc
+     writes `align=4` always and `offset=` only when it is not 0
+     (`src/backend/wasm/text.rs`), and the stepper prints Clang's modules
+     without a natural `align=`, which the reader accepts too;
+   - execution, `t.load`: "Pop the value (at.const i) from the stack",
+     then "Push the value (nt.const c) to the stack", reading at
+     `i + ao.offset`; `t.store` pops the value first, then the address;
+   - the note under "Memory Instructions": "The alignment memarg.align in
+     load and store instructions does not affect the semantics", and an
+     unaligned access "must succeed regardless of the annotation";
+   - structure: "instructions manipulate values on an implicit operand
+     stack"; "The locals declare a list of mutable local variables",
+     separate from a memory, "a list of raw uninterpreted bytes".
+2. **The assembly folds its `.cfi_` directives.** At `-O0` they were a
+   quarter of the listing, 38 of Callbacks' 147 lines, and half of a short
+   function's (8 of `twice`'s 16 lines, from `twice:` to `.cfi_endproc`;
+   [before](screenshots/part23/before-asm-1440-dark.png)). The view now
+   folds them, as the IRs fold their target lines, into one line at the
+   top that says how many there are and what they are for:
+   `# 38 .cfi_ directives: call-frame information for debuggers and
+   unwinding, folded (Show call frames to read them)`
+   ([after](screenshots/part23/after-asm-1440-dark.png)). Pointing at it
+   explains the table the assembler makes of them (`.eh_frame`, which bcc's
+   own assembler writes in `src/backend/native/object/unwind.rs`): where
+   each function's caller's frame and saved registers are, at each
+   instruction, for a debugger's backtrace and for unwinding. "Show call
+   frames" puts them back, and the explanation under the view says they
+   are folded. The links to the source follow the fold (a test), and the
+   counts in the `-O2` note still come from the full listing.
+3. **Phones.** The figure is a disclosure, open at first but closed on a
+   screen 600 px wide or less, where it was 490 to 565 px tall: closed, it
+   is a 50 px strip under the output, "How to read a line", with a
+   triangle that opens it (its title is a 40 px target on a touch screen)
+   ([before](screenshots/part23/before-machine-code-390-dark.png),
+   [after](screenshots/part23/after-machine-code-390-dark.png)). The
+   machine code, which scrolls sideways inside its frame, says so on a
+   card 560 px wide or less: "Swipe the listing sideways: the
+   instructions run on past its right edge" ("Scroll" with a pointer). The
+   pointing hints, under the source and over the output, say "Tap a line"
+   and "Tap a source line" where the screen has no pointer that hovers, as
+   the WebAssembly listing's legend already did.
+4. **The figure's example comes from the program on screen.** It always
+   showed a line of the first lesson, whatever program was on screen
+   ([before](screenshots/part23/before-figure-1440-dark.png): Callbacks
+   shows Objects' `movl %eax, (%rdi)`). Each notation now has a reader that
+   takes apart only the line shapes it can gloss exactly, and the figure
+   shows the most instructive line of the first function that has one, or
+   else the first lesson's line
+   ([after](screenshots/part23/after-figure-1440-dark.png)):
+   - bcc IR: `int` arithmetic with `nsw` (`iadd`, `isub`, `imul` on
+     `.i32`);
+   - LLVM IR: a load of an integer, pointer or floating type, or else
+     `int` arithmetic with `nsw` (`add`, `sub`, `mul`; LangRef: with
+     `nsw` the result is poison on signed overflow);
+   - assembly: a store first, then arithmetic, then a copy between
+     registers, the prologue's `movq %rsp, %rbp` last; integer `mov`,
+     `add`, `sub`, `imul`, `and`, `or` and `xor` with an `l` or `q`
+     suffix, a register or constant source and a register or memory
+     destination;
+   - machine code: the same instructions where the bytes are an optional
+     REX.W prefix (`48`), one of the opcodes `89`, `01`, `29`, `21`, `09`
+     and `31` (`op r/m, reg`), a ModRM byte whose fields agree with the
+     operands, and the SIB byte (`24`, for an address in `rsp`) and
+     one-byte displacement that its fields call for, each glossed
+     (SDM Vol. 2, §2.1, Tables 2-2 and 2-3);
+   - WebAssembly: a load, then a store, with an offset first.
+
+   A test reads every lesson's views at both levels: wherever a view has a
+   line its reader takes, the example is a line of that view. 209 views
+   (190 pipeline views and 19 WebAssembly texts) have 183 examples of
+   their own: bcc IR before and after ABI lowering 58 of 76, LLVM IR 35 of
+   38, assembly 38 of 38, machine code 33 of 38, WebAssembly 19 of 19. The
+   rest have no line of a shape the figure explains (Bits and masks
+   computes with bitwise operations, none of them `nsw` arithmetic, and
+   its `-O2` LLVM IR is one call to `printf`) and show the first lesson's
+   ("Left for later" lists them).
+5. **Wording from the reviews.**
+   - The machine code's key says a label is "written in for reading: it
+     takes no bytes", and gives the padding line its own entry: "filler
+     before a label, summed up in one line rather than listed byte by
+     byte".
+   - **Growth at `-O2` in the assembly and machine code.** The `-O2` note
+     found inlining only in the IRs, whose calls it could read; it now
+     reads `callq` lines too (and would count a jump to another function
+     as a call). Hello, Pointers, Walking a string and Callbacks now say
+     why their assembly and machine code grow: the inlined copies
+     ([before](screenshots/part23/before-optimizer-1440-dark.png),
+     [after](screenshots/part23/after-optimizer-1440-dark.png)). Loops
+     three ways grows with nothing inlined (38 instructions to 46): its
+     `-O2` IR turns each loop's `if` into a `select`, so the do loop's
+     body is one block of six instructions, which the back end copies over
+     the jump back (`docs/design/native-backend.md`, "Loop rotation": a
+     `jmp` to a block of at most eight instructions that ends in a
+     conditional branch takes a copy of it). Its note now says so, when
+     the `-O2` assembly has more copied test blocks than the `-O0`
+     assembly. Names for values and Short-circuit evaluation have fewer
+     instructions but more bytes at `-O2` (75 to 78, 170 to 172): their
+     machine code now says an instruction is 1 to 15 bytes long and the
+     padding before a label changes with the code ahead of it (in Names
+     for values, `-O2` replaces `pushq %rbp`, 1 byte, and `movq %rsp,
+     %rbp`, 3, with `subq $8, %rsp`, 4, and `popq %rbp`, 1, with `addq $8,
+     %rsp`, 4).
+   - **The "kept" clause** now depends on what `-O2` still defines: "a
+     function that other files could call is kept as well" only when an
+     inlined function is still defined with external (or weak) linkage,
+     "the inlined function is kept as well" when only a `static` one is,
+     and nothing when none is (a test with a `static` function, kept and
+     gone). Every lesson's note reads as before.
+   - **`native-backend.md`** said a function that takes its frame address
+     keeps a frame pointer "as GCC's and Clang's do", after a list that
+     includes `__builtin_setjmp`. It now says Clang keeps one for all
+     three, and GCC 14 (and 13.3) at `-O2` for the first two, but for
+     `__builtin_setjmp` only pushes `%rbp`, with no `movq %rsp, %rbp`.
+     GCC 13.3 and Clang 18.1 were checked here at `-O0` to `-O3`: GCC
+     links `%rbp` for `__builtin_setjmp` only at `-O0`; Clang at every
+     level.
+
+### Checks
+
+- **Tests,** as `pages.yml` runs them, and its other checks:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed |
+  | Engine clippy | clean |
+  | Site tests | 191 passed (181 and ten new), plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | "Pipeline outputs are up to date." |
+  | `cargo +nightly fmt --check`, root and `web/` (CI's "Site formatting") | clean |
+  | `git diff --check` | clean |
+
+- **The lesson walk.** Nothing the abstract machine shows changed: this
+  branch leaves `src/`, the engine and the machine view's code
+  (`web/src/machine*`, `engine.rs`, `glossary.rs`, `snapshot.rs` and the
+  narration, tape, cells and evaluation panels) byte-identical to `main`,
+  so no machine note can differ. The `-O2` notes of every lesson's
+  back-end stages were written out by a throwaway test (never committed)
+  and compared with the page dump of Part 22's review (`a2a53a1e1`): 202
+  of their 228 sentences are as before, and the 26 new ones are all in
+  the assembly and machine code, as item 5 says: "is no longer called"
+  in the seven lessons that inline a call (Objects, Hello, Pointers,
+  Walking a string, Callbacks, Structs and From source to a running
+  program), the copies' reason in the four of them that grow, loop
+  rotation in Loops three ways, and longer encodings in Names for values
+  and Short-circuit evaluation.
+
+- **The browser.** Less than 14 GB was free, so the site was not built
+  here: the walk ran on CI's Pages build of `0dc70faaf` (run
+  45342929486), served locally, with Playwright in Chromium, one browser
+  at a time, under a 1.5 GB scope with a memory watchdog. For six lessons
+  (Objects, Hello, Loops three ways, Floating point, Callbacks and
+  Structs) it took each back-end stage at `-O0` and `-O2` and the
+  WebAssembly view, at 1440x900, 1024x768 and 390x844 (as a touch
+  screen), in both themes: 396 states. No state scrolled sideways, no
+  page logged an error or a warning, and no part of a figure passed its
+  frame or the window. Every colour in the figures is at least 6.88:1 on
+  the light theme's screen and 7.12:1 on the dark one's, the WebAssembly
+  figure's included; the scroll hint is 9.4:1 or more and the "Show call
+  frames" chip 11.25:1 or more. Each figure token whose text the view
+  also colours has the view's colour (the script's one exception is an
+  offset `0` it took for a displacement `0`). The figure was open at
+  every state at 1440 and 1024 px and closed at every state at 390 px,
+  50 px tall; a tap opens it (632 px for Callbacks' machine code) and it
+  stays open as the stage changes. Its title is the summary "How to read
+  a line"; its lists keep their names, "The line, part by part" and
+  "Other colours in this view"; the chip is a button named "Show call
+  frames" with `aria-pressed`; the hint's arrow is hidden from screen
+  readers. At 390 px every state said "Tap" and "Swipe". An element
+  screenshot in Playwright turns off the touch emulation for the rest of
+  the page (a probe: `(hover: none)` matches before one and not after),
+  so the walk's phone states after its first screenshot read "Point at";
+  the phone screenshot here is a page screenshot.
+  An earlier walk, on CI's build of `b5136387a`, found the WebAssembly
+  figure painted on the device's grey, which the view gives every child
+  (1.06:1 in the light theme): `.wasm-view > .notation` now keeps its
+  strip of screen.
+
+### Left for later
+
+- **More shapes for the readers.** The assembly reader takes `mov` and
+  the two-operand ALU instructions only, so Callbacks' `twice` explains
+  `movq %rdi, %rax` rather than its `shll $1, %edi`; shifts, `lea`,
+  `cmp` and jumps could be glossed too. 26 of the 209 views still show
+  the first lesson's line: both bcc IRs where no line is `nsw` `int`
+  arithmetic (Unsigned numbers, Bits and masks, Walking a string and
+  Reading past the end at both levels, Integer promotions at `-O2`), the
+  LLVM IR of Bits and masks and of Integer promotions at `-O2`, and the
+  `-O2` machine code of Integer promotions, Bits and masks, Floating
+  point, Reading past the end and Uninitialized reads, whose
+  instructions are other opcodes or name registers past `rdi`.
+- **Loop rotation** is recognised from the text: a block that ends in a
+  conditional jump and repeats as the end of a longer one. A count from
+  the back end itself would be exact.
+- **GCC 14** was not at hand: its `__builtin_setjmp` frame at `-O2` is as
+  the brief reports it; GCC 13.3 and Clang 18.1 were checked here.
+- **The figure remembers nothing.** Opened or closed, it is back to its
+  first state on the next visit; the views' other switches do not
+  persist either.
+- **Clang's WebAssembly module** (the compiler switch in the WebAssembly
+  view): the reader accepts the stepper's printout of it (no natural
+  `align=`), but the tests and the browser walk read bcc's modules only.
+- **The link legend** under the output still says "came from the line
+  you point at" on a touch screen.
