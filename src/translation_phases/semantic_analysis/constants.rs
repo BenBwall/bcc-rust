@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 
 use super::{
     Analyzer,
+    SemanticTranslationUnit,
     WideStore,
     expressions::{
         ConstantClass,
@@ -19,6 +20,7 @@ use super::{
     integer::Integer,
     types::{
         Scalar,
+        TargetLayout,
         TypeId,
         TypeKind,
     },
@@ -28,6 +30,7 @@ use crate::{
     float_parsing::LongDouble,
     half_precision::HalfFormat,
     translation_phases::{
+        Context,
         parsing::syntax::BinaryOperator,
         preprocessing::HalfConstant,
     },
@@ -161,8 +164,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return self.integer_floating(integer, ty);
         }
-        self.floating_value(info)
-            .and_then(|value| self.round_floating(value, ty))
+        let value = self.floating_value(info)?;
+        if self.carrier_format(info.ty).is_some()
+            && self.carrier_format(info.ty) == self.carrier_format(ty)
+        {
+            let rounded = self.round_floating(value, ty)?;
+            return Some(Floating {
+                real: kept_nan(value.real, rounded.real),
+                imag: kept_nan(value.imag, rounded.imag),
+            });
+        }
+        self.round_floating(self.quieted(value), ty)
+    }
+
+    /// The format of the real floating type `ty`, or of a complex type's
+    /// parts; `None` for every other type. A conversion between two types
+    /// of one format, such as a cast to the operand's own type, a `?:` arm
+    /// of its result's type, or `double` to an MSVC `long double`, keeps a
+    /// signaling NaN, as Clang's evaluator and GCC's folding keep it.
+    /// C99: §6.3.1.5 paragraph 1, p. 44; PDF p. 56.
+    fn carrier_format(&self, ty: TypeId) -> Option<crate::ir::Type> {
+        carrier_format(
+            &self.types.nodes[self.types.non_atomic(ty).index],
+            &self.types.target,
+        )
+    }
+
+    /// `value` with each signaling NaN part made quiet, as a conversion to
+    /// another format delivers it; see [`quieted_nan`].
+    fn quieted(&self, value: Floating) -> Floating {
+        let gcc = gcc_nans(self.context);
+        Floating {
+            real: quieted_nan(value.real, gcc),
+            imag: quieted_nan(value.imag, gcc),
+        }
     }
 
     /// The integer constant `integer` converted to the floating type `ty`,
@@ -173,7 +208,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index] else {
             return None;
         };
-        match self.carrier_type(scalar.real_type()) {
+        match carrier_type(scalar.real_type(), &self.types.target) {
             | Some(format) => self.integer_value(integer, format).map(Floating::real),
             // Binary128 constants fold apart; the carrier is the nearest.
             | None => self
@@ -181,21 +216,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .map(Floating::real)
                 .and_then(|value| self.round_floating(value, ty)),
         }
-    }
-
-    /// The IR format a real floating scalar's value has, for those the x87
-    /// carrier holds exactly; `None` for binary128 and every other type.
-    fn carrier_type(&self, scalar: Scalar) -> Option<crate::ir::Type> {
-        use crate::ir::Type;
-        Some(match scalar.representation() {
-            | Scalar::Float16 | Scalar::Fp16 => Type::F16,
-            | Scalar::BFloat16 => Type::BF16,
-            | Scalar::Float => Type::F32,
-            | Scalar::Double => Type::F64,
-            | Scalar::LongDouble if self.types.target.long_double_is_double() => Type::F64,
-            | Scalar::LongDouble => Type::F80,
-            | _ => return None,
-        })
     }
 
     /// Tests scalar constant truth for logical and conditional evaluation.
@@ -480,6 +500,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[ty.index],
                 TypeKind::Scalar(Scalar::ComplexFloat128)
             );
+            // A standard NaN converts as `converted_floating` quiets it.
+            let mut operand = operand;
+            if let Some(value) = operand.floating() {
+                operand.set_floating(Some(self.quieted(value)));
+            }
             info.set_binary128(self.binary128_value(operand).map(|value| {
                 if complex {
                     value
@@ -521,10 +546,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     Binary128Value::real(value.real)
                 };
+                let value = Binary128Value {
+                    real: self.quieted_binary128(value.real),
+                    imag: self.quieted_binary128(value.imag),
+                };
                 info.set_floating(self.floating_from_binary128(value, ty));
             }
         }
         self.mark_unfolded_binary128(info);
+    }
+
+    /// A binary128 signaling NaN about to convert to another format; see
+    /// [`quieted_binary128`].
+    fn quieted_binary128(&self, value: Binary128) -> Binary128 {
+        quieted_binary128(value, gcc_nans(self.context))
     }
 
     /// Keeps only the value that belongs to a constant's type. An operator
@@ -701,12 +736,144 @@ impl Analyzer<'_, '_, '_> {
     }
 }
 
+impl SemanticTranslationUnit<'_> {
+    /// The bits of `part`, a part of the folded value of a constant of type
+    /// `from`, that an initializer stores in an object of the floating
+    /// format `ty`. The value converts as by assignment, so a conversion to
+    /// another format quiets a signaling NaN, as
+    /// [`Analyzer::converted_floating`] quiets it, and one within the format
+    /// keeps it.
+    /// C99: §6.7.8 paragraph 11, p. 126; PDF p. 138; §F.3 paragraph 1,
+    /// pp. 445-447; PDF pp. 457-459.
+    pub(crate) fn stored_float_bits(
+        &self,
+        context: &Context<'_>,
+        from: TypeId,
+        part: LongDouble,
+        ty: crate::ir::Type,
+    ) -> Option<u128> {
+        let kind = &self.types.nodes[self.types.non_atomic(from).index];
+        let part = if carrier_format(kind, &self.types.target) == Some(ty) {
+            part
+        } else {
+            quieted_nan(part, gcc_nans(context))
+        };
+        crate::float_parsing::bits::constant_bits(&part, ty)
+    }
+
+    /// The bits of `part`, a part of a folded binary128 constant, that an
+    /// initializer stores in an object of the floating format `ty`, as
+    /// [`Self::stored_float_bits`] converts a standard one.
+    /// C99: §6.7.8 paragraph 11, p. 126; PDF p. 138; §F.3 paragraph 1,
+    /// pp. 445-447; PDF pp. 457-459.
+    pub(crate) fn stored_binary128_bits(
+        context: &Context<'_>,
+        part: Binary128,
+        ty: crate::ir::Type,
+    ) -> Option<u128> {
+        let part = if ty == crate::ir::Type::F128 {
+            part
+        } else {
+            quieted_binary128(part, gcc_nans(context))
+        };
+        crate::float_parsing::bits::binary128_bits(part, ty)
+    }
+}
+
 /// Both parts of `value` rounded to binary16 or bfloat16.
 /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56; §6.3.1.6, p. 44; PDF p. 56.
 fn round_halves(value: Floating, format: HalfFormat) -> Floating {
     Floating {
         real: round_half(value.real, format),
         imag: round_half(value.imag, format),
+    }
+}
+
+/// `original` when both it and its conversion `rounded` to the same format
+/// are NaNs, so that the conversion does not quiet a signaling one;
+/// `rounded` otherwise.
+fn kept_nan(original: LongDouble, rounded: LongDouble) -> LongDouble {
+    let nan = |value: LongDouble| {
+        value
+            .x87_parts()
+            .is_some_and(|(_, exponent, significand)| exponent == 0x7FFF && significand << 1 != 0)
+    };
+    if nan(original) && nan(rounded) {
+        original
+    } else {
+        rounded
+    }
+}
+
+/// The IR format a real floating scalar's value has, for those the x87
+/// carrier holds exactly; `None` for binary128 and every other type.
+fn carrier_type(scalar: Scalar, target: &TargetLayout) -> Option<crate::ir::Type> {
+    use crate::ir::Type;
+    Some(match scalar.representation() {
+        | Scalar::Float16 | Scalar::Fp16 => Type::F16,
+        | Scalar::BFloat16 => Type::BF16,
+        | Scalar::Float => Type::F32,
+        | Scalar::Double => Type::F64,
+        | Scalar::LongDouble if target.long_double_is_double() => Type::F64,
+        | Scalar::LongDouble => Type::F80,
+        | _ => return None,
+    })
+}
+
+/// The carrier format of a real floating type, or of a complex type's
+/// parts, whose node is `kind`; `None` for every other type.
+fn carrier_format(kind: &TypeKind<'_>, target: &TargetLayout) -> Option<crate::ir::Type> {
+    let &TypeKind::Scalar(scalar) = kind else {
+        return None;
+    };
+    (scalar.floating() && !scalar.complex_integer())
+        .then(|| carrier_type(scalar.real_type(), target))
+        .flatten()
+}
+
+/// Whether NaNs convert as GCC's folding converts them; see
+/// [`quieted_nan`].
+fn gcc_nans(context: &Context<'_>) -> bool {
+    context.configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc
+}
+
+/// `part` made quiet if it is a signaling NaN, as an IEC 60559 conversion
+/// to another format delivers it: Clang's evaluator sets the quiet bit and
+/// keeps the payload's leading bits. GCC holds the `__builtin_nans("")`
+/// NaN with an empty payload, and only its encoding sets the bit below the
+/// quiet bit; so under GCC (`gcc`) that bit alone does not survive
+/// (`real_convert` in GCC's `real.cc`).
+/// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
+fn quieted_nan(part: LongDouble, gcc: bool) -> LongDouble {
+    let Some((sign, 0x7FFF, significand)) = part.x87_parts() else {
+        return part;
+    };
+    let payload = significand & ((1 << 62) - 1);
+    if significand >> 62 != 0b10 || payload == 0 {
+        return part;
+    }
+    let payload = if gcc && payload == 1 << 61 {
+        0
+    } else {
+        payload
+    };
+    let bits = u128::from(1 << 63 | 1 << 62 | payload)
+        | u128::from(0x7FFF_u16 | if sign { 0x8000 } else { 0 }) << 64;
+    LongDouble::from_x87(X87::from_bits(bits)).unwrap_or(part)
+}
+
+/// A binary128 signaling NaN about to convert to another format, as
+/// [`quieted_nan`] has it under GCC (`gcc`): one whose payload is only the
+/// bit below the quiet bit becomes the default quiet NaN. The conversion
+/// quiets every other one itself.
+/// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
+fn quieted_binary128(value: Binary128, gcc: bool) -> Binary128 {
+    const QUIET: u128 = 1 << 111;
+    let bits = value.to_bits();
+    if gcc && value.is_signaling() && bits & (QUIET - 1) == QUIET >> 1 {
+        Binary128::from_bits(bits & !(QUIET >> 1) | QUIET)
+    } else {
+        value
     }
 }
 

@@ -29,7 +29,6 @@ use super::{
     FunctionLowerer,
     LoweringError,
     LoweringErrorKind,
-    floats,
     module_items::{
         at,
         peel,
@@ -58,6 +57,7 @@ use crate::{
         Value,
     },
     translation_phases::{
+        Context,
         SourceVectors,
         parsing::{
             declaration_syntax::{
@@ -416,7 +416,8 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     ..
                 } if plan::x87_leaf(sema, leaf)
                     && plan::constant_leaf(sema, leaf)
-                    && let Some((real, imag)) = x87_constant_bits(sema, expression, ty) =>
+                    && let Some((real, imag)) =
+                        x87_constant_bits(self.unit.context, sema, expression, ty) =>
                 {
                     // A complex `long double` holds its parts 16 bytes apart.
                     for (offset, bits) in [(offset, Some(real)), (offset + 16, imag)] {
@@ -869,17 +870,21 @@ const IMAGE_SIZE: u64 = 32;
 const IMAGE_STORES: usize = 6;
 
 /// The `f80` bits a constant x87 scalar initializer stores: its real part,
-/// and its imaginary part when it is complex.
-/// C99: §6.3.1.4 paragraph 2, p. 43; PDF p. 55; §6.3.1.7, p. 45; PDF p. 57.
+/// and its imaginary part when it is complex. A value of another format
+/// converts as by assignment, which quiets a signaling NaN.
+/// C99: §6.3.1.4 paragraph 2, p. 43; PDF p. 55; §6.3.1.7, p. 45; PDF p. 57;
+/// §6.7.8 paragraph 11, p. 126; PDF p. 138.
 fn x87_constant_bits<'tu>(
+    context: &Context<'_>,
     sema: &SemanticTranslationUnit<'tu>,
     expression: &'tu Expression<'tu>,
     ty: TypeId,
 ) -> Option<(u128, Option<u128>)> {
     let info = sema.expression_info(expression)?;
     let floating = info.floating();
+    let stored = |part| sema.stored_float_bits(context, info.ty, part, Type::F80);
     let real = match (floating, info.integer.filter(|_| info.ice)) {
-        | (Some(value), _) => floats::constant_bits(&value.real, Type::F80),
+        | (Some(value), _) => stored(value.real),
         | (None, Some(value)) => sema.integer_float_bits(value, Type::F80),
         | (None, None) => None,
     }?;
@@ -889,9 +894,7 @@ fn x87_constant_bits<'tu>(
             component: Type::F80,
         }) => Some((
             real,
-            Some(floating.map_or(Some(0), |value| {
-                floats::constant_bits(&value.imag, Type::F80)
-            })?),
+            Some(floating.map_or(Some(0), |value| stored(value.imag))?),
         )),
         | _ => None,
     }

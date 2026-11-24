@@ -635,7 +635,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
                             self.pointer_arithmetic_target(t)
-                                && self.pointer_compatible(target, t, false)
+                                && self.operand_targets_compatible(e, (lt, rt), (target, t), false)
                         })
                     {
                         self.report_void_arithmetic(e, target);
@@ -750,7 +750,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))
                     {
-                        self.pointer_compatible(lp, rp, equality)
+                        self.operand_targets_compatible(e, (lt, rt), (lp, rp), equality)
                             && (equality
                                 || !matches!(self.types.nodes[lp.index], TypeKind::Function { .. }))
                     } else {
