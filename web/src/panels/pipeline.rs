@@ -37,6 +37,7 @@ use crate::{
         Stage,
         Unfolded,
         displayed,
+        frames,
         gutter,
         is_folded,
         linked_terms,
@@ -185,6 +186,16 @@ pub fn PipelineView(
                 .is_some()
         })
     });
+    // Whether the stage's output has call-frame directives to fold.
+    let has_frames = Memo::new(move |_| {
+        stage.get() == Stage::Asm
+            && shown.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .and_then(|compilation| compilation.output(Stage::Asm))
+                    .is_some_and(|output| frames::count(output) > 0)
+            })
+    });
     // Whether the source is the lesson that follows one program through
     // every stage.
     let on_path = move || {
@@ -328,7 +339,7 @@ pub fn PipelineView(
                 </div>
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
-                        {move || if !shown_links.with(Links::is_exact) {
+                        {move || super::touch_words(if !shown_links.with(Links::is_exact) {
                             "Hover a source line, or move the cursor to it, to find its function here; do the same \
                              here to find the source. No line of this program has a source location, so it links \
                              per function."
@@ -337,7 +348,7 @@ pub fn PipelineView(
                         } else {
                             "Hover a source line, or move the cursor to it, to find what it became here; do the \
                              same here to find its source."
-                        }}
+                        })}
                     </p>
                     <button
                         type="button"
@@ -360,6 +371,17 @@ pub fn PipelineView(
                     >
                         <span class="toggle-chip-dot" aria-hidden="true"></span>
                         "Show target"
+                    </button>
+                    <button
+                        type="button"
+                        class="toggle-chip"
+                        hidden=move || !has_frames.get()
+                        aria-pressed=move || unfolded.get().frames.to_string()
+                        title="Show the .cfi_ directives, which describe each function's stack frame for debuggers and unwinding, or fold them into one line"
+                        on:click=move |_| unfolded.update(|unfolded| unfolded.frames = !unfolded.frames)
+                    >
+                        <span class="toggle-chip-dot" aria-hidden="true"></span>
+                        "Show call frames"
                     </button>
                     <button
                         type="button"
@@ -394,7 +416,7 @@ pub fn PipelineView(
                         !main && !beside
                     }
                 >
-                    {move || reading.get()}
+                    {move || reading.get().map(|text| super::touch_words(&text))}
                 </p>
                 <div
                     class="stage-output"
@@ -427,6 +449,12 @@ pub fn PipelineView(
                         line_numbers
                     />
                     </div>
+                    <p class="stage-scroll-hint" hidden=move || stage.get() != Stage::MachineCode || output.with(Option::is_none)>
+                        <i aria-hidden="true">"⇆"</i>
+                        <span class="on-pointer">"Scroll"</span>
+                        <span class="on-touch">"Swipe"</span>
+                        " the listing sideways: each instruction goes on past its right edge."
+                    </p>
                     </div>
                     {move || side_by_side.get().then(|| view! {
                         <Beside stage optimize other other_links lesson theme pointing unfolded place />
@@ -437,7 +465,7 @@ pub fn PipelineView(
                         <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
                     </footer>
                 </div>
-                <StageNotation stage hidden=Signal::derive(move || outputs_hidden.get()) />
+                <StageNotation stage text hidden=Signal::derive(move || outputs_hidden.get()) />
                 <div class="stage-missing" hidden=move || !outputs_hidden.get()>
                     <p>{missing_text}</p>
                     <div class="stage-missing-actions" hidden=move || stage.get() != Stage::Llvm || lesson.get()>
@@ -941,6 +969,23 @@ fn output_marks(
                 .map(|(index, _)| Decoration::line(index + 1, "folded-line"))
                 .collect()
         }),
+        | Stage::Asm => {
+            let folded = text.with(|text| text.lines().next().is_some_and(frames::is_summary));
+            let count = compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .and_then(|compilation| compilation.output(stage))
+                    .map_or(0, frames::count)
+            });
+            if folded && count > 0 {
+                vec![Decoration {
+                    hover: Some(frames::explanation(count)),
+                    ..Decoration::line(1, "folded-line")
+                }]
+            } else {
+                Vec::new()
+            }
+        },
         | Stage::Ir | Stage::IrAbi | Stage::Llvm => {
             let folded = text.with(|text| text.lines().next().is_some_and(target::is_summary));
             let hover = compilation.with(|compilation| {

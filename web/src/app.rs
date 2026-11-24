@@ -252,7 +252,7 @@ pub(crate) struct State {
     mode:            RwSignal<Mode>,
     stage:           RwSignal<Stage>,
     /// What the reader unfolded: the preprocessed text's headers, the IRs'
-    /// target lines.
+    /// target lines, the assembly's call-frame directives.
     unfolded:        RwSignal<Unfolded>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,

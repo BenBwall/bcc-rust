@@ -65,6 +65,32 @@ fn rich_text(text: &str) -> AnyView {
         .into_any()
 }
 
+/// `text` as a reader with a pointer reads it, and on a touch screen with
+/// its opening words for a pointer ("Point at a line") as a tap says them
+/// ("Tap a line"): `style.css` shows one or the other.
+fn touch_words(text: &str) -> AnyView {
+    const OPENINGS: [(&str, &str); 3] = [
+        (
+            "Hover a source line, or move the cursor to it,",
+            "Tap a source line",
+        ),
+        ("Point at a source line", "Tap a source line"),
+        ("Point at a line", "Tap a line"),
+    ];
+    let Some((pointer, touch, rest)) = OPENINGS.iter().find_map(|&(pointer, touch)| {
+        text.strip_prefix(pointer)
+            .map(|rest| (pointer, touch, rest.to_owned()))
+    }) else {
+        return text.to_owned().into_any();
+    };
+    view! {
+        <span class="on-pointer">{pointer}</span>
+        <span class="on-touch">{touch}</span>
+        {rest}
+    }
+    .into_any()
+}
+
 /// A human label for an event category.
 fn category_label(category: &str) -> &'static str {
     match category {

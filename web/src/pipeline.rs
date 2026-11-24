@@ -15,6 +15,7 @@
 //! `web/pipeline/generate.sh`).
 
 mod example;
+pub mod frames;
 mod front_end;
 pub mod target;
 
@@ -757,7 +758,9 @@ impl Stage {
                  (movl, addq: b, w, l and q for 8, 16, 32 and 64 bits); jumps such as jl and \
                  floating-point instructions such as movsd are named differently. Arguments arrive \
                  in %rdi, %rsi, …, and an int result leaves in %eax. Lines starting with a dot are \
-                 directives for the assembler, not instructions.",
+                 directives for the assembler, not instructions. The .cfi_ directives, which \
+                 describe each function's stack frame for debuggers and unwinding, are folded into \
+                 the first line; Show call frames puts them back in place.",
             | Self::MachineCode =>
                 "Decided here: each instruction's exact encoding and length. Each line is the \
                  instruction's offset from the start of its function, then its encoding, both in \
@@ -1268,18 +1271,26 @@ pub struct Unfolded {
     /// Whether the IRs show the lines naming their target, not one line
     /// for them ([`target`]).
     pub target:  bool,
+    /// Whether the assembly shows its call-frame directives, not one line
+    /// for them ([`frames`]).
+    pub frames:  bool,
 }
 
 /// What the view shows for `stage`: its output, with the preprocessor's
-/// headers and the IRs' target lines folded unless `unfolded`, and each
-/// output line's source lines when the view rewrites the output line by
-/// line.
+/// headers, the IRs' target lines and the assembly's call-frame directives
+/// folded unless `unfolded`, and each output line's source lines when the
+/// view rewrites the output line by line.
 pub fn displayed(
     stage: Stage,
     compilation: &Compilation,
     unfolded: Unfolded,
 ) -> Option<(String, Option<LineLinks>)> {
     let output = compilation.output(stage)?;
+    if stage == Stage::Asm {
+        let folded = (!unfolded.frames).then(|| frames::fold(output)).flatten();
+        let text = folded.map_or_else(|| output.to_owned(), |(text, _)| text);
+        return Some((text, None));
+    }
     if stage != Stage::Preprocessor {
         let folded = (!unfolded.target)
             .then(|| target::fold(stage, output))
@@ -1296,15 +1307,27 @@ pub fn displayed(
     Some((view.text, Some(view.links)))
 }
 
-/// How many lines folding the target lines takes out of `stage`'s view.
-fn target_removed(stage: Stage, compilation: &Compilation, unfolded: Unfolded) -> usize {
-    if unfolded.target {
-        return 0;
+/// For each line of a back-end `stage`'s view, the 0-based line of the
+/// compiler's output it shows, `None` for a line that stands for folded
+/// ones; `None` when the view shows the output as it is.
+fn shown_lines(
+    stage: Stage,
+    compilation: &Compilation,
+    unfolded: Unfolded,
+) -> Option<Vec<Option<usize>>> {
+    let output = compilation.output(stage)?;
+    if stage == Stage::Asm {
+        return (!unfolded.frames)
+            .then(|| frames::fold(output))
+            .flatten()
+            .map(|(_, shown)| shown);
     }
-    compilation
-        .output(stage)
-        .and_then(|output| target::opening(stage, output))
-        .map_or(0, |opening| opening.lines - 1)
+    if unfolded.target {
+        return None;
+    }
+    let opening = target::opening(stage, output)?;
+    let rest = opening.lines..output.lines().count();
+    Some(std::iter::once(None).chain(rest.map(Some)).collect())
 }
 
 /// The gutter labels of `stage`'s view: the physical lines of each logical
@@ -1361,14 +1384,22 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, unfolded: Un
         ),
         | Stage::Preprocessor => rewritten,
         | Stage::Ir | Stage::IrAbi | Stage::Llvm | Stage::Asm | Stage::MachineCode => {
-            // The folded target lines are one line, which no source line
-            // claims.
-            let removed = target_removed(stage, compilation, unfolded);
-            let functions = function_lines(stage, compilation, source, &output, removed);
+            // Folded lines are one line, which no source line claims.
+            let shown = shown_lines(stage, compilation, unfolded);
+            let functions = function_lines(stage, compilation, source, &output, shown.as_deref());
             let origins = compilation.origins(stage);
-            let origins = origins.get(removed..).unwrap_or_default();
-            return match origin_links(origins, &functions) {
-                | Some(exact) => Links::exact(exact, Vec::new(), origins.to_vec()),
+            let origins: Vec<LineOrigin> = match &shown {
+                | Some(shown) => shown
+                    .iter()
+                    .map(|line| {
+                        line.and_then(|line| origins.get(line).copied())
+                            .unwrap_or_default()
+                    })
+                    .collect(),
+                | None => origins.to_vec(),
+            };
+            return match origin_links(&origins, &functions) {
+                | Some(exact) => Links::exact(exact, Vec::new(), origins),
                 | None => Links {
                     functions,
                     ..Links::default()
@@ -1396,25 +1427,42 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, unfolded: Un
 }
 
 /// Each function's source lines and lines in `output`, `stage`'s text as
-/// the view shows it, `removed` lines shorter than the compiler's. The
-/// compiler's line map places them, and for a lesson's LLVM IR its function
-/// headers do: without a live compilation (still loading), the definitions
-/// are found in the source.
+/// the view shows it, whose lines show the compiler's lines `shown` lists
+/// ([`shown_lines`]). The compiler's line map places them, and for a
+/// lesson's LLVM IR its function headers do: without a live compilation
+/// (still loading), the definitions are found in the source.
 fn function_lines(
     stage: Stage,
     compilation: &Compilation,
     source: &str,
     output: &str,
-    removed: usize,
+    shown: Option<&[Option<usize>]>,
 ) -> FunctionSpans {
     if stage != Stage::Llvm {
-        let shift = |line: usize| line.saturating_sub(removed).max(1);
+        // The view's first line showing one of the compiler's lines from
+        // `first` (1-based) on, and its last showing one up to `last`.
+        let from = |first: usize| {
+            shown.map_or(first, |shown| {
+                shown
+                    .iter()
+                    .position(|line| line.is_some_and(|line| line + 1 >= first))
+                    .map_or(1, |index| index + 1)
+            })
+        };
+        let to = |last: usize| {
+            shown.map_or(last, |shown| {
+                shown
+                    .iter()
+                    .rposition(|line| line.is_some_and(|line| line < last))
+                    .map_or(1, |index| index + 1)
+            })
+        };
         return compilation
             .functions
             .iter()
             .filter_map(|function| {
                 let (first, last) = function.output(stage)?;
-                Some((function.source, (shift(first), shift(last))))
+                Some((function.source, (from(first), to(last))))
             })
             .collect();
     }
@@ -1524,6 +1572,24 @@ fn llvm_function(line: &str) -> Option<&str> {
         .next()
 }
 
+/// The function an x86-64 instruction calls, or jumps to as a tail call:
+/// `callq	bump` and `callq	printf@PLT` (a machine-code line has its offset
+/// and bytes first), not `callq	*%rax`, which calls through a pointer, or a
+/// jump to a label.
+fn native_callee(line: &str) -> Option<&str> {
+    let mut fields = line.split_whitespace();
+    let callee = loop {
+        let field = fields.next()?;
+        if matches!(field, "call" | "callq" | "jmp" | "jmpq") {
+            break fields.next()?;
+        }
+    };
+    let callee = callee.trim_end_matches("@PLT");
+    callee
+        .starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
+        .then_some(callee)
+}
+
 /// A token line such as `<input>:12:5: keyword for` comes from line 12; a
 /// token from a header comes from no line of the source.
 fn token_line(line: &str) -> Option<usize> {
@@ -1597,19 +1663,59 @@ pub fn optimizer_changes(
         after.slots,
         " Each one is memory reserved in the function's stack frame.",
     );
-    let grew = after.instructions > before.instructions && !inlined.is_empty();
+    let grew = after.instructions > before.instructions;
+    // Of the inlined functions, those -O2 still defines, each with whether
+    // another file could call it.
+    let definitions = definitions(stage, optimized);
+    let kept: Vec<bool> = inlined
+        .iter()
+        .filter_map(|callee| {
+            definitions
+                .iter()
+                .find(|(name, _)| name == *callee)
+                .map(|&(_, external)| external)
+        })
+        .collect();
+    let inlining = !inlined.is_empty();
     for callee in inlined {
         changes.push(format!(
             "{callee} is no longer called: the optimizer inlined it, copying its body into the \
              caller, where it could be simplified further."
         ));
     }
-    // Code that grew where a function was inlined: a cost the saving
-    // reasons do not explain.
-    if grew {
-        changes.push(
+    // Code that grew where a function was inlined, or where the back end
+    // copied more blocks: a cost the saving reasons do not explain.
+    if grew && inlining {
+        let kept = if kept.contains(&true) {
+            ", and a function that other files could call is kept as well"
+        } else if kept.is_empty() {
+            ""
+        } else {
+            ", and the inlined function is kept as well"
+        };
+        changes.push(format!(
             "That is why there is more code at -O2: each inlined call gets its own copy of the \
-             body, and a function that other files could call is kept as well."
+             body{kept}."
+        ));
+    } else if grew
+        && matches!(stage, Stage::Asm | Stage::MachineCode)
+        && let (Some(plain), Some(optimized)) =
+            (plain.output(Stage::Asm), optimized.output(Stage::Asm))
+        && copied_tests(optimized) > copied_tests(plain)
+    {
+        changes.push(
+            "That is why there is more code at -O2: where a jump leads to a block of at most \
+             eight instructions that ends in a test, the back end puts a copy of the block in \
+             place of the jump (loop rotation, for a loop's jump back), and here it copies more \
+             at -O2 than at -O0."
+                .to_owned(),
+        );
+    }
+    // More bytes from no more instructions: longer encodings.
+    if stage == Stage::MachineCode && optimized.code_bytes > plain.code_bytes && !grew {
+        changes.push(
+            "Fewer instructions can still take more bytes: an x86-64 instruction is 1 to 15 bytes \
+             long, and the padding before a label changes with the code ahead of it."
                 .to_owned(),
         );
     }
@@ -1621,6 +1727,110 @@ pub fn optimizer_changes(
         );
     }
     changes
+}
+
+/// The functions `compilation` defines in `stage`'s output, each with
+/// whether another file could call it: in bcc IR an `external` or `weak`
+/// function with a body, in LLVM IR a `define` that is not `internal` or
+/// `private`, and in the assembly (for the machine code too, which has no
+/// directives) a function label that `.globl` or `.weak` names.
+fn definitions(stage: Stage, compilation: &Compilation) -> Vec<(String, bool)> {
+    let stage = if stage == Stage::MachineCode {
+        Stage::Asm
+    } else {
+        stage
+    };
+    let Some(text) = compilation.output(stage) else {
+        return Vec::new();
+    };
+    match stage {
+        | Stage::Ir | Stage::IrAbi => text
+            .lines()
+            .filter(|line| line.trim_end().ends_with('{'))
+            .filter_map(|line| {
+                let (name, rest) = line.strip_prefix("function @")?.split_once('(')?;
+                let (_, header) = rest.rsplit_once(')')?;
+                let external = header
+                    .split_whitespace()
+                    .any(|word| matches!(word, "external" | "weak"));
+                Some((name.to_owned(), external))
+            })
+            .collect(),
+        | Stage::Llvm => text
+            .lines()
+            .filter_map(|line| {
+                let name = llvm_function(line)?;
+                let internal = line
+                    .split_whitespace()
+                    .any(|word| matches!(word, "internal" | "private"));
+                Some((name.to_owned(), !internal))
+            })
+            .collect(),
+        | Stage::Asm => {
+            let exported: Vec<&str> = text
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    line.strip_prefix(".globl")
+                        .or_else(|| line.strip_prefix(".weak"))
+                        .map(str::trim)
+                })
+                .collect();
+            text.lines()
+                .filter_map(|line| {
+                    let name = line.strip_suffix(':')?;
+                    let plain = name
+                        .starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+                    plain.then(|| (name.to_owned(), exported.contains(&name)))
+                })
+                .collect()
+        },
+        | _ => Vec::new(),
+    }
+}
+
+/// How many instructions of `assembly` sit in a block that ends in a
+/// conditional jump and repeats, with its jump's condition aside, as the
+/// end of another such block: the copies the back end's loop rotation
+/// makes (`docs/design/native-backend.md`, "Loop rotation": a `jmp` to a
+/// block of at most eight instructions that ends in a conditional branch
+/// takes a copy of that block).
+fn copied_tests(assembly: &str) -> usize {
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    for line in assembly.lines() {
+        if line.ends_with(':') && !line.starts_with('\t') {
+            blocks.push(Vec::new());
+        } else if let Some(block) = blocks.last_mut()
+            && line.starts_with('\t')
+            && !line.trim_start().starts_with('.')
+        {
+            block.push(line.trim());
+        }
+    }
+    // Each block that ends in a conditional jump, as the instructions before
+    // that jump.
+    let tested: Vec<&[&str]> = blocks
+        .iter()
+        .filter_map(|block| {
+            let (last, rest) = block.split_last()?;
+            let mnemonic = last.split_whitespace().next()?;
+            (mnemonic.starts_with('j') && mnemonic != "jmp").then_some(rest)
+        })
+        .collect();
+    tested
+        .iter()
+        .enumerate()
+        .filter(|&(index, body)| {
+            !body.is_empty()
+                && tested.iter().enumerate().any(|(other, longer)| {
+                    other != index && longer.len() > body.len() && longer.ends_with(body)
+                })
+        })
+        .map(|(_, body)| body.len() + 1)
+        .sum()
 }
 
 /// The optimizer comparison as numbers: for each measure of `stage`'s
@@ -1720,7 +1930,16 @@ impl Census {
             {
                 census.memory += 1;
             }
-            if let Some((_, callee)) = operation.split_once("call ") {
+            // `callq	bump` in the assembly and the machine code, and a
+            // jump to another function, which calls it too.
+            let native = matches!(stage, Stage::Asm | Stage::MachineCode)
+                .then(|| native_callee(trimmed))
+                .flatten();
+            if let Some(callee) = native {
+                if !census.callees.iter().any(|known| known == callee) {
+                    census.callees.push(callee.to_owned());
+                }
+            } else if let Some((_, callee)) = operation.split_once("call ") {
                 let callee = callee
                     .split_once('@')
                     .map_or(callee, |(_, name)| name)
