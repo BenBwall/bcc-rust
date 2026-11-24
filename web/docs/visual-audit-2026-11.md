@@ -7549,6 +7549,168 @@ part does them, on `agent/site-part24`, in the brief's order.
   covers all but its last line, "Show call frames puts them back in
   place." The after screenshot of item 1 shows it. It was so before this
   part too (the before screenshot); opening it below line 1, or folding
-  its text into the reading, needs a site build to check.
+  its text into the reading, needs a site build to check. (Fixed in Part
+  25.)
 - From Part 23: more shapes for the readers; the figure remembers
   nothing between visits.
+
+## Part 25: Part 24's review follow-ups (2026-11)
+
+Part 24 (#463) was reviewed with no blockers and five follow-ups. This
+part does them, on `agent/site-part25`, in the brief's order.
+
+### What changed
+
+1. **A phone keeps room only where it prevents movement.** On a phone
+   (up to 600 px) the stage card's reading follows its output listing
+   and the toggles under it; only the reading under the source sits
+   above a listing, the output. Part 24 gave both boxes room for the
+   longest sentence the view can give, so with nothing pointed at the
+   card's box held the one-line "Tap a line to read what it links to."
+   in 105 to 124 px at 390 px, and up to 161 px at 320 px, where `main`
+   before #463 had 68 px
+   ([before](screenshots/part25/before-card-390-dark.png), Callbacks,
+   assembly, `-O0`, 124 px). Its growing moves nothing above it, so it
+   now keeps no room and is as tall as its sentence: 31 px for the hint
+   ([after](screenshots/part25/after-card-390-dark.png)). The reading
+   under the source keeps its room (63 to 98 px at 390 px, 63 to 132 px
+   at 320 px, as before), and from 601 px, where the card's reading sits
+   over the output again, both boxes keep it as in Part 24.
+2. **The editor's hover opens below its line.** Monaco 0.57 measures a
+   hover's room below its line as the window's height less the line's
+   place on the *page*, scroll included
+   (`ResizableContentWidget._availableVerticalSpaceBelow`), so once the
+   page is scrolled further than the hover is tall, as it is to bring the
+   compiler's output into view (2475 px at 1440x900), every hover found
+   no room below and opened above its line, despite
+   `hover: { above: false }`. Line 1's (the explanation of a folded line)
+   then ran past the top of the code view's frame, which clips what
+   overflows it, and only its last line showed under the reading
+   ([before](screenshots/part25/before-hover-1440-dark.png): the hover
+   from 121 to 269 px for a line at 278 px). The glue
+   (`web/editor/src/main.js`) now measures the room between the line and
+   the nearer of the frame's edge and the window's, so the hover opens
+   below when it fits and is otherwise sized to the side with more room
+   ([after](screenshots/part25/after-hover-1440-dark.png): 293 to 463
+   px). Monaco also laid the hover out against the window's width, so at
+   1440 px it ran 51 px past the frame's right edge and lost the ends of
+   its sentences; with `allowOverflow: false` it is laid out and capped
+   in width inside the editor (only its own 1 px border meets the
+   frame's).
+3. **`align=1` promises nothing.** The WebAssembly figure glossed Clang's
+   `i32.load offset=65573 align=1` (Hello) as a hint that the address
+   plus 65573 "is meant to be a multiple of 1", which every address is.
+   The specification's note under "Memory Instructions" (execution;
+   WebAssembly 3.0, as webassembly.github.io serves it, 2026-11-23) makes
+   the hint the property `ea mod 2^memarg.align = 0` and says "Unaligned
+   access violating that property is still allowed and must succeed
+   regardless of the annotation"; `align=1` is 2^0 bytes, which every
+   `ea` satisfies. The gloss now reads "no alignment is promised: the
+   address plus 65573, where memory is read, may be any address, since
+   every address is a multiple of 1; it changes nothing the instruction
+   does" ([before](screenshots/part25/before-wasm-align-1440-dark.png),
+   [after](screenshots/part25/after-wasm-align-1440-dark.png)). LLVM IR's
+   `align 1`, glossed "a promise that the address is a multiple of 1",
+   now says "no alignment is promised, so any address will do" (the
+   Language Reference, "'load' Instruction": "An alignment of 1 is
+   always safe").
+4. **What rotation copies.** The detector counts a block that ends in
+   the whole of an earlier block, the one the jump back went to, and the
+   back end copies that whole block (at most eight instructions, ending in
+   a conditional branch: `duplicate_tests`). In Loops three ways at
+   `-O2` that block is the do loop's: the loop's body, made one block
+   by the select for its `continue`, with its test (`.LBB0_5`, five
+   instructions and `jge`, copied as `.LBB0_6` with `jl`); at `-O0` the
+   copies are the while and for loops' tests alone (`cmpl` and a jump).
+   The note said the jump back "leads to a short block that tests whether
+   to go round again", which fits the tests but not a whole body. It now
+   says "a short block that ends by testing whether to go round again,
+   the back end puts a copy of that whole block instead (loop rotation),
+   … Such a block can be a while or for loop's test alone, or a small do
+   loop's whole body with its test."
+5. **The 124 px on a phone was the walk's.** Floating point, bcc IR,
+   `-O0` at 390 px showed the card's reading at 124 px rather than 105 px
+   once per theme in the #463 review's walk. It reproduces on `main`'s
+   build with the review's own script, at its tenth tap on the source. The
+   walk measured the rows of the source once and then tapped them one
+   after another. A tap that rests 400 ms on a line scrolls the page to
+   what the line links to (`showLinkedOnPage`, as far as keeps the tapped
+   line in view): after the ninth tap the page scrolled 174 px down, and
+   the tenth tap, at the old place of the tenth row, landed on the channel
+   key "ABI-lowered IR", below the source's reading. The stage changed,
+   and the box held the ABI-lowered IR's room, 124 px. Nothing in the page grew: the
+   reading kept its height in every view. This part's walk puts the page
+   back where it was before each tap and taps only a point inside the
+   listing it means to (no tap missed in the walk below).
+
+### Checks
+
+- **Tests,** as `pages.yml` runs them, and its other checks:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed |
+  | Engine clippy | clean |
+  | Site tests | 194 passed (the three changed assertions included), plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `cargo +nightly fmt --check`, root and `web/` (CI's "Site formatting") | clean |
+  | `git diff --check` | clean |
+
+- **Facts.** Item 3's quotations were read from the WebAssembly
+  specification's execution and text-format pages and the LLVM Language
+  Reference as served on 2026-11-24. Item 4's blocks were read from the
+  assembly listings of Loops three ways at `-O0` and `-O2`, copied out of
+  `main`'s Pages build (this branch leaves the compiler as it is).
+
+- **The lesson walk.** The machine view's code, the engine and `src/`
+  are byte-identical to `main`, so no machine note can differ.
+
+- **The browser.** Less than 14 GB was free, so the site was not built
+  here: the walk ran on CI's Pages build of the branch (run 45468529343,
+  `66344ee84`), served locally, with Playwright in Chromium, one browser
+  at a time, under the shared build lock and a 1.5 GB scope with a
+  memory watchdog. For six lessons (Hello, Loops three
+  ways, Floating point, Strings, Callbacks and Structs) it took each
+  back-end stage at `-O0` and `-O2`, and the WebAssembly view with each
+  compiler, at 1440x900, 1024x768, 390x844 and 320x640 (the last two as
+  touch screens), in both themes: 480 compiler views and 96 WebAssembly
+  views. The last commit, which only keeps the hover inside the frame,
+  was checked on CI's build of the head (run 45485383775, `e3aa9b207`,
+  whose editor bundle and style sheet are byte-identical to the
+  branch's): the walk at 1440x900 with pointing, in both themes, and the
+  hover views below.
+  - **Pointing.** The walk put each listing at its first line, then
+    pointed at every line of the listing in view (up to 40) and at the
+    source's first 20, tapping them on the phones, and measured both
+    listings' places on the page after each: in the dark theme 2512 lines
+    at 1440 px, 2160 at 1024 px, 1729 at 390 px and 1319 at 320 px; in
+    the light one 1835 at 390 px and 1319 at 320 px; and on the head's
+    build 2512 at 1440 px in each theme. No listing moved (0 px).
+    The source's reading held its height in every view.
+  - **Room.** With nothing pointed at, the card's reading is 49 to 68 px
+    at 1440 px and 49 to 86 px at 1024 px (as in Part 24), and 31 px at
+    390 and 320 px; the reading under the source is 63 to 98 px at 390
+    px and 63 to 132 px at 320 px.
+  - **The hover.** Pointed at line 1 of six views (the assembly at `-O0`
+    and `-O2`, the bcc IR, the ABI-lowered IR and the LLVM IR, at 1440
+    and 1024 px, both themes, on the head's build), the editor's hover
+    opened below the line every time (from 293 px, for a line at 278 px)
+    and inside the frame.
+  - No view scrolled sideways, and no page logged an error or a warning.
+    The lowest contrast of any text in the stage card, the WebAssembly
+    view, the readings and the legends is 4.98:1 in the dark theme and
+    4.97:1 in the light one (AA is 4.5:1).
+
+### Left for later
+
+- **A tap moves the page.** On a phone, a tap that rests on a source line
+  scrolls the page down to the output it links to (by design, keeping
+  the tapped line in view), so a second tap a moment later can land on
+  what scrolled under the finger, as the review's walk did. A reader
+  tapping down the listing line by line may meet the same.
+- **The reading's room is per view,** and a sentence that wraps worse
+  than the three longest could still outgrow it; none did in the walk.
+- From Part 24: a count of rotation's copies from the back end; bcc's
+  five lessons without a load or store of their own. From Part 23: more
+  shapes for the readers; the figure remembers nothing between visits.
