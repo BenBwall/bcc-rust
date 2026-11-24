@@ -145,7 +145,14 @@ compiler; each part is captioned with what its lessons share
   starts under the name on a laptop; a narrower card puts the output first
   under the name. The output wraps a line longer than its column, the rest
   of the line hanging further in and without a line number of its own, so
-  no instruction is cut at the column's edge. The real compiler runs in the browser and recompiles as you
+  no instruction is cut at the column's edge; the machine code alone keeps
+  each row whole (offset, bytes, instruction) and scrolls sideways in its
+  frame. Under the output of bcc IR, the ABI-lowered IR, LLVM IR, the
+  assembly and the machine code, "How to read a line" writes one line of
+  that notation, says what it does, glosses each of its parts, and keys the
+  view's other colours (`panels/notation.rs`). The machine code lists each
+  label a jump names, and the alignment padding before it, on lines of
+  their own. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed,
   drawn as paired bars; at the stages the optimizer changes, the two levels
   can be shown side by side, each linked to the source. Each stage's
@@ -171,8 +178,9 @@ compiler; each part is captioned with what its lessons share
   edit keeps the reader's place in the code rather than the scroll offset:
   the output opens with the same source line's code at the same height
   (`pipeline::Place`), or the nearest line of the same function that has
-  code there. Function names in the IRs and the assembly (`@main`, `main:`)
-  have a colour of their own.
+  code there. Each kind of token has one colour in every view: function
+  names in the IRs, the assembly and the WebAssembly text (`@main`,
+  `main:`, `$main`) have a colour of their own.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the
   browser, executed one
@@ -434,7 +442,8 @@ Every stage except LLVM IR is compiled in the browser by bcc itself:
 end as the native build, minus LLVM. `src/explorer.rs` maps its output onto
 the page's `Compilation`: the text stages as they are (the syntax tree and the
 semantic types with `--syntax-locations`), each function's machine code as an
-offset/bytes/instruction listing, diagnostics in the editor's UTF-16 columns, and the
+offset/bytes/instruction listing (with the labels its jumps name and its
+alignment padding), diagnostics in the editor's UTF-16 columns, and the
 compiler's per-function `line_map`, which links source lines to the IR,
 assembly and listing.
 
@@ -789,7 +798,8 @@ the tape (`tape.rs`, which also records the run's lanes), the cells under its
 playhead, the expression schematic, standard output (`output.rs`), the
 objects' datasheet, the encoders
 (`knob.rs`) and the pipeline view, with the front-end stages' cards and
-source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
+source marks in `panels/front_end.rs` and the back-end stages' "How to read
+a line" in `panels/notation.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
 WebAssembly view's page state and controls, `panels/wasm.rs` (with
 `panels/wasm/`) draws it, and `wasm.rs` (with `wasm/`) defines its data, the
