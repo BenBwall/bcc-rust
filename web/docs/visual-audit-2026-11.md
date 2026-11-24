@@ -7298,6 +7298,37 @@ list, on `agent/site-part23`, in the brief's order.
   rotation in Loops three ways, and longer encodings in Names for values
   and Short-circuit evaluation.
 
+- **The browser.** Less than 14 GB was free, so the site was not built
+  here: the walk ran on CI's Pages build of `0dc70faaf` (run
+  45342929486), served locally, with Playwright in Chromium, one browser
+  at a time, under a 1.5 GB scope with a memory watchdog. For six lessons
+  (Objects, Hello, Loops three ways, Floating point, Callbacks and
+  Structs) it took each back-end stage at `-O0` and `-O2` and the
+  WebAssembly view, at 1440x900, 1024x768 and 390x844 (as a touch
+  screen), in both themes: 396 states. No state scrolled sideways, no
+  page logged an error or a warning, and no part of a figure passed its
+  frame or the window. Every colour in the figures is at least 6.88:1 on
+  the light theme's screen and 7.12:1 on the dark one's, the WebAssembly
+  figure's included; the scroll hint is 9.4:1 or more and the "Show call
+  frames" chip 11.25:1 or more. Each figure token whose text the view
+  also colours has the view's colour (the script's one exception is an
+  offset `0` it took for a displacement `0`). The figure was open at
+  every state at 1440 and 1024 px and closed at every state at 390 px,
+  50 px tall; a tap opens it (632 px for Callbacks' machine code) and it
+  stays open as the stage changes. Its title is the summary "How to read
+  a line"; its lists keep their names, "The line, part by part" and
+  "Other colours in this view"; the chip is a button named "Show call
+  frames" with `aria-pressed`; the hint's arrow is hidden from screen
+  readers. At 390 px every state said "Tap" and "Swipe". An element
+  screenshot in Playwright turns off the touch emulation for the rest of
+  the page (a probe: `(hover: none)` matches before one and not after),
+  so the walk's phone states after its first screenshot read "Point at";
+  the phone screenshot here is a page screenshot.
+  An earlier walk, on CI's build of `b5136387a`, found the WebAssembly
+  figure painted on the device's grey, which the view gives every child
+  (1.06:1 in the light theme): `.wasm-view > .notation` now keeps its
+  strip of screen.
+
 ### Left for later
 
 - **More shapes for the readers.** The assembly reader takes `mov` and
@@ -7320,5 +7351,7 @@ list, on `agent/site-part23`, in the brief's order.
   first state on the next visit; the views' other switches do not
   persist either.
 - **Clang's WebAssembly module** (the compiler switch in the WebAssembly
-  view) was read by the reader's tests through the stepper's printout,
-  but the browser walk stepped bcc's modules only.
+  view): the reader accepts the stepper's printout of it (no natural
+  `align=`), but the tests and the browser walk read bcc's modules only.
+- **The link legend** under the output still says "came from the line
+  you point at" on a touch screen.
