@@ -370,7 +370,8 @@ impl Value {
     pub fn cells(&self) -> usize {
         match self {
             | Self::Array { elements } => elements.len(),
-            | Self::Struct { members, .. } => members.iter().map(|member| member.value.cells()).sum(),
+            | Self::Struct { members, .. } =>
+                members.iter().map(|member| member.value.cells()).sum(),
             | _ => 1,
         }
     }

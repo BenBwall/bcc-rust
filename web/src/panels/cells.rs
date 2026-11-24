@@ -147,9 +147,11 @@ fn follow_down(values: &web_sys::Element) {
             continue;
         };
         let element = element.get_bounding_client_rect();
-        span = Some(span.map_or((element.top(), element.bottom()), |(top, bottom)| {
-            (top.min(element.top()), bottom.max(element.bottom()))
-        }));
+        span = Some(
+            span.map_or((element.top(), element.bottom()), |(top, bottom)| {
+                (top.min(element.top()), bottom.max(element.bottom()))
+            }),
+        );
     }
     let Some((top, bottom)) = span else {
         return;
@@ -157,7 +159,11 @@ fn follow_down(values: &web_sys::Element) {
     let offset = top - values.get_bounding_client_rect().top();
     let room = f64::from(values.client_height());
     let span = bottom - top;
-    let shift = if span > room { offset } else { offset + span - room };
+    let shift = if span > room {
+        offset
+    } else {
+        offset + span - room
+    };
     let options = web_sys::ScrollToOptions::new();
     options.set_top((f64::from(values.scroll_top()) + shift).max(0.0));
     values.scroll_to_with_scroll_to_options(&options);
@@ -385,7 +391,9 @@ fn text(object: &Object) -> Option<Vec<Option<String>>> {
         return None;
     };
     let element = element_type(&object.ty);
-    let element = element.trim_start_matches("const ").trim_start_matches("volatile ");
+    let element = element
+        .trim_start_matches("const ")
+        .trim_start_matches("volatile ");
     if !matches!(element, "char" | "signed char" | "unsigned char")
         || object.size != elements.len()
         || !(object.literal || elements.len() > BYTE_CELLS)
@@ -516,7 +524,10 @@ fn pointer_text(text: &str) -> String {
     let (Some(spelling), Some(end)) = (text.strip_prefix("→\""), text.rfind('"')) else {
         return text.to_owned();
     };
-    let Some(body) = end.checked_sub("→\"".len()).and_then(|end| spelling.get(..end)) else {
+    let Some(body) = end
+        .checked_sub("→\"".len())
+        .and_then(|end| spelling.get(..end))
+    else {
         return text.to_owned();
     };
     format!("→\"{}{}", shorten(body, POINTER_LITERAL), &text[end..])
@@ -1192,7 +1203,10 @@ mod tests {
             toggle.set(&key, true, 33, false);
             assert_eq!(toggle.opened.get_untracked(), std::slice::from_ref(&key));
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
-            assert_eq!(toggle.announcement.get_untracked(), "s opened into its 33 byte cells");
+            assert_eq!(
+                toggle.announcement.get_untracked(),
+                "s opened into its 33 byte cells"
+            );
             // Pressed twice before a redraw, the string stays open once.
             toggle.set(&key, true, 33, false);
             assert_eq!(toggle.opened.get_untracked().len(), 1);
@@ -1200,7 +1214,10 @@ mod tests {
             toggle.set(&key, false, 33, false);
             assert_eq!(toggle.opened.get_untracked(), Vec::<(usize, String)>::new());
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
-            assert_eq!(toggle.announcement.get_untracked(), "s shown as one cell of its characters");
+            assert_eq!(
+                toggle.announcement.get_untracked(),
+                "s shown as one cell of its characters"
+            );
         });
     }
 
@@ -1226,12 +1243,19 @@ mod tests {
             })
         };
         let marker = format!("data-string=\"{}:", format.id);
-        for (open, expanded) in [(false, "aria-expanded=\"false\""), (true, "aria-expanded=\"true\"")] {
+        for (open, expanded) in [
+            (false, "aria-expanded=\"false\""),
+            (true, "aria-expanded=\"true\""),
+        ] {
             let html = render(open);
             assert_eq!(html.matches(&marker).count(), 1, "{html}");
             let button = html.find(&marker).expect("the key");
             let start = html[..button].rfind("<button").expect("a button");
-            assert!(html[start..button].contains(expanded), "{}", &html[start..button]);
+            assert!(
+                html[start..button].contains(expanded),
+                "{}",
+                &html[start..button]
+            );
         }
     }
 
@@ -1240,7 +1264,10 @@ mod tests {
         let escapes = format!("→\"{}\"[31]", "\\xff".repeat(32));
         assert_eq!(pointer_text(&escapes), "→\"\\xff\\xff\\x…\"[31]");
         assert_eq!(pointer_text("→\"Ada\""), "→\"Ada\"");
-        assert_eq!(pointer_text("→\"\\\"quoted\\\" and more\"[2]"), "→\"\\\"quoted\\\"…\"[2]");
+        assert_eq!(
+            pointer_text("→\"\\\"quoted\\\" and more\"[2]"),
+            "→\"\\\"quoted\\\"…\"[2]"
+        );
         // An opening quote with no closing one is left as it is.
         assert_eq!(pointer_text("→\""), "→\"");
         assert_eq!(pointer_text("→values[1]"), "→values[1]");

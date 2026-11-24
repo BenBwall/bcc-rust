@@ -2209,11 +2209,19 @@ mod tests {
             "y begins with main's block, before x's"
         );
         assert_eq!(lane("x").ends, [step("End the lifetime of x")]);
-        let dangling: Vec<bool> = lane("p").segments.iter().map(|segment| segment.dangling).collect();
+        let dangling: Vec<bool> = lane("p")
+            .segments
+            .iter()
+            .map(|segment| segment.dangling)
+            .collect();
         assert_eq!(dangling.last(), Some(&true), "p outlives x");
         assert!(dangling.contains(&false), "p pointed at x while it lived");
         let last = &history[history.len() - 1];
-        let p = last.objects.iter().find(|object| object.name == "p").expect("p");
+        let p = last
+            .objects
+            .iter()
+            .find(|object| object.name == "p")
+            .expect("p");
         assert!(matches!(p.value, Value::Pointer { ended: true, .. }));
         assert_eq!(value_text(&p.value).as_deref(), Some("→ ended"));
     }
@@ -2753,14 +2761,25 @@ mod tests {
         let keys: Vec<&str> = reel.groups.iter().map(|group| group.key.as_str()).collect();
         assert_eq!(keys[0], STATIC_GROUP, "{keys:?}");
         let statics = &reel.groups[0];
-        let names: Vec<&str> = statics.lanes.iter().map(|lane| lane.name.as_str()).collect();
+        let names: Vec<&str> = statics
+            .lanes
+            .iter()
+            .map(|lane| lane.name.as_str())
+            .collect();
         assert_eq!(names, ["calls", "origin", "total"]);
         assert_eq!(statics.calls.len(), 1);
         assert_eq!(statics.calls[0].last, history.len() - 1, "alive to the end");
         assert!(
             rows(&reel, history.len() - 1, &[])
                 .first()
-                .is_some_and(|row| matches!(row, &Row::Group { at: 0, folded: false, .. })),
+                .is_some_and(|row| matches!(
+                    row,
+                    &Row::Group {
+                        at: 0,
+                        folded: false,
+                        ..
+                    }
+                )),
             "a static group with named objects stays open"
         );
         // A structure's lane writes its members.
@@ -2772,8 +2791,17 @@ mod tests {
             .iter()
             .find(|group| group.name == "main")
             .expect("main's group");
-        let px = main.lanes.iter().find(|lane| lane.name == "px").expect("px");
-        assert_eq!(px.segments.last().and_then(|segment| segment.value.as_deref()), Some("→b.x"));
+        let px = main
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "px")
+            .expect("px");
+        assert_eq!(
+            px.segments
+                .last()
+                .and_then(|segment| segment.value.as_deref()),
+            Some("→b.x")
+        );
     }
 
     #[test]
@@ -2796,13 +2824,7 @@ mod tests {
             value_text(&pointer(1, false)).as_deref(),
             Some("→values[1]")
         );
-        assert_eq!(
-            value_text(&pointer(3, true)).as_deref(),
-            Some("→values+3")
-        );
-        assert_eq!(
-            value_text(&array).as_deref(),
-            Some("{?,?,?}")
-        );
+        assert_eq!(value_text(&pointer(3, true)).as_deref(), Some("→values+3"));
+        assert_eq!(value_text(&array).as_deref(), Some("{?,?,?}"));
     }
 }

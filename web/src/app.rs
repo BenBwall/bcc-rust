@@ -50,7 +50,6 @@ use crate::{
         Cells,
         Datasheet,
         Deck,
-        evaluation,
         Knob,
         LiveCompile,
         Narration,
@@ -60,6 +59,7 @@ use crate::{
         Schematic,
         WasmListing,
         WasmView,
+        evaluation,
         focus_stage_key,
         source_marks,
     },
@@ -310,7 +310,10 @@ pub(crate) struct State {
 }
 
 impl State {
-    #[expect(clippy::too_many_lines, reason = "One line per piece of the page's state.")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One line per piece of the page's state."
+    )]
     fn new() -> Self {
         let tour = &DEMOS[0];
         let history = RwSignal::new(Vec::<Snapshot>::new());
@@ -328,7 +331,10 @@ impl State {
         // The pipeline opens at its first stage, wherever it is opened from, so
         // a reader meets the stages in their order; the stage keys and the
         // front end's "Skip to bcc IR" lead straight to the IR.
-        let (stage, unfolded) = (RwSignal::new(Stage::Lines), RwSignal::new(Unfolded::default()));
+        let (stage, unfolded) = (
+            RwSignal::new(Stage::Lines),
+            RwSignal::new(Unfolded::default()),
+        );
         let compare = RwSignal::new(false);
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
@@ -366,9 +372,7 @@ impl State {
         });
         let group = Memo::new(move |_| {
             let cursor = cursor.get()?;
-            source.with(|source| {
-                history.with(|history| evaluation::group(history, cursor, source))
-            })
+            source.with(|source| history.with(|history| evaluation::group(history, cursor, source)))
         });
         Self {
             engine: StoredValue::new_local(None),
@@ -1465,11 +1469,9 @@ fn links_memo_value(
     let stage = stage.get();
     let unfolded = unfolded.get();
     compilation.with(|compilation| {
-        compilation
-            .as_ref()
-            .map_or_default(|compilation| {
-                source.with(|source| crate::pipeline::links(stage, compilation, source, unfolded))
-            })
+        compilation.as_ref().map_or_default(|compilation| {
+            source.with(|source| crate::pipeline::links(stage, compilation, source, unfolded))
+        })
     })
 }
 

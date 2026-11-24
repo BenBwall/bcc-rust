@@ -555,12 +555,8 @@ impl Context<'_> {
         let result = pushed
             .first()
             .map_or_else(|| "?".to_owned(), |value| format!("`{value}`"));
-        let a = popped
-            .first()
-            .map_or_default(|value| format!("`{value}`"));
-        let b = popped
-            .get(1)
-            .map_or_default(|value| format!("`{value}`"));
+        let a = popped.first().map_or_default(|value| format!("`{value}`"));
+        let b = popped.get(1).map_or_default(|value| format!("`{value}`"));
         let comparison = |symbol: &str, signed: &str| {
             let truth = if matches!(pushed.first(), Some(Value::I32(1))) {
                 "yes"

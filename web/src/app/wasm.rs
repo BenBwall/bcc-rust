@@ -943,15 +943,13 @@ impl WasmState {
         });
         let links = if linked > 0 {
             self.program.with(|program| {
-                program
-                    .as_ref()
-                    .map_or_default(|program| {
-                        program
-                            .wat_lines_for(linked)
-                            .into_iter()
-                            .map(|line| Decoration::line(line, "link-line"))
-                            .collect()
-                    })
+                program.as_ref().map_or_default(|program| {
+                    program
+                        .wat_lines_for(linked)
+                        .into_iter()
+                        .map(|line| Decoration::line(line, "link-line"))
+                        .collect()
+                })
             })
         } else {
             Vec::new()

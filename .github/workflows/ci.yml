@@ -38,6 +38,10 @@ jobs:
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --profile minimal --component rustfmt
       - run: cargo +nightly fmt --check
+      # The site in web/ is a workspace of its own, which the root's
+      # `cargo fmt` does not reach.
+      - name: Site formatting
+        run: cargo +nightly fmt --check --manifest-path web/Cargo.toml
       - name: Builtin index matches its shards
         run: python3 scripts/generate_builtin_index.py --check
 

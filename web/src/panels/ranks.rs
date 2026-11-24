@@ -303,7 +303,9 @@ mod tests {
         );
         // Floating operands.
         assert!(converted("int", "double", "double").contains("the integer int converts"));
-        assert!(converted("float", "long double", "long double").contains("long double is the wider"));
+        assert!(
+            converted("float", "long double", "long double").contains("long double is the wider")
+        );
     }
 
     #[test]
@@ -337,5 +339,4 @@ mod tests {
         assert!(promoted("char", "int", true).contains("integer promotions make it an int"));
         assert!(promoted("float", "double", false).contains("default argument promotions"));
     }
-
 }

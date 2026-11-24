@@ -794,8 +794,7 @@ fn value(
                         let declared = layout.and_then(|layout| layout.members.get(index));
                         MemberValue {
                             name:    declared.map_or_default(|member| member.name.clone()),
-                            ty:      declared
-                                .map_or_default(|member| member.r#type.clone()),
+                            ty:      declared.map_or_default(|member| member.r#type.clone()),
                             offset:  declared.map_or(0, |member| member.offset),
                             size:    declared.map_or(0, |member| member.size),
                             padding: declared.map_or(0, |member| member.padding),
@@ -951,14 +950,26 @@ mod tests {
     #[test]
     fn conversion_steps_carry_both_operands_and_their_rule() {
         let cases = [
-            ("int", "long", "Both are signed, and long has the higher rank"),
+            (
+                "int",
+                "long",
+                "Both are signed, and long has the higher rank",
+            ),
             (
                 "unsigned int",
                 "unsigned long",
                 "Both are unsigned, and unsigned long has the higher rank",
             ),
-            ("int", "unsigned int", "have the same rank, so the signed operand converts"),
-            ("int", "unsigned long", "unsigned long is unsigned and has the higher rank"),
+            (
+                "int",
+                "unsigned int",
+                "have the same rank, so the signed operand converts",
+            ),
+            (
+                "int",
+                "unsigned long",
+                "unsigned long is unsigned and has the higher rank",
+            ),
             (
                 "unsigned int",
                 "long",
@@ -970,13 +981,15 @@ mod tests {
                 "long long has the higher rank, but on x86-64 Linux it cannot hold",
             ),
             ("int", "double", "The other operand is floating"),
-            ("float", "double", "Both are floating, and double is the wider"),
+            (
+                "float",
+                "double",
+                "Both are floating, and double is the wider",
+            ),
         ];
         for (a, b, expected) in cases {
             for order in ["a < b", "b < a"] {
-                let source = format!(
-                    "int main(void) {{ {a} a = 1; {b} b = 2; return {order}; }}"
-                );
+                let source = format!("int main(void) {{ {a} a = 1; {b} b = 2; return {order}; }}");
                 let states = execute(&mut Machine::default(), &source);
                 let rules: Vec<(String, String, String, String)> = states
                     .iter()
@@ -992,7 +1005,8 @@ mod tests {
                         )
                     })
                     .collect();
-                // Both operands convert only when neither type is the common one.
+                // Both operands convert only when neither type is the common
+                // one.
                 let expected_count = if a == "long long" { 2 } else { 1 };
                 assert_eq!(rules.len(), expected_count, "{source}: {rules:?}");
                 for (from, other, to, said) in &rules {
@@ -1011,7 +1025,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn steps_show_their_value_flow_and_the_objects_they_touch() {
@@ -1350,7 +1363,11 @@ mod tests {
         );
         // The directive step is the first, before any static object.
         assert_eq!(states[1].event.kind, "directive");
-        assert_eq!(states[1].objects.len(), 0, "no object before the static ones");
+        assert_eq!(
+            states[1].objects.len(),
+            0,
+            "no object before the static ones"
+        );
     }
 
     #[test]
@@ -1528,7 +1545,10 @@ mod tests {
     #[test]
     fn a_switch_flows_to_the_label_it_jumps_to() {
         let mut machine = Machine::default();
-        let states = execute(&mut machine, include_str!("../docs/corpus/e02_enum_switch.c"));
+        let states = execute(
+            &mut machine,
+            include_str!("../docs/corpus/e02_enum_switch.c"),
+        );
         let chips = |title: &str| {
             states
                 .iter()
@@ -1540,10 +1560,7 @@ mod tests {
                 .map(|part| part.text.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            chips("switch on 1"),
-            ["1", "jumps to", "case SQUARE"]
-        );
+        assert_eq!(chips("switch on 1"), ["1", "jumps to", "case SQUARE"]);
         assert_eq!(chips("switch on 2"), ["2", "jumps to", "default"]);
         let states = execute(
             &mut machine,
@@ -1735,7 +1752,12 @@ mod tests {
             .iter()
             .find(|object| object.name == "e")
             .expect("e");
-        let Value::Struct { name, size, members } = &entry.value else {
+        let Value::Struct {
+            name,
+            size,
+            members,
+        } = &entry.value
+        else {
             panic!("e is a structure: {:?}", entry.value);
         };
         assert_eq!((name.as_str(), *size), ("struct entry", 8));
@@ -1776,7 +1798,10 @@ mod tests {
             .expect("b = moved(b, 4) copies");
         assert_eq!(copy.event.flow[0].text, "{12, 12}");
         let tree = copy.tree.as_ref().expect("the assignment's tree");
-        assert_eq!(tree.nodes.last().and_then(|node| node.value.as_deref()), Some("{…}"));
+        assert_eq!(
+            tree.nodes.last().and_then(|node| node.value.as_deref()),
+            Some("{…}")
+        );
         let px = last
             .objects
             .iter()

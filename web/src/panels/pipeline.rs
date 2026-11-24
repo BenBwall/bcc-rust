@@ -112,13 +112,11 @@ pub fn PipelineView(
     let links_of = move |compilation: Memo<Option<Compilation>>| {
         Memo::new(move |_| {
             compilation.with(|compilation| {
-                compilation
-                    .as_ref()
-                    .map_or_default(|compilation| {
-                        source.with(|source| {
-                            crate::pipeline::links(stage.get(), compilation, source, unfolded.get())
-                        })
+                compilation.as_ref().map_or_default(|compilation| {
+                    source.with(|source| {
+                        crate::pipeline::links(stage.get(), compilation, source, unfolded.get())
                     })
+                })
             })
         })
     };
@@ -1398,7 +1396,13 @@ mod tests {
         held: Option<Compilation>,
         other: Option<Compilation>,
     ) -> String {
-        render_stage(Stage::Ir, false, optimize, LiveCompile::Compiling, [current, held, other])
+        render_stage(
+            Stage::Ir,
+            false,
+            optimize,
+            LiveCompile::Compiling,
+            [current, held, other],
+        )
     }
 
     /// The same at `stage`, with both levels side by side when `compare`,
@@ -1523,7 +1527,10 @@ mod tests {
             [Some(assembled()), Some(assembled()), Some(refused())],
         );
         assert!(beside.contains("ret_assembled"), "{beside}");
-        assert!(beside.contains("Compilation at -O0 stopped in the back end"), "{beside}");
+        assert!(
+            beside.contains("Compilation at -O0 stopped in the back end"),
+            "{beside}"
+        );
         assert!(beside.contains(reason), "{beside}");
         assert!(beside.contains(why), "{beside}");
         // -O0 on screen failed, -O2 beside it did not: its output stays.
@@ -1535,7 +1542,10 @@ mod tests {
             [Some(refused()), Some(refused()), Some(assembled())],
         );
         assert!(selected.contains("ret_assembled"), "{selected}");
-        assert!(selected.contains("Compilation at -O0 stopped in the back end"), "{selected}");
+        assert!(
+            selected.contains("Compilation at -O0 stopped in the back end"),
+            "{selected}"
+        );
         assert!(selected.contains(why), "{selected}");
         assert!(!selected.contains("Compilation at -O2"), "{selected}");
         // On its own, the failed level names no level.
@@ -1546,7 +1556,10 @@ mod tests {
             LiveCompile::Compiled,
             [Some(refused()), Some(refused()), Some(assembled())],
         );
-        assert!(alone.contains("Compilation stopped in the back end"), "{alone}");
+        assert!(
+            alone.contains("Compilation stopped in the back end"),
+            "{alone}"
+        );
         assert!(alone.contains(why), "{alone}");
     }
 

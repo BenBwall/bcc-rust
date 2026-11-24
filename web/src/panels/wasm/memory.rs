@@ -23,9 +23,7 @@ pub fn LinearMemory(wasm: WasmState) -> impl IntoView {
     let tab = move || {
         let wanted = wasm.memory_tab.get();
         view.with(|view| {
-            let windows = view
-                .as_ref()
-                .map_or_default(|view| view.windows.as_slice());
+            let windows = view.as_ref().map_or_default(|view| view.windows.as_slice());
             // Follow an access as it happens; otherwise keep the choice.
             if windows.iter().any(|window| window.key == wanted) {
                 wanted

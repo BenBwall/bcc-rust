@@ -37,9 +37,15 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     // expression yet; the caller's expression waits on the call.
     let calling = Memo::new(move |_| {
         snapshot.with(|state| {
-            let state = state.as_ref().filter(|state| state.event.category == "call")?;
+            let state = state
+                .as_ref()
+                .filter(|state| state.event.category == "call")?;
             let (called, waiting) = (state.stack.first()?, state.stack.get(1)?);
-            Some((waiting.name.clone(), waiting.waiting.clone()?, called.name.clone()))
+            Some((
+                waiting.name.clone(),
+                waiting.waiting.clone()?,
+                called.name.clone(),
+            ))
         })
     });
     view! {

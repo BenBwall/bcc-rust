@@ -85,7 +85,9 @@ fn category_hint(category: &str) -> &'static str {
         | "evaluate" => "Evaluate: an operator or constant produces a value",
         | "convert" => "Convert: a value is read from an object or changes type or form",
         | "memory" => "Memory: an object is designated, stored into or updated",
-        | "lifetime" => "Lifetime: a block begins or ends, creating or ending its objects, or a declaration is reached",
+        | "lifetime" =>
+            "Lifetime: a block begins or ends, creating or ending its objects, or a declaration is \
+             reached",
         | "control" => "Control flow: a condition or jump picks what runs next",
         | "call" => "Call: a function call begins or returns",
         | "fault" =>
