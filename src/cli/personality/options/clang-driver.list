@@ -1,0 +1,885 @@
+# pinned Clang's driver: its options besides the -W, -f and -m flags, and those taking separate values; regenerate with scripts/update_driver_options.py --clang-driver --options-td
+flag -### cl
+separate --CLASSPATH 1 unused-c unused-E unused-Zs unused-link
+joined --CLASSPATH= unused-c unused-E unused-Zs unused-link
+flag --all-warnings
+joined --amdgpu-arch-tool= cl unused-c unused-E unused-Zs unused-link
+flag --analyze cl unused-Zs
+flag --analyzer-no-default-checks unused-c unused-E unused-Zs unused-link
+joined --analyzer-output unused-c unused-E unused-Zs unused-link
+separate --analyzer-output 1 unused-c unused-E unused-Zs unused-link
+flag --ansi
+flag --assemble unused-E unused-Zs
+separate --assert 1 unused-c unused-E unused-Zs unused-link
+joined --assert= unused-c unused-E unused-Zs unused-link
+joined --autocomplete=
+separate --bootclasspath 1 unused-c unused-E unused-Zs unused-link
+joined --bootclasspath= unused-c unused-E unused-Zs unused-link
+separate --classpath 1 unused-c unused-E unused-Zs unused-link
+joined --classpath= unused-c unused-E unused-Zs unused-link
+flag --combine
+flag --comments
+flag --comments-in-macros
+flag --compile unused-E unused-Zs
+separate --config 1 unused-c unused-E unused-Zs unused-link
+joined --config-system-dir= cl unused-c unused-E unused-Zs unused-link
+joined --config-user-dir= cl unused-c unused-E unused-Zs unused-link
+joined --config= cl unused-c unused-E unused-Zs unused-link
+flag --constant-cfstrings unused-c unused-E unused-Zs unused-link
+flag --coverage cl
+separate --cstdlib 1 unused-c unused-E unused-Zs unused-link
+joined --cstdlib= unused-c unused-E unused-Zs unused-link
+flag --cuda-compile-host-device cl
+flag --cuda-device-only cl
+joined --cuda-feature= cl unused-c unused-E unused-Zs unused-link
+joined --cuda-gpu-arch= cl unused-c unused-E unused-Zs unused-link
+flag --cuda-host-only cl
+joined --cuda-include-ptx= cl unused-c unused-E unused-Zs unused-link
+flag --cuda-noopt-device-debug cl unused-c unused-E unused-Zs unused-link
+flag --cuda-path-ignore-env cl unused-c unused-E unused-Zs unused-link
+joined --cuda-path= cl unused-c unused-E unused-Zs unused-link
+flag --debug
+joined --debug=
+separate --define-macro 1
+joined --define-macro=
+flag --dependencies
+joined --dxv-path= unused-c unused-E unused-Zs unused-link
+separate --dyld-prefix 1
+joined --dyld-prefix=
+joined --embed-dir=
+flag --emit-extension-symbol-graphs unused-c unused-E unused-Zs unused-link
+flag --emit-static-lib unused-c unused-E unused-Zs
+separate --encoding 1 unused-c unused-E unused-Zs unused-link
+joined --encoding= unused-c unused-E unused-Zs unused-link
+flag --end-no-unused-arguments cl
+flag --entry
+separate --extdirs 1 unused-c unused-E unused-Zs unused-link
+joined --extdirs= unused-c unused-E unused-Zs unused-link
+flag --extra-warnings
+joined --extract-api-ignores= unused-c unused-E unused-Zs unused-link
+joined --fmultilib-flag= unused-c unused-E unused-Zs unused-link
+separate --for-linker 1
+joined --for-linker=
+separate --force-link 1 unused-c unused-E unused-Zs unused-link
+joined --force-link= unused-c unused-E unused-Zs unused-link
+joined --gcc-install-dir= unused-c unused-E unused-Zs unused-link
+joined --gcc-toolchain= unused-c unused-E unused-Zs unused-link
+joined --gcc-triple= unused-c unused-E unused-Zs unused-link
+flag --gpu-bundle-output cl
+joined --gpu-instrument-lib= cl unused-c unused-E unused-Zs unused-link
+joined --gpu-max-threads-per-block= cl unused-c unused-E unused-Zs unused-link
+flag --gpu-use-aux-triple-only cl unused-c unused-E unused-Zs unused-link
+flag --help
+flag --help-hidden
+joined --hip-device-lib-path= cl unused-c unused-E unused-Zs unused-link
+joined --hip-device-lib= cl unused-c unused-E unused-Zs unused-link
+flag --hip-link cl
+joined --hip-path= cl unused-c unused-E unused-Zs unused-link
+joined --hip-version= cl unused-c unused-E unused-Zs unused-link
+joined --hipspv-pass-plugin= cl unused-c unused-E unused-Zs unused-link
+flag --hipstdpar cl
+flag --hipstdpar-interpose-alloc cl unused-c unused-E unused-Zs unused-link
+joined --hipstdpar-path= cl unused-c unused-E unused-Zs unused-link
+joined --hipstdpar-prim-path= cl unused-c unused-E unused-Zs unused-link
+joined --hipstdpar-thrust-path= cl unused-c unused-E unused-Zs unused-link
+joined --imacros
+separate --imacros 1
+joined --imacros=
+joined --include
+separate --include 1
+joined --include-barrier
+joined --include-directory
+separate --include-directory 1
+joined --include-directory-after
+separate --include-directory-after 1
+joined --include-directory-after=
+joined --include-directory=
+joined --include-prefix
+separate --include-prefix 1
+joined --include-prefix=
+joined --include-with-prefix
+separate --include-with-prefix 1
+joined --include-with-prefix-after
+separate --include-with-prefix-after 1
+joined --include-with-prefix-after=
+joined --include-with-prefix-before
+separate --include-with-prefix-before 1
+joined --include-with-prefix-before=
+joined --include-with-prefix=
+joined --include=
+separate --language 1
+joined --language=
+joined --ld-path= unused-c unused-E unused-Zs unused-link
+joined --libclc-lib= unused-c unused-E unused-Zs unused-link
+joined --libomptarget-amdgcn-bc-path= unused-c unused-E unused-Zs unused-link
+joined --libomptarget-amdgpu-bc-path= unused-c unused-E unused-Zs unused-link
+joined --libomptarget-nvptx-bc-path= unused-c unused-E unused-Zs unused-link
+joined --libomptarget-spirv-bc-path= unused-c unused-E unused-Zs unused-link
+separate --library-directory 1 unused-c unused-E unused-Zs unused-link
+joined --library-directory= unused-c unused-E unused-Zs unused-link
+separate --mhwdiv 1
+joined --mhwdiv=
+joined --multi-lib-config=
+joined --no-cuda-gpu-arch= cl unused-c unused-E unused-Zs unused-link
+joined --no-cuda-include-ptx= cl unused-c unused-E unused-Zs unused-link
+flag --no-cuda-noopt-device-debug cl unused-c unused-E unused-Zs unused-link
+flag --no-cuda-version-check cl unused-c unused-E unused-Zs unused-link
+flag --no-default-config cl unused-c unused-E unused-Zs unused-link
+flag --no-gpu-bundle-output cl
+flag --no-integrated-cpp
+flag --no-line-commands
+flag --no-offload-add-rpath
+joined --no-offload-arch= cl unused-c unused-E unused-Zs unused-link
+flag --no-offload-compress cl unused-c unused-E unused-Zs unused-link
+flag --no-offload-inc
+flag --no-offload-new-driver cl
+flag --no-offloadlib cl
+flag --no-pedantic
+flag --no-standard-includes
+flag --no-standard-libraries
+separate --no-system-header-prefix 1
+joined --no-system-header-prefix=
+flag --no-undefined
+flag --no-warnings cl
+flag --no-wasm-opt cl unused-c unused-E unused-Zs unused-link
+flag --no-xcselect unused-c unused-E unused-Zs unused-link
+joined --nvptx-arch-tool= cl unused-c unused-E unused-Zs unused-link
+flag --offload-add-rpath
+joined --offload-arch-tool= cl unused-c unused-E unused-Zs unused-link
+joined --offload-arch= cl unused-c unused-E unused-Zs unused-link
+flag --offload-compress cl unused-c unused-E unused-Zs unused-link
+joined --offload-compression-level= cl unused-c unused-E unused-Zs unused-link
+flag --offload-device-only cl
+flag --offload-host-device cl
+flag --offload-host-only cl
+flag --offload-inc
+joined --offload-jobs= cl unused-c unused-E unused-Zs unused-link
+flag --offload-link unused-c unused-E unused-Zs
+flag --offload-new-driver cl
+joined --offload-targets= cl
+joined --offload=
+flag --offloadlib cl
+flag --optimize
+joined --optimize=
+separate --output 1
+separate --output-class-directory 1 unused-c unused-E unused-Zs unused-link
+joined --output-class-directory= unused-c unused-E unused-Zs unused-link
+joined --output=
+separate --param 1 unused-c unused-E unused-Zs unused-link
+joined --param= unused-c unused-E unused-Zs unused-link
+flag --pass-exit-codes
+flag --pedantic
+flag --pedantic-errors
+flag --pipe
+flag --precompile cl unused-E
+flag --precompile-reduced-bmi cl unused-E
+separate --prefix 1
+joined --prefix=
+flag --preprocess
+flag --pretty-sgf unused-c unused-E unused-Zs unused-link
+flag --print-diagnostic-categories
+flag --print-diagnostic-options cl
+flag --print-effective-triple cl
+flag --print-enabled-extensions cl
+separate --print-file-name 1
+joined --print-file-name= cl
+flag --print-libgcc-file-name cl
+flag --print-library-module-manifest-path cl
+flag --print-missing-file-dependencies
+flag --print-multi-directory
+flag --print-multi-flags-experimental
+flag --print-multi-lib
+flag --print-multi-os-directory
+flag --print-multiarch
+separate --print-prog-name 1
+joined --print-prog-name= cl
+flag --print-resource-dir cl
+flag --print-rocm-search-dirs cl unused-c unused-E unused-Zs unused-link
+flag --print-runtime-dir cl
+flag --print-search-dirs cl
+flag --print-supported-cpus cl
+flag --print-supported-extensions cl
+flag --print-target-triple cl
+flag --print-targets cl
+joined --product-name= unused-c unused-E unused-Zs unused-link
+flag --profile
+joined --ptxas-path= cl unused-c unused-E unused-Zs unused-link
+flag --relocatable-pch
+separate --resource 1 unused-c unused-E unused-Zs unused-link
+joined --resource= unused-c unused-E unused-Zs unused-link
+joined --rocm-device-lib-path= cl unused-c unused-E unused-Zs unused-link
+joined --rocm-path= cl unused-c unused-E unused-Zs unused-link
+joined --rsp-quoting= cl
+separate --rtlib 1 unused-c unused-E unused-Zs
+joined --rtlib= cl unused-c unused-E unused-Zs
+flag --save-stats
+joined --save-stats=
+flag --save-temps
+joined --save-temps=
+separate --serialize-diagnostics 1
+flag --shared unused-c unused-E unused-Zs
+flag --signed-char
+separate --specs 1
+joined --specs= unused-c unused-E unused-Zs unused-link
+joined --spirv-val-path= unused-c unused-E unused-Zs unused-link
+joined --ssaf-compilation-unit-id=
+joined --ssaf-extract-summaries=
+flag --ssaf-include-local-entities
+flag --ssaf-list-extractors
+flag --ssaf-list-formats
+joined --ssaf-tu-summary-file=
+flag --start-no-unused-arguments cl
+flag --static
+separate --std 1
+joined --std=
+separate --stdlib 1 unused-c unused-E unused-Zs unused-link
+joined --stdlib= unused-c unused-E unused-Zs unused-link
+flag --sycl-link cl
+joined --symbol-graph-dir= unused-c unused-E unused-Zs unused-link
+separate --sysroot 1
+joined --sysroot=
+separate --system-header-prefix 1
+joined --system-header-prefix=
+flag --target-help unused-c unused-E unused-Zs unused-link
+joined --target= cl
+flag --trace-includes
+flag --traditional
+flag --traditional-cpp
+flag --trigraphs
+separate --undefine-macro 1
+joined --undefine-macro=
+flag --unsigned-char
+joined --unwindlib= unused-c unused-E unused-Zs unused-link
+flag --user-dependencies
+flag --verbose
+flag --verify-debug-info unused-c unused-E unused-Zs unused-link
+flag --version cl
+joined --vfsoverlay cl
+separate --vfsoverlay 1 cl
+flag --via-file-asm cl unused-E
+joined --warn-
+joined --warn-=
+joined --warning-suppression-mappings= cl
+flag --wasm-opt cl unused-c unused-E unused-Zs unused-link
+flag --write-dependencies
+flag --write-user-dependencies
+joined -A unused-c unused-E unused-Zs unused-link
+separate -A 1 unused-c unused-E unused-Zs unused-link
+joined -A- unused-c unused-E unused-Zs unused-link
+joined -B
+separate -B 1
+flag -C cl
+flag -CC
+joined -D cl
+separate -D 1 cl
+flag -E cl
+flag -EB
+flag -EL
+joined -F cl
+separate -F 1 cl
+joined -G cl
+separate -G 1 cl
+joined -G= cl
+flag -H cl
+joined -I cl
+separate -I 1 cl
+joined -I- cl
+flag -K
+joined -L unused-c unused-E unused-Zs unused-link
+separate -L 1 unused-c unused-E unused-Zs unused-link
+flag -M
+flag -MD cl
+joined -MF unused-c unused-E unused-Zs unused-link
+separate -MF 1 unused-c unused-E unused-Zs unused-link
+flag -MG
+joined -MJ
+separate -MJ 1
+flag -MM
+flag -MMD
+flag -MP cl
+joined -MQ unused-c unused-E unused-Zs unused-link
+separate -MQ 1 unused-c unused-E unused-Zs unused-link
+joined -MT unused-c unused-E unused-Zs unused-link
+separate -MT 1 cl unused-c unused-E unused-Zs unused-link
+flag -MV
+flag -Mach unused-c unused-E unused-Zs unused-link
+joined -O cl
+joined -O0 cl
+joined -O4 cl
+joined -ObjC cl
+joined -ObjC++ cl
+joined -Ofast cl
+joined -Og cl
+joined -Os cl
+joined -Oz cl
+flag -P cl
+flag -Q unused-c unused-E unused-Zs unused-link
+flag -Qn
+flag -Qunused-arguments cl
+flag -Qy
+joined -R
+joined -Rpass-analysis=
+joined -Rpass-missed=
+joined -Rpass=
+flag -S unused-E unused-Zs
+joined -T unused-c unused-E unused-Zs unused-link
+separate -T 1 unused-c unused-E unused-Zs unused-link
+joined -U cl
+separate -U 1 cl
+joined -V
+separate -V 1 cl
+flag -X cl unused-c unused-E unused-Zs unused-link
+separate -Xanalyzer 1 unused-c unused-E unused-Zs unused-link
+joined -Xarch_
+separate -Xarch_ 1 unused-c unused-E unused-Zs unused-link
+joined -Xarch_device
+separate -Xarch_device 1 unused-c unused-E unused-Zs unused-link
+joined -Xarch_host
+separate -Xarch_host 1
+separate -Xassembler 1
+separate -Xclang 1 cl
+joined -Xclang= cl
+separate -Xclangas 1 cl unused-c unused-E unused-Zs unused-link
+joined -Xclangas= cl unused-c unused-E unused-Zs unused-link
+flag -Xcompiler unused-c unused-E unused-Zs unused-link
+separate -Xcuda-fatbinary 1 unused-c unused-E unused-Zs unused-link
+separate -Xcuda-ptxas 1 cl unused-c unused-E unused-Zs unused-link
+separate -Xlinker 1 cl
+separate -Xmicrosoft-visualc-tools-root 1
+separate -Xmicrosoft-visualc-tools-version 1
+separate -Xmicrosoft-windows-sdk-root 1
+separate -Xmicrosoft-windows-sdk-version 1
+separate -Xmicrosoft-windows-sys-root 1
+joined -Xoffload-compiler
+separate -Xoffload-compiler 1 unused-c unused-E unused-Zs unused-link
+joined -Xoffload-linker
+separate -Xoffload-linker 1 unused-c unused-E unused-Zs unused-link
+separate -Xopenmp-target 1 unused-c unused-E unused-Zs unused-link
+joined -Xopenmp-target=
+separate -Xopenmp-target= 1 unused-c unused-E unused-Zs unused-link
+flag -Xparser unused-c unused-E unused-Zs unused-link
+separate -Xpreprocessor 1
+joined -Xthinlto-distributor= cl unused-c unused-E unused-Zs unused-link
+flag -Z unused-c unused-E unused-Zs unused-link
+flag -Z-Xlinker-no-demangle
+flag -Z-reserved-lib-cckext
+flag -Z-reserved-lib-stdc++
+separate -Zlinker-input 1
+separate -alias_list 1
+flag -all_load unused-c unused-E unused-Zs unused-link
+separate -allowable_client 1 unused-c unused-E unused-Zs unused-link
+flag -ansi
+separate -arch 1
+flag -arch_errors_fatal unused-c unused-E unused-Zs unused-link
+separate -arch_only 1 unused-c unused-E unused-Zs unused-link
+joined -b
+separate -b 1
+flag -bind_at_load unused-c unused-E unused-Zs unused-link
+joined -bind_at_load
+joined -building-pch-with-obj
+flag -bundle unused-c unused-E unused-Zs unused-link
+joined -bundle
+joined -bundle_loader
+separate -bundle_loader 1 unused-c unused-E unused-Zs unused-link
+flag -c cl unused-E unused-Zs
+flag -canonical-prefixes cl
+joined -ccc-
+joined -ccc-gcc-name
+separate -ccc-gcc-name 1
+joined -ccc-install-dir
+separate -ccc-install-dir 1 cl
+flag -ccc-print-bindings cl
+joined -ccc-print-bindings
+flag -ccc-print-phases cl
+joined -ccc-print-phases
+flag -cl-denorms-are-zero unused-c unused-E unused-Zs unused-link
+joined -cl-ext=
+flag -cl-fast-relaxed-math
+flag -cl-finite-math-only
+flag -cl-fp32-correctly-rounded-divide-sqrt
+flag -cl-kernel-arg-info
+flag -cl-mad-enable
+flag -cl-no-signed-zeros
+flag -cl-no-stdinc unused-c unused-E unused-Zs unused-link
+flag -cl-opt-disable
+flag -cl-single-precision-constant
+joined -cl-std=
+flag -cl-strict-aliasing
+flag -cl-uniform-work-group-size
+flag -cl-unsafe-math-optimizations
+flag -clangir-disable-passes unused-c unused-E unused-Zs unused-link
+flag -clangir-disable-verifier unused-c unused-E unused-Zs unused-link
+flag -clangir-enable-idiom-recognizer unused-c unused-E unused-Zs unused-link
+flag -clangir-lib-opt unused-c unused-E unused-Zs unused-link
+joined -clangir-lib-opt= unused-c unused-E unused-Zs unused-link
+joined -client_name unused-c unused-E unused-Zs unused-link
+separate -client_name 1 unused-c unused-E unused-Zs unused-link
+flag -combine
+joined -compatibility_version unused-c unused-E unused-Zs unused-link
+separate -compatibility_version 1 unused-c unused-E unused-Zs unused-link
+flag -coverage cl
+flag -cpp-precomp
+joined -cuid= cl unused-c unused-E unused-Zs unused-link
+joined -current_version unused-c unused-E unused-Zs unused-link
+separate -current_version 1 unused-c unused-E unused-Zs unused-link
+joined -cxx-isystem
+separate -cxx-isystem 1
+joined -d unused-c unused-E unused-Zs unused-link
+flag -dA
+joined -dA unused-c unused-E unused-Zs unused-link
+flag -dD
+joined -dD unused-c unused-E unused-Zs unused-link
+joined -dE unused-c unused-E unused-Zs unused-link
+flag -dI
+joined -dI unused-c unused-E unused-Zs unused-link
+flag -dM
+joined -dM unused-c unused-E unused-Zs unused-link
+joined -darwin-target-variant unused-c unused-E unused-Zs unused-link
+separate -darwin-target-variant 1 cl unused-c unused-E unused-Zs unused-link
+joined -darwin-target-variant-sdk-version= unused-c unused-E unused-Zs unused-link
+joined -darwin-target-variant-triple unused-c unused-E unused-Zs unused-link
+separate -darwin-target-variant-triple 1 unused-c unused-E unused-Zs unused-link
+joined -dead_strip unused-c unused-E unused-Zs unused-link
+joined -debug-forward-template-params unused-c unused-E unused-Zs unused-link
+joined -debug-info-kind= unused-c unused-E unused-Zs unused-link
+joined -debug-info-macro unused-c unused-E unused-Zs unused-link
+joined -debug-info-macro-expansion-loc unused-c unused-E unused-Zs unused-link
+joined -debugger-tuning= unused-c unused-E unused-Zs unused-link
+joined -default-function-attr unused-c unused-E unused-Zs unused-link
+joined -dependency-dot unused-c unused-E unused-Zs unused-link
+separate -dependency-dot 1 unused-c unused-E unused-Zs unused-link
+joined -dependency-file unused-c unused-E unused-Zs unused-link
+separate -dependency-file 1 unused-c unused-E unused-Zs unused-link
+joined -detailed-preprocessing-record unused-c unused-E unused-Zs unused-link
+joined -diagnostic-log-file unused-c unused-E unused-Zs unused-link
+joined -disable-O0-optnone unused-c unused-E unused-Zs unused-link
+joined -disable-lifetime-markers unused-c unused-E unused-Zs unused-link
+joined -disable-llvm-optzns unused-c unused-E unused-Zs unused-link
+joined -disable-llvm-passes unused-c unused-E unused-Zs unused-link
+joined -disable-llvm-verifier unused-c unused-E unused-Zs unused-link
+joined -disable-objc-default-synthesize-properties unused-c unused-E unused-Zs unused-link
+joined -disable-pragma-debug-crash unused-c unused-E unused-Zs unused-link
+joined -disable-red-zone unused-c unused-E unused-Zs unused-link
+joined -discard-value-names unused-c unused-E unused-Zs unused-link
+joined -dsym-dir unused-c unused-E unused-Zs unused-link
+separate -dsym-dir 1 unused-c unused-E unused-Zs unused-link
+joined -dump-coverage-mapping unused-c unused-E unused-Zs unused-link
+joined -dump-deserialized-decls unused-c unused-E unused-Zs unused-link
+joined -dump-minimization-hints= unused-c unused-E unused-Zs unused-link
+joined -dump-raw-tokens unused-c unused-E unused-Zs unused-link
+joined -dump-tokens unused-c unused-E unused-Zs unused-link
+joined -dumpbase unused-c unused-E unused-Zs unused-link
+joined -dumpbase-ext unused-c unused-E unused-Zs unused-link
+joined -dumpdir unused-c unused-E unused-Zs unused-link
+separate -dumpdir 1
+flag -dumpmachine
+joined -dumpmachine unused-c unused-E unused-Zs unused-link
+flag -dumpspecs
+joined -dumpspecs unused-c unused-E unused-Zs unused-link
+flag -dumpversion
+joined -dumpversion unused-c unused-E unused-Zs unused-link
+joined -dwarf-debug-flags unused-c unused-E unused-Zs unused-link
+joined -dwarf-debug-producer unused-c unused-E unused-Zs unused-link
+joined -dwarf-explicit-import unused-c unused-E unused-Zs unused-link
+joined -dwarf-ext-refs unused-c unused-E unused-Zs unused-link
+joined -dwarf-version= unused-c unused-E unused-Zs unused-link
+joined -dylib_file unused-c unused-E unused-Zs unused-link
+separate -dylib_file 1 unused-c unused-E unused-Zs unused-link
+joined -dylinker unused-c unused-E unused-Zs unused-link
+joined -dylinker_install_name unused-c unused-E unused-Zs unused-link
+separate -dylinker_install_name 1 unused-c unused-E unused-Zs unused-link
+flag -dynamic
+joined -dynamic unused-c unused-E unused-Zs unused-link
+joined -dynamiclib unused-c unused-E unused-Zs unused-link
+separate -e 1
+flag -emit-ast cl unused-E unused-Zs
+flag -emit-cir unused-E unused-Zs
+flag -emit-interface-stubs
+flag -emit-llvm
+flag -emit-merged-ifs unused-c unused-E unused-Zs unused-link
+flag -emit-symbol-graph unused-c unused-E unused-Zs unused-link
+separate -exported_symbols_list 1 unused-c unused-E unused-Zs unused-link
+flag -extract-api unused-E
+separate -fdebug-compilation-dir 1 cl
+separate -fexperimental-openacc-macro-override 1 unused-c unused-E unused-Zs unused-link
+separate -filelist 1
+separate -fmodule-implementation-of 1 cl
+separate -fmodules-user-build-path 1 unused-c unused-E unused-Zs unused-link
+separate -fnew-alignment 1
+separate -force_load 1 unused-c unused-E unused-Zs unused-link
+separate -framework 1
+separate -ftrapv-handler 1 unused-c unused-E unused-Zs unused-link
+flag -g cl
+flag -g0
+flag -g1
+flag -g2
+flag -g3
+flag -gcall-site-info
+flag -gcodeview cl
+flag -gcodeview-command-line cl
+flag -gcodeview-ghash cl
+joined -gcoff
+joined -gcoff1
+joined -gcoff2
+joined -gcoff3
+flag -gcolumn-info cl
+flag -gdbx
+flag -gdwarf cl
+flag -gdwarf-2
+flag -gdwarf-3
+flag -gdwarf-4
+flag -gdwarf-5
+flag -gdwarf-6
+flag -gdwarf-aranges
+flag -gdwarf32
+flag -gdwarf64
+flag -gembed-source
+separate -gen-cdb-fragment-path 1 cl
+flag -gen-reproducer cl
+joined -gen-reproducer= cl
+flag -gfull
+flag -ggdb
+flag -ggdb0
+flag -ggdb1
+flag -ggdb2
+flag -ggdb3
+flag -ggnu-pubnames
+flag -ginline-line-tables cl
+flag -gkey-instructions cl
+flag -gline-directives-only cl
+flag -gline-tables-only cl
+flag -glldb
+flag -gmlt
+flag -gmodules
+flag -gno-call-site-info
+flag -gno-codeview-command-line cl
+flag -gno-codeview-ghash cl
+flag -gno-column-info cl
+flag -gno-embed-source
+flag -gno-gnu-pubnames
+flag -gno-inline-line-tables cl
+flag -gno-key-instructions cl
+flag -gno-modules
+flag -gno-omit-unreferenced-methods cl
+flag -gno-pubnames
+flag -gno-record-command-line
+flag -gno-record-gcc-switches
+flag -gno-simple-template-names
+flag -gno-split-dwarf cl
+flag -gno-strict-dwarf cl
+flag -gno-structor-decl-linkage-names cl
+flag -gno-template-alias
+flag -gomit-unreferenced-methods cl
+flag -gpubnames
+flag -gpulibc unused-c unused-E unused-Zs unused-link
+flag -grecord-command-line
+flag -grecord-gcc-switches
+flag -gsce
+flag -gsimple-template-names
+flag -gsplit-dwarf cl
+joined -gsplit-dwarf= cl
+joined -gstabs
+joined -gstabs+
+flag -gstrict-dwarf cl
+flag -gstructor-decl-linkage-names cl
+flag -gtemplate-alias
+flag -gtoggle
+flag -gused
+joined -gvms
+joined -gxcoff
+joined -gxcoff+
+flag -gz
+joined -gz=
+joined -headerpad_max_install_names unused-c unused-E unused-Zs unused-link
+flag -help cl
+flag -hlsl-all-resources-bound unused-c unused-E unused-Zs unused-link
+separate -hlsl-entry 1 unused-c unused-E unused-Zs unused-link
+joined -iapinotes-modules
+separate -iapinotes-modules 1
+flag -ibuiltininc unused-c unused-E unused-Zs unused-link
+joined -idirafter
+separate -idirafter 1
+joined -iframework
+separate -iframework 1
+joined -iframeworkwithsysroot
+separate -iframeworkwithsysroot 1
+flag -ignore-pch unused-c unused-E unused-Zs unused-link
+joined -imacros
+separate -imacros 1
+separate -image_base 1 unused-c unused-E unused-Zs unused-link
+separate -imultilib 1 unused-c unused-E unused-Zs unused-link
+joined -include
+separate -include 1
+joined -include-pch
+separate -include-pch 1
+separate -init 1 unused-c unused-E unused-Zs unused-link
+joined -inline-asm= cl unused-c unused-E unused-Zs unused-link
+separate -install_name 1 unused-c unused-E unused-Zs unused-link
+flag -integrated-as
+joined -interface-stub-version= unused-c unused-E unused-Zs unused-link
+separate -interface-stub-version= 1 unused-c unused-E unused-Zs unused-link
+joined -iprefix
+separate -iprefix 1
+joined -iquote
+separate -iquote 1
+joined -isysroot
+separate -isysroot 1
+joined -isystem
+separate -isystem 1
+joined -isystem-after unused-c unused-E unused-Zs unused-link
+separate -isystem-after 1 unused-c unused-E unused-Zs unused-link
+joined -ivfsoverlay
+separate -ivfsoverlay 1
+joined -iwithprefix
+separate -iwithprefix 1
+joined -iwithprefixbefore
+separate -iwithprefixbefore 1
+joined -iwithsysroot
+separate -iwithsysroot 1
+flag -keep_private_externs unused-c unused-E unused-Zs unused-link
+joined -l
+separate -l 1
+joined -lang-asm
+joined -lazy_framework
+separate -lazy_framework 1
+joined -lazy_library
+separate -lazy_library 1
+joined -lifetime-safety-lifetimebound-macro= cl unused-c unused-E unused-Zs unused-link
+joined -lifetime-safety-max-cfg-blocks= cl unused-c unused-E unused-Zs unused-link
+joined -llvm-verify-each
+joined -load
+joined -load-bool-from-mem=
+joined -loader-replaceable-function=
+separate -meabi 1 cl
+separate -mllvm 1 cl
+separate -mmlir 1 unused-c unused-E unused-Zs unused-link
+separate -module-dependency-dir 1 unused-c unused-E unused-Zs unused-link
+separate -mthread-model 1 cl
+separate -multiply_defined 1 unused-c unused-E unused-Zs unused-link
+separate -multiply_defined_unused 1 unused-c unused-E unused-Zs unused-link
+flag -no-canonical-prefixes cl
+flag -no-cpp-precomp
+flag -no-hip-rt cl unused-c unused-E unused-Zs
+flag -no-integrated-as
+flag -no-integrated-cpp
+flag -no-pedantic
+flag -no-pie unused-c unused-E unused-Zs unused-link
+flag -no-pthread unused-c unused-E unused-Zs unused-link
+flag -no-use-spirv-backend cl unused-c unused-E unused-Zs unused-link
+flag -no_dead_strip_inits_and_terms unused-c unused-E unused-Zs unused-link
+flag -nobuiltininc cl
+flag -nocudainc
+flag -nocudalib
+flag -nodefaultlibs
+flag -nodriverkitlib unused-c unused-E unused-Zs unused-link
+flag -nofixprebinding unused-c unused-E unused-Zs unused-link
+flag -nogpuinc
+flag -nogpulib
+flag -nogpulibc unused-c unused-E unused-Zs unused-link
+flag -nohipwrapperinc unused-c unused-E unused-Zs unused-link
+flag -nolibc unused-c unused-E unused-Zs unused-link
+flag -nolibsycl cl unused-c unused-E unused-Zs unused-link
+flag -nomultidefs unused-c unused-E unused-Zs unused-link
+flag -nopie
+flag -noprebind unused-c unused-E unused-Zs unused-link
+flag -noprofilelib unused-c unused-E unused-Zs
+flag -noseglinkedit unused-c unused-E unused-Zs unused-link
+flag -nostartfiles unused-c unused-E unused-Zs
+flag -nostdinc cl
+flag -nostdinc++
+flag -nostdlib
+flag -nostdlib++
+flag -nostdlibinc
+joined -o cl
+separate -o 1 cl
+joined -objc-isystem cl
+joined -objcxx-isystem cl
+flag -object cl unused-c unused-E unused-Zs unused-link
+joined -object cl
+joined -object-file-name cl
+separate -object-file-name 1 cl unused-c unused-E unused-Zs unused-link
+joined -object-file-name= cl unused-c unused-E unused-Zs unused-link
+joined -opt-record-file cl
+joined -opt-record-format cl
+joined -opt-record-passes cl
+flag -p
+joined -pagezero_size unused-c unused-E unused-Zs unused-link
+separate -pagezero_size 1 unused-c unused-E unused-Zs unused-link
+flag -pass-exit-codes
+flag -pedantic
+flag -pedantic-errors
+flag -pg
+flag -pie unused-c unused-E unused-Zs unused-link
+flag -pipe
+flag -prebind unused-c unused-E unused-Zs unused-link
+flag -prebind_all_twolevel_modules unused-c unused-E unused-Zs unused-link
+flag -preload unused-c unused-E unused-Zs unused-link
+flag -print-diagnostic-options cl
+flag -print-effective-triple cl
+flag -print-enabled-extensions cl
+joined -print-file-name= cl
+flag -print-ivar-layout
+flag -print-libgcc-file-name cl
+flag -print-library-module-manifest-path cl
+flag -print-multi-directory
+flag -print-multi-flags-experimental
+flag -print-multi-lib
+flag -print-multi-os-directory
+flag -print-multiarch
+joined -print-prog-name= cl
+flag -print-resource-dir cl
+flag -print-rocm-search-dirs cl unused-c unused-E unused-Zs unused-link
+flag -print-runtime-dir cl
+flag -print-search-dirs cl
+flag -print-supported-cpus cl
+flag -print-supported-extensions cl
+flag -print-target-triple cl
+flag -print-targets cl
+flag -private_bundle unused-c unused-E unused-Zs unused-link
+flag -pthread
+flag -pthreads unused-c unused-E unused-Zs unused-link
+flag -r
+flag -rdynamic unused-c unused-E unused-Zs unused-link
+separate -read_only_relocs 1 unused-c unused-E unused-Zs unused-link
+joined -reexport-l
+separate -reexport_framework 1
+joined -reexport_library
+separate -reexport_library 1
+flag -regcall4 cl
+flag -relocatable-pch
+flag -remap unused-c unused-E unused-Zs unused-link
+flag -res-may-alias unused-c unused-E unused-Zs unused-link
+separate -resource-dir 1 cl
+joined -resource-dir= cl
+flag -rewrite-legacy-objc unused-E unused-Zs
+flag -rewrite-objc
+separate -rpath 1
+joined -rtlib= cl unused-c unused-E unused-Zs
+flag -s unused-c unused-E unused-Zs unused-link
+flag -save-stats
+joined -save-stats=
+flag -save-temps
+joined -save-temps=
+separate -sectalign 3 unused-c unused-E unused-Zs unused-link
+separate -sectcreate 3 unused-c unused-E unused-Zs unused-link
+separate -sectobjectsymbols 2 unused-c unused-E unused-Zs unused-link
+separate -sectorder 3 unused-c unused-E unused-Zs unused-link
+joined -seg1addr unused-c unused-E unused-Zs unused-link
+separate -seg1addr 1 unused-c unused-E unused-Zs unused-link
+separate -seg_addr_table 1 unused-c unused-E unused-Zs unused-link
+separate -seg_addr_table_filename 1 unused-c unused-E unused-Zs unused-link
+separate -segaddr 2 unused-c unused-E unused-Zs unused-link
+separate -segcreate 3 unused-c unused-E unused-Zs unused-link
+flag -seglinkedit unused-c unused-E unused-Zs unused-link
+separate -segprot 3 unused-c unused-E unused-Zs unused-link
+joined -segs_read_ unused-c unused-E unused-Zs unused-link
+joined -segs_read_only_addr unused-c unused-E unused-Zs unused-link
+separate -segs_read_only_addr 1 unused-c unused-E unused-Zs unused-link
+joined -segs_read_write_addr unused-c unused-E unused-Zs unused-link
+separate -segs_read_write_addr 1 unused-c unused-E unused-Zs unused-link
+separate -serialize-diagnostics 1
+flag -shared unused-c unused-E unused-Zs
+flag -shared-libasan
+flag -shared-libgcc unused-c unused-E unused-Zs unused-link
+flag -shared-libsan
+flag -single_module unused-c unused-E unused-Zs unused-link
+separate -specs 1
+joined -specs= unused-c unused-E unused-Zs unused-link
+flag -startfiles unused-c unused-E unused-Zs unused-link
+flag -static
+flag -static-libasan
+flag -static-libclosure
+flag -static-libgcc unused-c unused-E unused-Zs unused-link
+flag -static-libgfortran unused-c unused-E unused-Zs unused-link
+flag -static-libsan
+flag -static-libstdc++ unused-c unused-E unused-Zs unused-link
+flag -static-openmp unused-c unused-E unused-Zs unused-link
+flag -static-pie unused-c unused-E unused-Zs unused-link
+joined -std-default=
+joined -std=
+joined -std=c++0x
+joined -std=c++1y
+joined -std=c++1z
+joined -std=c++23
+joined -std=c++2a
+joined -std=c11
+joined -std=c17
+joined -std=c18
+joined -std=c1x
+joined -std=c2x
+joined -std=c89
+joined -std=c90
+joined -std=c99
+joined -std=c9x
+joined -std=gnu++0x
+joined -std=gnu++1y
+joined -std=gnu++1z
+joined -std=gnu++23
+joined -std=gnu++2a
+joined -std=gnu11
+joined -std=gnu17
+joined -std=gnu18
+joined -std=gnu1x
+joined -std=gnu2x
+joined -std=gnu89
+joined -std=gnu90
+joined -std=gnu99
+joined -std=gnu9x
+joined -std=iso9899:1990
+joined -std=iso9899:199409
+joined -std=iso9899:1999
+joined -std=iso9899:199x
+joined -std=iso9899:2011
+joined -std=iso9899:2017
+joined -std=iso9899:2018
+flag -stdlib unused-c unused-E unused-Zs unused-link
+joined -stdlib++-isystem unused-c unused-E unused-Zs unused-link
+separate -stdlib++-isystem 1 unused-c unused-E unused-Zs unused-link
+joined -stdlib= unused-c unused-E unused-Zs unused-link
+joined -sub_library unused-c unused-E unused-Zs unused-link
+separate -sub_library 1 unused-c unused-E unused-Zs unused-link
+joined -sub_umbrella unused-c unused-E unused-Zs unused-link
+separate -sub_umbrella 1 unused-c unused-E unused-Zs unused-link
+joined -sycl-std= cl
+flag -t unused-c unused-E unused-Zs unused-link
+separate -target 1 cl
+flag -time unused-c unused-E unused-Zs unused-link
+flag -traditional
+flag -traditional-cpp
+flag -trigraphs
+flag -twolevel_namespace unused-c unused-E unused-Zs unused-link
+flag -twolevel_namespace_hints unused-c unused-E unused-Zs unused-link
+joined -u unused-c unused-E unused-Zs unused-link
+separate -u 1 cl unused-c unused-E unused-Zs unused-link
+joined -umbrella unused-c unused-E unused-Zs unused-link
+separate -umbrella 1 unused-c unused-E unused-Zs unused-link
+flag -undef
+joined -undef unused-c unused-E unused-Zs unused-link
+joined -undefined unused-c unused-E unused-Zs unused-link
+separate -undefined 1 unused-c unused-E unused-Zs unused-link
+joined -unexported_symbols_list unused-c unused-E unused-Zs unused-link
+separate -unexported_symbols_list 1 unused-c unused-E unused-Zs unused-link
+joined -unoptimized-cfg unused-c unused-E unused-Zs unused-link
+joined -unwindlib= unused-c unused-E unused-Zs unused-link
+flag -use-spirv-backend cl unused-c unused-E unused-Zs unused-link
+joined -use-spirv-backend unused-c unused-E unused-Zs unused-link
+flag -v cl
+separate -validator-version 1 unused-c unused-E unused-Zs unused-link
+flag -verify-pch
+joined -vfsoverlay cl
+separate -vfsoverlay 1 cl
+flag -via-file-asm cl unused-E
+flag -w cl
+joined -weak-l cl
+separate -weak_framework 1 cl
+separate -weak_library 1 cl
+separate -weak_reference_mismatches 1 cl unused-c unused-E unused-Zs unused-link
+flag -whatsloaded cl unused-c unused-E unused-Zs unused-link
+flag -why_load cl unused-c unused-E unused-Zs unused-link
+flag -whyload cl unused-c unused-E unused-Zs unused-link
+separate -working-directory 1 cl
+joined -working-directory= cl
+joined -x cl
+separate -x 1 cl
+joined -y unused-c unused-E unused-Zs unused-link
+separate -z 1

@@ -93,6 +93,77 @@ fn planned(personality: Personality, arguments: &[&str]) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// clang-cl's `-shared` links a DLL under the executable's name, and each
+/// spelling of `-o` names the output clang-cl's driver names: Clang's `-o`
+/// as it is, whatever `/Fo` and `/Fe` say, and `cl`'s `/o` as the last of
+/// it and `/Fo` or `/Fe` does, except under `/E` (#452).
+#[test]
+fn clang_cl_plans_the_outputs_clang_cl_names() {
+    // clang-cl looks for its inputs.
+    let directory = std::env::temp_dir().join(format!("bcc-cl-outputs-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("a.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let source = source.to_str().unwrap();
+    let last = |arguments: &[&str]| {
+        let arguments: Vec<&str> = arguments
+            .iter()
+            .map(|&argument| if argument == "a.c" { source } else { argument })
+            .collect();
+        planned(Personality::ClangCl, &arguments)
+            .pop()
+            .expect("a step")
+    };
+    let output = |step: &[String]| {
+        step.iter()
+            .position(|argument| argument == "-o")
+            .map(|index| step[index + 1].clone())
+    };
+    let link = last(&["a.c", "/clang:-shared"]);
+    assert!(
+        link.iter().any(|argument| argument == "-shared"),
+        "{link:?}"
+    );
+    assert_eq!(output(&link).as_deref(), Some("a.exe"));
+    let compile = last(&["/c", "a.c", "/clang:-shared"]);
+    assert!(!compile.iter().any(|argument| argument == "-shared"));
+    for (arguments, expected) in [
+        (&["/c", "a.c", "-o", "x.obj"][..], Some("x.obj")),
+        (&["/c", "a.c", "-ox.obj"], Some("x.obj")),
+        (&["/c", "a.c", "/o", "x"], Some("x.obj")),
+        (&["/c", "a.c", "-objectx"], Some("bjectx.obj")),
+        // clang-cl's `/openmp-`, the default, is no `-o penmp-`.
+        (&["/c", "a.c", "-openmp-"], Some("a.obj")),
+        (&["/c", "a.c", "-o", "x.obj", "/Foy.obj"], Some("y.obj")),
+        (&["/c", "a.c", "/Foy.obj", "-o", "x.obj"], Some("x.obj")),
+        (&["/c", "a.c", "/clang:-o", "/clang:x"], Some("x")),
+        (&["/c", "a.c", "/clang:-ox.obj", "/Foy.obj"], Some("x.obj")),
+        (&["/c", "a.c", "/clang:--output=x.obj"], Some("x.obj")),
+        (&["a.c", "-o", "x"], Some("x.exe")),
+        (&["a.c", "/Fey.exe", "-o", "x.exe"], Some("x.exe")),
+        (&["a.c", "-o", "x.exe", "/Fey.exe"], Some("y.exe")),
+        (&["a.c", "/clang:-o", "/clang:x"], Some("x")),
+        (&["a.c", "/clang:-ox.exe", "/Fey.exe"], Some("x.exe")),
+        (&["a.c", "-openmp-"], Some("a.exe")),
+        (&["/E", "a.c", "/clang:-o", "/clang:x.i"], Some("x.i")),
+        (&["/EP", "a.c", "/clang:-ox.i"], Some("x.i")),
+        (&["/P", "a.c", "/clang:-ox.i"], Some("x.i")),
+        (&["/P", "a.c", "/clang:-o", "/clang:-"], None),
+        (&["/E", "a.c", "-o", "x.i"], None),
+        (&["/P", "a.c", "-o", "x.i"], Some("a.i")),
+        (&["/P", "a.c", "-openmp-"], Some("a.i")),
+        // clang-cl's `/P` writes its file beside `/E`.
+        (&["/P", "/E", "a.c"], Some("a.i")),
+    ] {
+        assert_eq!(
+            output(&last(arguments)).as_deref(),
+            expected,
+            "{arguments:?}"
+        );
+    }
+    drop(std::fs::remove_dir_all(&directory));
+}
+
 #[test]
 fn cl_links_the_runtime_library_it_selects() {
     let link = |options: &[&str]| {

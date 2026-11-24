@@ -99,7 +99,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if query.is_some() {
         return Ok(plan);
     }
-    if state.inputs.is_empty() {
+    // TCC counts files and libraries (`-lm`) as inputs, and not the
+    // options it hands the linker (`-Wl,-x`).
+    if state.inputs.iter().all(|input| input.name.is_empty()) {
         invocation.error(format_args!("no input files"));
         return Err(MainError::Reported(1));
     }
@@ -1042,6 +1044,8 @@ impl State {
                     announce(&mut plan, &output, "<-");
                 }
             },
+            // Libraries alone leave nothing to preprocess.
+            | Some(Action::Preprocess) if sources().next().is_none() => {},
             | Some(Action::Preprocess) => {
                 for input in sources() {
                     announce(&mut plan, &input.name, "->");
@@ -1126,6 +1130,9 @@ impl State {
                 }
                 let mut step = common;
                 step.extend(words(self.inputs.iter()));
+                if sources().next().is_none() {
+                    step.push("--link-only".into());
+                }
                 step.push("-o".into());
                 step.push(program.clone().into_os_string());
                 plan.steps.push(Step::Bcc(step));
@@ -1158,6 +1165,11 @@ impl State {
                 // gathers from every input under TCC's identity.
                 self.dependency_options(&mut step, &output);
                 step.extend(words(self.inputs.iter()));
+                // A link of libraries alone (`tcc -lm`), which fails for
+                // want of `main` as TCC's does.
+                if sources().next().is_none() {
+                    step.push("--link-only".into());
+                }
                 step.push(concat("--output=", &output));
                 plan.steps.push(Step::Bcc(step));
                 announce(&mut plan, &output, "<-");
