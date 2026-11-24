@@ -7224,7 +7224,8 @@ list, on `agent/site-part23`, in the brief's order.
    38, assembly 38 of 38, machine code 33 of 38, WebAssembly 19 of 19. The
    rest have no line of a shape the figure explains (Bits and masks
    computes with bitwise operations, none of them `nsw` arithmetic, and
-   its `-O2` LLVM IR is one call to `printf`) and show the first lesson's.
+   its `-O2` LLVM IR is one call to `printf`) and show the first lesson's
+   ("Left for later" lists them).
 5. **Wording from the reviews.**
    - The machine code's key says a label is "written in for reading: it
      takes no bytes", and gives the padding line its own entry: "filler
@@ -7265,3 +7266,59 @@ list, on `agent/site-part23`, in the brief's order.
      GCC 13.3 and Clang 18.1 were checked here at `-O0` to `-O3`: GCC
      links `%rbp` for `__builtin_setjmp` only at `-O0`; Clang at every
      level.
+
+### Checks
+
+- **Tests,** as `pages.yml` runs them, and its other checks:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed |
+  | Engine clippy | clean |
+  | Site tests | 191 passed (181 and ten new), plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | "Pipeline outputs are up to date." |
+  | `cargo +nightly fmt --check`, root and `web/` (CI's "Site formatting") | clean |
+  | `git diff --check` | clean |
+
+- **The lesson walk.** Nothing the abstract machine shows changed: this
+  branch leaves `src/`, the engine and the machine view's code
+  (`web/src/machine*`, `engine.rs`, `glossary.rs`, `snapshot.rs` and the
+  narration, tape, cells and evaluation panels) byte-identical to `main`,
+  so no machine note can differ. The `-O2` notes of every lesson's
+  back-end stages were written out by a throwaway test (never committed)
+  and compared with the page dump of Part 22's review (`a2a53a1e1`): 202
+  of their 228 sentences are as before, and the 26 new ones are all in
+  the assembly and machine code, as item 5 says: "is no longer called"
+  in the seven lessons that inline a call (Objects, Hello, Pointers,
+  Walking a string, Callbacks, Structs and From source to a running
+  program), the copies' reason in the four of them that grow, loop
+  rotation in Loops three ways, and longer encodings in Names for values
+  and Short-circuit evaluation.
+
+### Left for later
+
+- **More shapes for the readers.** The assembly reader takes `mov` and
+  the two-operand ALU instructions only, so Callbacks' `twice` explains
+  `movq %rdi, %rax` rather than its `shll $1, %edi`; shifts, `lea`,
+  `cmp` and jumps could be glossed too. 26 of the 209 views still show
+  the first lesson's line: both bcc IRs where no line is `nsw` `int`
+  arithmetic (Unsigned numbers, Bits and masks, Walking a string and
+  Reading past the end at both levels, Integer promotions at `-O2`), the
+  LLVM IR of Bits and masks and of Integer promotions at `-O2`, and the
+  `-O2` machine code of Integer promotions, Bits and masks, Floating
+  point, Reading past the end and Uninitialized reads, whose
+  instructions are other opcodes or name registers past `rdi`.
+- **Loop rotation** is recognised from the text: a block that ends in a
+  conditional jump and repeats as the end of a longer one. A count from
+  the back end itself would be exact.
+- **GCC 14** was not at hand: its `__builtin_setjmp` frame at `-O2` is as
+  the brief reports it; GCC 13.3 and Clang 18.1 were checked here.
+- **The figure remembers nothing.** Opened or closed, it is back to its
+  first state on the next visit; the views' other switches do not
+  persist either.
+- **Clang's WebAssembly module** (the compiler switch in the WebAssembly
+  view) was read by the reader's tests through the stepper's printout,
+  but the browser walk stepped bcc's modules only.
