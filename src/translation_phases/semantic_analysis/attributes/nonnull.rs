@@ -395,7 +395,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Reports `argument` at `site`, with its range, where control may
     /// reach `call`, if its value is null (`CheckNonNullExpr`).
-    fn clang_null_argument(
+    pub(in crate::translation_phases::semantic_analysis) fn clang_null_argument(
         &mut self,
         call: &'tu Expression<'tu>,
         argument: &'tu Expression<'tu>,

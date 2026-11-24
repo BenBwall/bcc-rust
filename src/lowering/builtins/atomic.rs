@@ -148,7 +148,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         }
         let address = self.value(items[0], source)?;
-        let layout = if builtin.operation == O::TestSet {
+        // `__atomic_test_and_set` and `__atomic_clear` access one byte of
+        // any object (GCC manual, "__atomic Builtins").
+        let layout = if matches!(builtin.operation, O::TestSet | O::Clear) {
             crate::target::Layout { size: 1, align: 1 }
         } else {
             types::layout(&self.unit.sema.types, object)

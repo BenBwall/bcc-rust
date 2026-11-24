@@ -1,0 +1,46 @@
+sema-atomic-operands-gcc.c: In function 'sizes':
+sema-atomic-operands-gcc.c:33:5: error: size mismatch in argument 2 of '__atomic_store'
+   33 |     __atomic_store(&i, &l, 0);
+      |     ^~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:34:5: error: size mismatch in argument 2 of '__atomic_load'
+   34 |     __atomic_load(&i, vp, 0);
+      |     ^~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:35:5: error: size mismatch in argument 3 of '__atomic_exchange'
+   35 |     __atomic_exchange(&i, &i, &l, 0);
+      |     ^~~~~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:36:11: error: size mismatch in argument 3 of '__atomic_compare_exchange'
+   36 |     (void)__atomic_compare_exchange(&i, &i, &l, 0, 0, 0);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:37:5: error: argument 2 of '__atomic_store' must be a pointer type
+   37 |     __atomic_store(&i, i, 0);
+      |     ^~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:38:5: error: argument 2 of '__atomic_store' must not be a pointer to a function
+   38 |     __atomic_store(&i, generic, 0);
+      |     ^~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c: In function 'qualifiers':
+sema-atomic-operands-gcc.c:42:5: warning: argument 2 of '__atomic_load' discards 'const' qualifier [-Wdiscarded-qualifiers]
+   42 |     __atomic_load(&i, &ci, 0);
+      |     ^~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:44:5: warning: argument 2 of '__atomic_store' discards 'volatile' qualifier [-Wdiscarded-qualifiers]
+   44 |     __atomic_store(&i, &vi, 0);
+      |     ^~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:45:5: warning: argument 1 of '__atomic_store' discards 'const' qualifier [-Wdiscarded-qualifiers]
+   45 |     __atomic_store(&ci, &i, 0);
+      |     ^~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:46:11: warning: argument 2 of '__atomic_compare_exchange' discards 'const' qualifier [-Wdiscarded-qualifiers]
+   46 |     (void)__atomic_compare_exchange(&i, &ci, &ci, 0, 0, 0);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c: In function 'expected':
+sema-atomic-operands-gcc.c:53:11: warning: passing argument 2 of '__atomic_compare_exchange_4' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   53 |     (void)__atomic_compare_exchange_n(&i, &ci, 1, 0, 0, 0);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c:54:11: error: passing argument 2 of '__atomic_compare_exchange_4' makes pointer from integer without a cast [-Wint-conversion]
+   54 |     (void)__atomic_compare_exchange_n(&i, i, 1, 0, 0, 0);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-atomic-operands-gcc.c: In function 'flags':
+sema-atomic-operands-gcc.c:77:20: warning: ISO C forbids passing argument 1 of '__atomic_clear' between function pointer and 'void *' [-Wpedantic]
+   77 |     __atomic_clear(values, 0);
+      |                    ^~~~~~
+sema-atomic-operands-gcc.c:78:33: warning: ISO C forbids passing argument 1 of '__atomic_test_and_set' between function pointer and 'void *' [-Wpedantic]
+   78 |     (void)__atomic_test_and_set(fp, 0);
+      |                                 ^~

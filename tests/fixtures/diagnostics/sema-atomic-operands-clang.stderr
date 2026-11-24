@@ -1,0 +1,31 @@
+sema-atomic-operands-clang.c:15:23: error: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   15 |     __atomic_load(&i, &ci, 0);
+      |                       ^~~
+sema-atomic-operands-clang.c:16:24: error: passing 'const void *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   16 |     __atomic_store(&i, cvp, 0);
+      |                        ^~~
+sema-atomic-operands-clang.c:17:41: error: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   17 |     (void)__atomic_compare_exchange(&i, &ci, &ci, 0, 0, 0);
+      |                                         ^~~
+sema-atomic-operands-clang.c:17:46: error: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   17 |     (void)__atomic_compare_exchange(&i, &ci, &ci, 0, 0, 0);
+      |                                              ^~~
+sema-atomic-operands-clang.c:18:43: error: passing 'volatile int *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   18 |     (void)__atomic_compare_exchange_n(&i, &vi, 1, 0, 0, 0);
+      |                                           ^~~
+sema-atomic-operands-clang.c:19:27: error: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+   19 |     __atomic_store_n(&ip, cip, 0);
+      |                           ^~~
+sema-atomic-operands-clang.c:23:11: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   23 |     (void)__atomic_compare_exchange_n(&i, 0, 1, 0, 0, 0);
+      |           ^                               ~
+sema-atomic-operands-clang.c:24:5: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   24 |     __atomic_load(&i, 0, 0);
+      |     ^                 ~
+sema-atomic-operands-clang.c:25:5: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   25 |     __atomic_store(&i, (int *)0, 0);
+      |     ^                  ~~~~~~~~
+sema-atomic-operands-clang.c:26:11: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   26 |     (void)__c11_atomic_compare_exchange_strong(&ai, 0, 1, 5, 5);
+      |           ^                                         ~
+4 warnings and 6 errors generated.
