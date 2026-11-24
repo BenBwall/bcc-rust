@@ -7590,7 +7590,10 @@ part does them, on `agent/site-part25`, in the brief's order.
    from 121 to 269 px for a line at 278 px). The glue
    (`web/editor/src/main.js`) now measures the room between the line and
    the nearer of the frame's edge and the window's, so the hover opens
-   below when it fits and is otherwise sized to the side with more room
+   below when it fits and above otherwise. The room only picks the side:
+   Monaco still caps the hover's height itself (250 px, or a quarter of
+   the editor if that is more), so near the window's bottom a hover can
+   still run past it (review round 1)
    ([after](screenshots/part25/after-hover-1440-dark.png): 293 to 463
    px). Monaco also laid the hover out against the window's width, so at
    1440 px it ran 51 px past the frame's right edge and lost the ends of
@@ -7618,10 +7621,11 @@ part does them, on `agent/site-part25`, in the brief's order.
    the whole of an earlier block, the one the jump back went to, and the
    back end copies that whole block (at most eight instructions, ending in
    a conditional branch: `duplicate_tests`). In Loops three ways at
-   `-O2` that block is the do loop's: the loop's body, made one block
-   by the select for its `continue`, with its test (`.LBB0_5`, five
-   instructions and `jge`, copied as `.LBB0_6` with `jl`); at `-O0` the
-   copies are the while and for loops' tests alone (`cmpl` and a jump).
+   `-O2` two blocks are copied: the do loop's, the loop's body made one
+   block by the select for its `continue`, with its test (`.LBB0_5`, five
+   instructions and `jge`, copied as `.LBB0_6` with `jl`: 6 of the
+   note's 8), and the for loop's test (2 more); at `-O0` the copies are
+   the while and for loops' tests alone (`cmpl` and a jump).
    The note said the jump back "leads to a short block that tests whether
    to go round again", which fits the tests but not a whole body. It now
    says "a short block that ends by testing whether to go round again,

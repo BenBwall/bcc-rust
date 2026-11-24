@@ -28,8 +28,10 @@ import { defineThemes } from './themes.js';
 // scrolled further than its hover is tall every hover opened above its
 // line even with `hover: { above: false }`, and line 1's was cut off by the
 // frame's top edge, under the reading over the output. Measured here, a
-// hover opens below when it fits there, and else is sized to the side with
-// more room.
+// hover opens below when it fits there and above otherwise. The room only
+// picks the side: Monaco still caps the hover's height on its own (250 px,
+// or a quarter of the editor if that is more), so a hover can run past
+// the window when neither side has that much room.
 const HOVER_MARGIN = 2;
 function hoverRoom(widget, position) {
   const node = widget._editor.getDomNode();
