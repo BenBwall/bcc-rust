@@ -963,11 +963,11 @@ Files", "@ (Specify a Compiler Response File)".)
 
 | `cl` | bcc |
 | --- | --- |
-| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl`; an output of any step that is an input of the command line (by device and inode) is refused before any step runs |
+| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; an empty `/Fo`, `/Fe` or `/Fi` names the output after the source, as in `cl` and clang-cl; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl`; an output of any step that is an input of the command line (by device and inode) is refused before any step runs |
 | `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i`, in `cl`'s layout (Preprocessed text) |
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
-| `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
+| `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0`; `cl` reads combined letters as the options they name (`/O2s`), takes those it knows from an argument that holds others and warns about each other letter (D9002 for `/O-` in `/O2-`), and warns that `/Og` and `/O` alone are deprecated (D9035), as `cl` 19.44 does |
 | `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror` (clang-cl: `-w` / `-Wall` / `-Wall -Wextra`, `-Weverything` for `/Wall` / `-Werror`); each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
 | `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none. `#pragma warning` reads the same numbers (language-standards.md, "Diagnostic pragmas") |
 | `/std:c11`, `/std:c17`, `/std:clatest` | `-std=c11`, `-std=c17`, `-std=c23` |
@@ -1461,8 +1461,27 @@ clang-cl reads `cl`'s options and also Clang's (`-fsomething`, `-Wfoo`,
 `/clang:` options). The personality reads `cl`'s, passes an unknown `-`
 option to bcc (which reads most Clang options), and reads an argument that
 starts with `/` and names no option as an input, as clang-cl does on every
-host (see below); it warns, with clang-cl's `unknown argument ignored in
-clang-cl`, about a `cl` option clang-cl knows and bcc does not. Like
+host (see below). clang-cl's driver takes each of its own `cl` options,
+and bcc reads each (`msvc/own_options.rs`): one clang-cl hands to no job
+(`/Bt`, `/favor:`, `/AI DIR`, `/MP`, `-u`) draws clang-cl's `argument unused
+during compilation`, after everything else and only if nothing failed, which
+`/WX` makes an error and `-Qunused-arguments` (bare or after `/clang:`) or
+`-Wno-unused-command-line-argument` silences, as for the Clang options below;
+one that changes nothing bcc writes is accepted without a word (`/FC`,
+`/GX`, `/Zo`, `/ZH:`, whose file checksums bcc's CodeView omits, `/Qvec-`,
+`/vd2`); `/FA` with any letters writes the listing, `/Brepro` asks the
+linker for an image without a time stamp (bcc's objects carry none in any
+case), `/showFilenames` prints each source's name to stdout as it is
+compiled, and `/vlen=256` and `/JMC` without debug information warn as
+clang-cl does. The rest are refused, status 1, where they would change what
+the step writes: `/winsysroot`, `/vctoolsdir`, `/winsdkdir` and
+`/diasdkdir`, whose Visual Studio installation clang-cl would search for
+headers and libraries (set `INCLUDE` and `LIB`, or use `/imsvc`), `/arm64EC`,
+`/kernel`, `/fsanitize=address`, `/C`, `/pathmap:`, `/showIncludes:user` and
+`/JMC` with debug information, and, only where a step compiles, `/hotpatch`,
+`/GA`, `/Gregcall`, `/QIntel-jcc-erratum` and `/funcoverride:`, and the
+precompiled header's `/Yc` and `/Yu`. An option of clang-cl's that bcc does
+not know is refused too, never ignored. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed. Its
 `/fp:fast` gives up the math functions' `errno`, as clang-cl's
@@ -2888,10 +2907,11 @@ Besides those above:
   other than letters, digits, `_`, `/`, `-` and `.`, and its `-v` none, as
   GCC does. The header search lists every configured directory, without the
   embedded resource headers, which are no directory on disk.
-- clang-cl's `/o` (a deprecated `/Fe` or `/Fo`) and the
-  `/winsysroot` family are not implemented; they draw the unknown-option
-  warning, so `/opt/a.c`, which clang-cl reads as `/o`, is ignored with it
-  rather than compiled. Use `-- /opt/a.c`.
+- clang-cl's `/winsysroot` family is refused rather than searched, and
+  `/opt/a.c`, which clang-cl reads as `/o`, names the output rather than a
+  source, as in clang-cl. Use `-- /opt/a.c`.
+- clang-cl's `/tune:` takes any processor name, as bcc's Clang personality
+  takes `-mtune=`, where clang-cl refuses one it does not know.
 - clang-cl searches `%INCLUDE%`, its `/imsvc` and its `/external:env:`
   directories after its resource headers; bcc searches them before its
   built-in headers, whose intrinsic headers do not yet work with the MSVC

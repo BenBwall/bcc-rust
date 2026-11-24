@@ -270,6 +270,56 @@ mod tests {
         drop(std::fs::remove_dir_all(&directory));
     }
 
+    /// `cl` takes the `/O` letters it knows from an argument that holds
+    /// others, and warns about each other one as an unknown option (D9002),
+    /// after warning that `/Og`, `/Og-` and `/O` alone are deprecated
+    /// (D9035), where bcc used to drop the whole argument. Each row is
+    /// `cl` 19.44's stderr under `/EP`.
+    #[test]
+    fn cl_reads_the_optimization_letters_it_knows() {
+        let directory = std::env::temp_dir().join(format!("bcc-cl-letters-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("a.c"), "int x;\n").unwrap();
+        let unknown = |option: &str| {
+            format!("cl : Command line warning D9002 : ignoring unknown option '{option}'\n")
+        };
+        let deprecated = |option: &str| {
+            format!(
+                "cl : Command line warning D9035 : option '{option}' has been deprecated and will \
+                 be removed in a future release\n"
+            )
+        };
+        for (options, expected) in [
+            (&["/O2-"][..], unknown("/O-")),
+            (&["-O2-"], unknown("-O-")),
+            (&["/O2zz"], [unknown("/Oz"), unknown("/Oz")].concat()),
+            (&["/Ob-"], [unknown("/Ob"), unknown("/O-")].concat()),
+            (&["/Ob4"], unknown("/Ob4")),
+            (&["/Obx"], unknown("/Ob")),
+            (&["/O3"], unknown("/O3")),
+            (&["/Og"], deprecated("Og")),
+            (&["/Oi-g-y-"], deprecated("Og-")),
+            (&["/O"], deprecated("O")),
+            (&["/Ozg"], [deprecated("Og"), unknown("/Oz")].concat()),
+            (&["/Oi-x", "/O2s", "/Ob2"], String::new()),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .current_dir(&directory)
+                .args(["--msvc-mode", "/nologo", "/EP"])
+                .args(options)
+                .arg("a.c")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{options:?}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                format!("{expected}a.c\n"),
+                "{options:?}"
+            );
+        }
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
     /// Clang's driver passes on the last of `-finline` and `-fno-inline`,
     /// and without either the last of `-finline-functions`,
     /// `-finline-hint-functions` and `-fno-inline-functions`

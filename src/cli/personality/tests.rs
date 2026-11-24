@@ -154,6 +154,15 @@ fn clang_cl_plans_the_outputs_clang_cl_names() {
         (&["/P", "a.c", "-openmp-"], Some("a.i")),
         // clang-cl's `/P` writes its file beside `/E`.
         (&["/P", "/E", "a.c"], Some("a.i")),
+        // An empty `/Fo`, `/Fe` or `/Fi` names the output after the source,
+        // also after a name.
+        (&["/c", "a.c", "/Fo"], Some("a.obj")),
+        (&["/c", "a.c", "/Fox.obj", "-Fo"], Some("a.obj")),
+        (&["/c", "a.c", "/Fo", "/Fox.obj"], Some("x.obj")),
+        (&["a.c", "/Fe"], Some("a.exe")),
+        (&["a.c", "/Fex.exe", "/Fe"], Some("a.exe")),
+        (&["/P", "a.c", "/Fi"], Some("a.i")),
+        (&["/P", "a.c", "/Fix.i", "/Fi"], Some("a.i")),
     ] {
         assert_eq!(
             output(&last(arguments)).as_deref(),
@@ -161,6 +170,74 @@ fn clang_cl_plans_the_outputs_clang_cl_names() {
             "{arguments:?}"
         );
     }
+    drop(std::fs::remove_dir_all(&directory));
+}
+
+/// `cl` 19.44 names an output after its source when `/Fo`, `/Fe` or `/Fi`
+/// is empty, as clang-cl does (where bcc's own command line used to refuse
+/// the empty name, status 2).
+#[test]
+fn cl_names_an_output_after_its_source_for_an_empty_name() {
+    let output = |arguments: &[&str]| {
+        let step = planned(Personality::Msvc, arguments).pop().expect("a step");
+        step.iter()
+            .position(|argument| argument == "-o")
+            .map(|index| step[index + 1].clone())
+    };
+    for (arguments, expected) in [
+        (&["/nologo", "/c", "/Fo", "a.c"][..], "a.obj"),
+        (&["/nologo", "/c", "/Fox.obj", "-Fo", "a.c"], "a.obj"),
+        (&["/nologo", "/Fe", "a.c"], "a.exe"),
+        (&["/nologo", "/P", "/Fi", "a.c"], "a.i"),
+    ] {
+        assert_eq!(
+            output(arguments).as_deref(),
+            Some(expected),
+            "{arguments:?}"
+        );
+    }
+}
+
+/// `cl` takes the `/O` letters it knows from an argument that also holds
+/// letters it does not (`/O2-` is `/O2`), as `cl` 19.44 does.
+#[test]
+fn cl_takes_the_optimization_letters_it_knows() {
+    let optimized = |option: &str| {
+        planned(Personality::Msvc, &["/nologo", "/c", option, "a.c"])
+            .pop()
+            .expect("a step")
+            .iter()
+            .any(|argument| argument == "-O2")
+    };
+    assert!(optimized("/O2-"));
+    assert!(optimized("-Oz2"));
+    assert!(optimized("/Ob4x"));
+    assert!(!optimized("/Oz"));
+}
+
+/// clang-cl's `/Brepro` asks the linker for an image without a time
+/// stamp, the last of it and `/Brepro-` winning; bcc's objects carry none in
+/// any case.
+#[test]
+fn clang_cl_asks_for_a_reproducible_link_under_brepro() {
+    let directory = std::env::temp_dir().join(format!("bcc-cl-brepro-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("a.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let source = source.to_str().unwrap();
+    let reproducible = |options: &[&str]| {
+        let mut arguments = vec![source];
+        arguments.extend(options);
+        planned(Personality::ClangCl, &arguments)
+            .pop()
+            .expect("a link step")
+            .iter()
+            .any(|argument| argument == "-Wl,-Brepro")
+    };
+    assert!(!reproducible(&[]));
+    assert!(reproducible(&["/Brepro"]));
+    assert!(reproducible(&["-Brepro-", "-Brepro"]));
+    assert!(!reproducible(&["/Brepro", "/Brepro-"]));
     drop(std::fs::remove_dir_all(&directory));
 }
 
@@ -317,7 +394,8 @@ fn combined_optimization_letters_read_as_each_driver_reads_them() {
         (&["-Oxs"], &["-O2", "-Os"]),
         (&["/Odi"], &["-O0"]),
         (&["/Ob2i-t"], &["-O2"]),
-        (&["/O2b9"], &[]),
+        // `cl` takes `2` and warns about `b9`.
+        (&["/O2b9"], &["-O2"]),
     ] {
         assert_eq!(
             optimization(Personality::Msvc, options),

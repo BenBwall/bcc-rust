@@ -15,8 +15,11 @@
 //! ignores those that cannot change the program, warns about hardening, and
 //! refuses the rest with a `Command line error`; `/Zp`, `/Za`, the runtime
 //! options and `/Zc:trigraphs` map onto bcc's packing, Microsoft extension,
-//! macro and trigraph options. The command line is read with the `CL` and
-//! `_CL_` environment variables around it and each command file (`@file`)
+//! macro and trigraph options. clang-cl knows every option it takes, so its
+//! own options none of these translate are read in `own_options`, which
+//! warns as clang-cl does about those it leaves unused and refuses those
+//! that would change what a step writes. The command line is read with the `CL`
+//! and `_CL_` environment variables around it and each command file (`@file`)
 //! in its place (`command_files`). The warning level and `/wd`, `/we` and
 //! `/w1`-`/w4` control the warnings bcc reports with `cl`'s code.
 //!
@@ -48,6 +51,7 @@ use crate::configuration::CL_CODED_WARNINGS;
 
 mod command_files;
 mod optimization;
+mod own_options;
 
 use command_files::CommandFileError;
 
@@ -156,6 +160,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     // clang-cl reads its warning options before it parses the others.
     let unknown_argument = unknown_argument_severity(&expanded);
+    state.unused_severity = unused_argument_severity(&expanded);
     // The `/O` letter that sets clang-cl's level, wherever it stands.
     state.level_letter =
         optimization::clang_cl_level_letter(optimization_options(&expanded), intel.is_some());
@@ -243,11 +248,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         if let Some(letters) = option.strip_prefix('O') {
             let index = expanded.len() - arguments.len() - 1;
-            match state.optimization_option(invocation, &expanded, index, text, letters) {
-                | Some(true) => return Err(MainError::Reported(1)),
-                | Some(false) => continue,
-                | None => {},
-            }
+            state.optimization_option(invocation, index, text, letters);
+            continue;
+        }
+        if known.is_some() && state.own_option(invocation, text, option, &mut arguments) {
+            continue;
         }
         let remaining = arguments.len();
         if state.option(invocation, option, &mut arguments) {
@@ -290,9 +295,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 text.push_str(&value.to_string_lossy());
             }
             if clang_cl {
-                invocation.warning(format_args!(
-                    "unknown argument ignored in clang-cl: '{text}'"
-                ));
+                // Every option clang-cl knows is read above; one a newer
+                // option table adds is refused until bcc reads it.
+                state.command_line_error(
+                    invocation,
+                    None,
+                    format_args!("'{text}' is not supported: bcc does not implement it"),
+                );
             } else {
                 super::print(
                     &format!(
@@ -315,6 +324,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         return Err(MainError::Reported(1));
     }
     state.read_clang_options_by_step(invocation, &mut clang_options);
+    let debug_information = state
+        .bcc
+        .iter()
+        .chain(&clang_options)
+        .any(|option| is_debug_information(&option.to_string_lossy()));
+    state.check_own_options(invocation, debug_information);
     if state.all_c {
         for source in &mut state.sources {
             let extension = Path::new(&source.path)
@@ -341,6 +356,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     let c_count = state.sources.iter().filter(|source| source.is_c()).count();
     state.check_output_names(invocation, c_count);
+    if state.report_unused(invocation) {
+        return Err(MainError::Reported(1));
+    }
     if state.errors != 0 {
         return Err(MainError::Reported(error_status(invocation.personality)));
     }
@@ -573,7 +591,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             plan.steps.push(Step::Bcc(assembly));
         }
         step.extend(source.arguments());
-        if !clang_cl {
+        // `cl` names each source it compiles, and clang-cl does under
+        // `/showFilenames`.
+        if !clang_cl || state.show_filenames {
             plan.steps.push(Step::Print {
                 text:   format!("{}\n", source.echoed()),
                 stderr: false,
@@ -619,6 +639,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // executable's name.
     if state.dll || state.shared {
         link.push("-shared".into());
+    }
+    // clang-cl's `/Brepro` asks the linker for an image without a time
+    // stamp; bcc's objects carry none in any case.
+    if state.reproducible {
+        link.push("-Wl,-Brepro".into());
     }
     // Clang's driver links the static runtime, `libcmt`, by default.
     if let Some(library) = runtime.library() {
@@ -780,6 +805,39 @@ enum DriverSeverity {
 /// counts here.
 fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
     driver_warning_severity(arguments, "unknown-argument")
+}
+
+/// How clang-cl reports an argument no job uses, a warning in the group
+/// `-Wunused-command-line-argument`: as [`driver_warning_severity`] says,
+/// but never under `-Qunused-arguments`, bare or after `/clang:`, which turns
+/// it off (`Driver::BuildJobs`).
+fn unused_argument_severity(arguments: &[OsString]) -> DriverSeverity {
+    let quiet = arguments
+        .iter()
+        .take_while(|argument| !matches!(argument.to_str(), Some("/link" | "-link" | "--")))
+        .any(|argument| {
+            matches!(
+                argument.to_str(),
+                Some(
+                    "-Qunused-arguments"
+                        | "/clang:-Qunused-arguments"
+                        | "-clang:-Qunused-arguments"
+                )
+            )
+        });
+    if quiet {
+        DriverSeverity::Ignored
+    } else {
+        driver_warning_severity(arguments, "unused-command-line-argument")
+    }
+}
+
+/// Whether `option`, one of bcc's, asks for debug information, as clang-cl's
+/// `/Zi`, `/Z7`, `/ZI` and Clang's `-g` options do: any `-g` option but
+/// `-g0` and `-ggdb0`.
+fn is_debug_information(option: &str) -> bool {
+    option.starts_with("--debug-level=") && option != "--debug-level=0"
+        || option.starts_with("-g") && !matches!(option, "-g0" | "-ggdb0")
 }
 
 /// The letters of clang-cl's `/O` options in `arguments` before `/link`,
@@ -1039,6 +1097,33 @@ struct State {
     /// clang-cl's last `/openmp` flag when it asks for OpenMP, which bcc
     /// refuses; `/openmp-` after it clears it.
     openmp:                  Option<String>,
+    /// The arguments clang-cl's driver hands to no job, as it shows them,
+    /// which it reports after everything else (`own_options`).
+    unused:                  Vec<String>,
+    /// How clang-cl reports [`State::unused`]
+    /// ([`unused_argument_severity`]).
+    unused_severity:         DriverSeverity,
+    /// The warnings in clang-cl's group `-Woption-ignored` about its own
+    /// options, given for each source it compiles (`own_options`).
+    option_ignored:          Vec<String>,
+    /// clang-cl's `/Brepro`, the last of it and `/Brepro-`.
+    reproducible:            bool,
+    /// clang-cl's `/showFilenames`, the last of it and `/showFilenames-`,
+    /// and both as given.
+    show_filenames:          bool,
+    filename_options:        Vec<String>,
+    /// clang-cl's last `/vlen=256` or `/vlen=512`, unless `/vlen` follows.
+    vector_length:           Option<String>,
+    /// clang-cl's `/JMC`, unless `/JMC-` follows.
+    just_my_code:            bool,
+    /// The options of code generation bcc does not implement, as given,
+    /// and why, which only a step that compiles refuses (`own_options`).
+    code_options:            Vec<(String, &'static str)>,
+    /// The options of precompiled headers, as given, which only a step
+    /// that does more than preprocess refuses.
+    header_options:          Vec<String>,
+    /// clang-cl's `/C`.
+    keep_comments:           Option<String>,
     /// The letter of a clang-cl `/O` option that sets the level: the index
     /// of its argument and its offset there (`optimization`).
     level_letter:            Option<(usize, usize)>,
@@ -1129,6 +1214,17 @@ impl Default for State {
         Self {
             bcc:                     Vec::new(),
             openmp:                  None,
+            unused:                  Vec::new(),
+            unused_severity:         DriverSeverity::Warning,
+            option_ignored:          Vec::new(),
+            reproducible:            false,
+            show_filenames:          false,
+            filename_options:        Vec::new(),
+            vector_length:           None,
+            just_my_code:            false,
+            code_options:            Vec::new(),
+            header_options:          Vec::new(),
+            keep_comments:           None,
             level_letter:            None,
             inlining:                ClangInlining::default(),
             sources:                 Vec::new(),
@@ -1288,7 +1384,12 @@ impl State {
                 return true;
             }
         }
-        let path = |value: &str| Some(PathBuf::from(value.strip_prefix(':').unwrap_or(value)));
+        // An empty name is the default one, as in `cl` and clang-cl: `/Fo`
+        // alone names the object after the source, also after `/Fofoo.obj`.
+        let path = |value: &str| {
+            Some(PathBuf::from(value.strip_prefix(':').unwrap_or(value)))
+                .filter(|path| !path.as_os_str().is_empty())
+        };
         if let Some((class, value)) = switch_class(option) {
             self.set_switch(invocation, class, value, format!("/{option}"));
         }
@@ -1966,8 +2067,10 @@ impl State {
                     return;
                 },
                 // clang-cl's default, which bcc's Microsoft mode already
-                // follows.
-                | "-fms-compatibility" => return,
+                // follows, and the switch that silences the warnings about
+                // unused arguments, read with the warning options
+                // (`unused_argument_severity`).
+                | "-fms-compatibility" | "-Qunused-arguments" => return,
                 | "--no-warnings" => {
                     out.extend(front_end_option(text));
                     return;
@@ -2048,13 +2151,11 @@ impl State {
                 return;
             },
             // Clang's driver warns about an option no job it runs reads
-            // (`-shared` without a link), and says nothing of one its
+            // (`-shared` without a link), after everything else
+            // ([`State::report_unused`]), and says nothing of one its
             // compiler takes and ignores (`-dM` without `-E`).
             | BccReading::Unused => {
-                invocation.warning(format_args!(
-                    "argument unused during compilation: '{shown}' \
-                     [-Wunused-command-line-argument]"
-                ));
+                self.unused.push(shown);
                 return;
             },
             | BccReading::Inert => return,
@@ -2398,10 +2499,13 @@ impl State {
     /// (`optimization flag '-fgcse' is not supported`), then the retired
     /// flags (`the flag '-mmpx' has been deprecated and will be ignored`),
     /// each in order, at the severity the warning options give their
-    /// groups. Returns whether a fatal error stopped the command line.
+    /// groups, after the warnings about clang-cl's own options it ignores
+    /// ([`State::option_ignored`]). Returns whether a fatal error stopped
+    /// the command line.
     fn warn_ignored(&mut self, invocation: &Invocation, arguments: &[OsString]) -> bool {
         let ignored = std::mem::take(&mut self.ignored);
-        if ignored.is_empty() {
+        let option_ignored = std::mem::take(&mut self.option_ignored);
+        if ignored.is_empty() && option_ignored.is_empty() {
             return false;
         }
         let sources = self
@@ -2411,7 +2515,13 @@ impl State {
                 source.is_c() && (source.path == "-" || Path::new(&source.path).exists())
             })
             .count();
+        let severity = driver_warning_severity(arguments, "option-ignored");
         for _ in 0..sources {
+            for message in &option_ignored {
+                if self.driver_warning(invocation, severity, "option-ignored", message) {
+                    return true;
+                }
+            }
             for (kind, group) in [
                 (ClangIgnored::Optimization, "ignored-optimization-argument"),
                 (ClangIgnored::Deprecated, "unused-command-line-argument"),
@@ -2486,45 +2596,71 @@ impl State {
         false
     }
 
-    /// Reads `/O` with `letters`, the argument `text` at `index` of
-    /// `arguments` (`optimization`): clang-cl's letter by letter, with the
+    /// Reads `/O` with `letters`, the argument `text` at `index` of the
+    /// command line (`optimization`): clang-cl's letter by letter, with the
     /// level from [`Self::level_letter`], and `cl`'s combined letters as
-    /// the options they name. Returns `None` for a `cl` option to read as
-    /// any other, and otherwise whether a fatal error stops the command
-    /// line.
+    /// the options they name.
     fn optimization_option(
         &mut self,
         invocation: &Invocation,
-        arguments: &[OsString],
         index: usize,
         text: &str,
         letters: &str,
-    ) -> Option<bool> {
+    ) {
         if invocation.personality.is_clang_cl() {
             let level = self
                 .level_letter
                 .filter(|&(at, _)| at == index)
                 .map(|(_, offset)| offset);
             let intel = invocation.personality == Personality::IcxCl;
-            if optimization::clang_cl_options(
+            if !optimization::clang_cl_options(
                 letters,
                 level,
                 intel,
                 &mut self.inlining,
                 &mut self.bcc,
             ) {
-                return Some(false);
+                self.unused.push(text.to_owned());
             }
-            let group = "unused-command-line-argument";
-            let severity = driver_warning_severity(arguments, group);
-            let message = format!("argument unused during compilation: '{text}'");
-            return Some(self.driver_warning(invocation, severity, group, &message));
+            return;
         }
-        let options = optimization::cl_options(letters).filter(|options| options.len() > 1)?;
-        for letters in options {
-            _ = self.option(invocation, &format!("O{letters}"), &mut std::iter::empty());
+        // `cl`: each option the letters combine, and a warning about each
+        // letter it does not know.
+        let deprecated = |option: &str| {
+            super::print(
+                &format!(
+                    "{} : Command line warning D9035 : option '{option}' has been deprecated and \
+                     will be removed in a future release\n",
+                    invocation.name
+                ),
+                true,
+            );
+        };
+        let pieces = optimization::cl_letters(letters);
+        if pieces.is_empty() {
+            deprecated("O");
         }
-        Some(false)
+        for &piece in &pieces {
+            if let optimization::ClLetters::Option(letters @ ("g" | "g-")) = piece {
+                deprecated(&format!("O{letters}"));
+            }
+        }
+        for piece in pieces {
+            match piece {
+                | optimization::ClLetters::Option(letters) => {
+                    _ = self.option(invocation, &format!("O{letters}"), &mut std::iter::empty());
+                },
+                | optimization::ClLetters::Unknown(letters) => super::print(
+                    &format!(
+                        "{} : Command line warning D9002 : ignoring unknown option \
+                         '{}O{letters}'\n",
+                        invocation.name,
+                        &text[..1]
+                    ),
+                    true,
+                ),
+            }
+        }
     }
 
     /// Records `spelling`, the switch of `class` with `value`, warning as
