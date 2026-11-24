@@ -285,6 +285,18 @@ fn configured_source_date_epoch_spells_utc_date_and_time() {
     }
 }
 
+/// Under `cl`'s and clang-cl's `/Brepro` the date and time macros all spell
+/// `"1"`, also over a pinned `source_date_epoch`.
+#[test]
+fn literal_one_date_macros_spell_one() {
+    let configuration = CompilerConfiguration::default()
+        .with_source_date_epoch(Some(0))
+        .with_literal_one_date_macros(true);
+    let observation = observe_with("__DATE__, __TIME__, __TIMESTAMP__\n", configuration);
+    assert!(observation.errors.is_empty(), "{observation:#?}");
+    assert_eq!(observation.spellings, ["\"1\"", ",", "\"1\"", ",", "\"1\""]);
+}
+
 /// Whether `date` spells a `__DATE__` (`"Mmm dd yyyy"`, the day space-padded)
 /// and `time` a `__TIME__` (`"hh:mm:ss"`).
 fn is_timestamp_spelling(date: &str, time: &str) -> bool {

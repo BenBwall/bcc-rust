@@ -1146,6 +1146,18 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Whether `__DATE__`, `__TIME__` and `__TIMESTAMP__` all spell `"1"`, so
+    /// that what a unit compiles to depends neither on when it is compiled
+    /// nor on when its file was saved.
+    pub(crate) const fn literal_one_date_macros(self) -> bool {
+        self.literal_one_date_macros
+    }
+
+    pub(crate) const fn with_literal_one_date_macros(mut self, enabled: bool) -> Self {
+        self.literal_one_date_macros = enabled;
+        self
+    }
+
     /// Whether translation targets a hosted execution environment, the
     /// default, rather than a freestanding one. It sets `__STDC_HOSTED__`,
     /// lets the resource headers defer to the C library, and applies the
@@ -1187,6 +1199,7 @@ impl CompilerConfiguration {
             native: 0,
             repeated_specifier_warnings: true,
             source_date_epoch: None,
+            literal_one_date_macros: false,
             hosted: true,
             optimization: (false, false),
             no_inline: false,

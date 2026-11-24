@@ -8506,17 +8506,19 @@ mod tests {
             stderr(&clang_cl),
             format!("clang-cl: error: no such file or directory: '{object}'\n")
         );
-        // The value of an option clang-cl knows and bcc does not is no input.
+        // The value of an option clang-cl knows and bcc refuses is no input.
         let clang_cl = directory.bcc(
             "--clang-cl-mode",
             &["/c", "/vctoolsdir", "/nonexistent/vc", &plain],
         );
-        succeeds(&clang_cl);
-        assert_eq!(
-            stderr(&clang_cl),
-            "clang-cl: warning: unknown argument ignored in clang-cl: '/vctoolsdir \
-             /nonexistent/vc'\n"
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert!(
+            stderr(&clang_cl)
+                .starts_with("clang-cl: error: '/vctoolsdir /nonexistent/vc' is not supported: "),
+            "{}",
+            stderr(&clang_cl)
         );
+        assert!(!stderr(&clang_cl).contains("no such file"));
     }
 
     /// clang-cl ignores each GCC and Clang option its driver does not take
@@ -8982,6 +8984,353 @@ mod tests {
                 assert!(!directory.path("a.obj").exists(), "{default} {shown}");
             }
         }
+    }
+
+    /// clang-cl takes each of its own `cl` options, where bcc used to warn
+    /// that some were unknown and drop them. bcc warns as clang-cl does
+    /// about one no job uses (silenced by `-Qunused-arguments`, bare or after
+    /// `/clang:`, and an error under `/WX`), accepts silently one that changes
+    /// nothing bcc writes, does what clang-cl does with `/FA`,
+    /// `/showFilenames`, `/vlen` and `/JMC`, ignores with a warning `/Yc`,
+    /// `/Yu` and `/JMC` with debug information, which change only how fast
+    /// a build runs or how a debugger steps, and refuses the rest with
+    /// status 1 where they would change the step's output. Each row but the
+    /// ignored and refused ones is clang-cl 23.1.5's stderr and status.
+    #[test]
+    fn clang_cl_reads_its_own_options_as_clang_cl_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        let unused = |argument: &str| {
+            format!(
+                "clang-cl: warning: argument unused during compilation: '{argument}' \
+                 [-Wunused-command-line-argument]\n"
+            )
+        };
+        let unused_error = |argument: &str| {
+            format!(
+                "clang-cl: error: argument unused during compilation: '{argument}' \
+                 [-Werror,-Wunused-command-line-argument]\n"
+            )
+        };
+        let jmc = "clang-cl: warning: /JMC requires debug info. Use '/Zi', '/Z7' or debug options \
+                   that enable debugger's stepping function; option ignored [-Woption-ignored]\n";
+        let vlen = "clang-cl: warning: invalid argument '/vlen=256' not allowed with '/arch:SSE2' \
+                    [-Woption-ignored]\n";
+        let ignored = |option: &str, why: &str| {
+            format!("clang-cl: warning: '/{option}' is ignored: bcc does not {why}\n")
+        };
+        let built = ignored("Yc", "build precompiled headers");
+        let used = |option: &str| ignored(option, "use precompiled headers");
+        let stepping = ignored("JMC", "instrument functions for Just My Code debugging");
+        let rows: &[(&[&str], String, i32)] = &[
+            (&["/c", "a.c", "/Bt"], unused("/Bt"), 0),
+            (&["/c", "a.c", "-u"], unused("-u"), 0),
+            (&["/c", "a.c", "-H"], unused("-H"), 0),
+            // A value that may be the next argument is shown apart, and is no
+            // input.
+            (&["/c", "a.c", "/AIdir"], unused("/AI dir"), 0),
+            (&["/c", "a.c", "-AI", "dir"], unused("-AI dir"), 0),
+            (
+                &["/c", "a.c", "/headerUnit:quotex"],
+                unused("/headerUnit:quote x"),
+                0,
+            ),
+            (
+                &["/c", "a.c", "/favor:AMD64", "/MP4"],
+                [unused("/favor:AMD64"), unused("/MP4")].concat(),
+                0,
+            ),
+            (&["/c", "a.c", "/Bt", "/WX"], unused_error("/Bt"), 1),
+            (
+                &["/c", "a.c", "/Bt", "-Qunused-arguments"],
+                String::new(),
+                0,
+            ),
+            (
+                &["/c", "a.c", "/O3", "/clang:-Qunused-arguments"],
+                String::new(),
+                0,
+            ),
+            (
+                &["/c", "a.c", "/Bt", "-Wno-unused-command-line-argument"],
+                String::new(),
+                0,
+            ),
+            (
+                &["/c", "a.c", "/clang:-shared", "/WX"],
+                unused_error("-shared"),
+                1,
+            ),
+            (
+                &[
+                    "/c",
+                    "a.c",
+                    "/clang:-shared",
+                    "-Wno-unused-command-line-argument",
+                ],
+                String::new(),
+                0,
+            ),
+            (
+                &[
+                    "/c",
+                    "a.c",
+                    "/FC",
+                    "/GX",
+                    "/Zo",
+                    "/ZH:SHA_256",
+                    "/Gregcall4",
+                    "/Qvec-",
+                    "/vd2",
+                    "/kernel-",
+                    "/JMC-",
+                    "/funcoverride:",
+                    "/vctoolsversion",
+                    "14.44",
+                ],
+                String::new(),
+                0,
+            ),
+            (&["/c", "a.c", "/vlen=256"], vlen.into(), 0),
+            (&["/c", "a.c", "/vlen=512", "/vlen"], String::new(), 0),
+            (&["/c", "a.c", "-JMC"], jmc.into(), 0),
+            (&["/c", "a.c", "/JMC", "/JMC-"], String::new(), 0),
+            // `/WX` makes neither ignored option an error, and `/JMC` warns
+            // only where a step compiles.
+            (&["/c", "a.c", "/JMC", "/Z7", "/WX"], stepping.clone(), 0),
+            (&["/c", "a.c", "/Zi", "/JMC"], stepping, 0),
+            (&["/Zs", "a.c", "/Zi", "/JMC"], String::new(), 0),
+            (&["/c", "a.c", "/Yc", "/WX"], built.clone(), 0),
+            (&["/Zs", "a.c", "/Yupch.h"], used("Yupch.h"), 0),
+            (&["/c", "a.c", "-Yu", "/Fpa.pch"], used("Yu"), 0),
+            (&["/P", "a.c", "/Yc"], built.clone(), 0),
+            (
+                &["/c", "a.c", "-guard:x"],
+                "clang-cl: error: invalid value 'x' in '-guard:'\n".into(),
+                1,
+            ),
+            (
+                &["/c", "a.c", "/vdx"],
+                "clang-cl: error: invalid integral value 'x' in '-vtordisp-mode=x'\n".into(),
+                1,
+            ),
+            (
+                &["/c", "a.c", "/C"],
+                "clang-cl: error: invalid argument '/C' only allowed with '/E, /P or /EP'\n".into(),
+                1,
+            ),
+            (
+                &["/E", "a.c", "/showFilenames"],
+                unused("/showFilenames"),
+                0,
+            ),
+            // Options of code generation change no preprocessed text.
+            (
+                &["/E", "a.c", "/hotpatch", "/GA", "/QIntel-jcc-erratum"],
+                String::new(),
+                0,
+            ),
+        ];
+        for (args, expected, status) in rows {
+            let output = directory.bcc("--clang-cl-mode", args);
+            assert_eq!(stderr(&output), *expected, "{args:?}");
+            assert_eq!(output.status.code(), Some(*status), "{args:?}");
+            drop(std::fs::remove_file(directory.path("a.obj")));
+        }
+        // `/showFilenames` names each source as it is compiled, to stdout;
+        // `/FA` with any letters writes the listing.
+        let output = directory.bcc("--clang-cl-mode", &["/c", "a.c", "/showFilenames", "/FAx"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "a.c\n");
+        assert!(directory.path("a.asm").is_file());
+        assert!(directory.path("a.obj").is_file());
+        // The rest are refused, with the value given apart where it may be.
+        for args in [
+            &["/c", "a.c", "/hotpatch"][..],
+            &["/c", "a.c", "-arm64EC"],
+            &["/c", "a.c", "/kernel"],
+            &["/c", "a.c", "/fsanitize=address"],
+            &["/c", "a.c", "-GA"],
+            &["/c", "a.c", "/Gregcall"],
+            &["/c", "a.c", "/QIntel-jcc-erratum"],
+            &["/c", "a.c", "/showIncludes:user"],
+            &["/c", "a.c", "/pathmap:a=b"],
+            &["/c", "a.c", "/funcoverride:f"],
+            &["/E", "a.c", "/C"],
+            &["/c", "a.c", "-winsysroot", "dir"],
+            &["/c", "a.c", "/vctoolsdirdir"],
+        ] {
+            drop(std::fs::remove_file(directory.path("a.obj")));
+            let output = directory.bcc("--clang-cl-mode", args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            let shown = match args[2..] {
+                | ["-winsysroot", "dir"] => "-winsysroot dir",
+                | ["/vctoolsdirdir"] => "/vctoolsdir dir",
+                | [option, ..] => option,
+                | [] => unreachable!(),
+            };
+            assert!(
+                stderr(&output)
+                    .starts_with(&format!("clang-cl: error: '{shown}' is not supported: ")),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+            assert!(!directory.path("a.obj").exists(), "{args:?}");
+        }
+        // `cl` refuses those of them it takes without a word itself.
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "a.c", "/kernel"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stdout(&output), "");
+        assert_eq!(
+            stderr(&output),
+            "cl : Command line error : '/kernel' is not supported: bcc does not compile for \
+             kernel mode\n"
+        );
+    }
+
+    /// The precompiled headers that `target_precompile_headers` and Visual
+    /// Studio projects ask for (`/Yc`, `/Yu`, `/Fp`, with the header forced
+    /// by `/FI`) only save time: bcc compiles each source as it is, writes no
+    /// `.pch`, and warns, also under `/WX`. A new Visual Studio project's
+    /// Debug line, which carries `/JMC`, compiles too. Both are as on main,
+    /// where bcc warned that the options were unknown.
+    #[test]
+    fn msvc_drivers_compile_through_precompiled_header_and_debug_lines() {
+        let directory = Directory::new();
+        directory.write("pch.h", "#define ANSWER 42\n");
+        directory.write("pch.c", "/* the precompiled header's source */\n");
+        directory.write("a.c", "int main(void) { return ANSWER - 42; }\n");
+        let lines: &[&[&str]] = &[
+            &[
+                "/c",
+                "/Ycpch.h",
+                "/Fpa.pch",
+                "/FIpch.h",
+                "/WX",
+                "pch.c",
+                "/Fopch.obj",
+            ],
+            &[
+                "/c", "/Yupch.h", "/Fpa.pch", "/FIpch.h", "/WX", "a.c", "/Foa.obj",
+            ],
+            &["/c", "-Yu", "/FIpch.h", "a.c", "/Foa.obj"],
+            &[
+                "/c",
+                "/Zi",
+                "/JMC",
+                "/nologo",
+                "/W3",
+                "/WX-",
+                "/diagnostics:column",
+                "/sdl",
+                "/Od",
+                "/D",
+                "_DEBUG",
+                "/D",
+                "_CONSOLE",
+                "/D",
+                "_UNICODE",
+                "/D",
+                "UNICODE",
+                "/Gm-",
+                "/EHsc",
+                "/RTC1",
+                "/MDd",
+                "/GS",
+                "/fp:precise",
+                "/permissive-",
+                "/Zc:wchar_t",
+                "/Zc:forScope",
+                "/Zc:inline",
+                "/FIpch.h",
+                "/Foa.obj",
+                "/Fdvc143.pdb",
+                "/external:W3",
+                "/Gd",
+                "/TC",
+                "/FC",
+                "/errorReport:prompt",
+                "a.c",
+            ],
+        ];
+        for mode in ["--clang-cl-mode", "--msvc-mode", "--icx-cl-mode"] {
+            for args in lines {
+                let output = directory.bcc(mode, &[&["/nologo"], *args].concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+                let object = args.iter().find_map(|arg| arg.strip_prefix("/Fo")).unwrap();
+                assert!(directory.path(object).is_file(), "{mode} {args:?}");
+                assert!(!directory.path("a.pch").exists(), "{mode} {args:?}");
+                drop(std::fs::remove_file(directory.path(object)));
+            }
+        }
+        let output = directory.bcc(
+            "--msvc-mode",
+            &["/nologo", "/c", "/Ycpch.h", "/WX", "pch.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stdout(&output), "pch.c\n");
+        assert_eq!(
+            stderr(&output),
+            "cl : Command line warning : '/Ycpch.h' is ignored: bcc does not build precompiled \
+             headers\n"
+        );
+    }
+
+    /// `/Brepro` spells `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`, as
+    /// clang-cl 23.1.5 and `cl` 19.44 do, so an object does not record when
+    /// it was built. clang-cl's last of `/Brepro` and `/Brepro-` wins;
+    /// `cl.exe` reports `/Brepro-` as unknown, so its `/Brepro` wins
+    /// wherever it is.
+    #[test]
+    fn brepro_spells_the_date_and_time_macros_one() {
+        let directory = Directory::new();
+        directory.write("t.c", "d = __DATE__; t = __TIME__; s = __TIMESTAMP__;\n");
+        let ones = "d = \"1\"; t = \"1\"; s = \"1\";";
+        let expand = |mode: &str, options: &[&str]| {
+            let output = directory.bcc(mode, &[&["/nologo", "/EP", "t.c"], options].concat());
+            succeeds(&output);
+            (stdout(&output).trim().to_owned(), stderr(&output))
+        };
+        let unknown = "cl : Command line warning D9002 : ignoring unknown option '/Brepro-'\n";
+        for (mode, options, spelled_one, warning) in [
+            ("--clang-cl-mode", &["/Brepro"][..], true, ""),
+            ("--clang-cl-mode", &["-Brepro"], true, ""),
+            ("--clang-cl-mode", &["/Brepro-"], false, ""),
+            ("--clang-cl-mode", &["/Brepro", "/Brepro-"], false, ""),
+            ("--clang-cl-mode", &["/Brepro-", "/Brepro"], true, ""),
+            ("--icx-cl-mode", &["/Brepro"], true, ""),
+            ("--msvc-mode", &["/Brepro"], true, ""),
+            ("--msvc-mode", &["-Brepro"], true, ""),
+            ("--msvc-mode", &["/Brepro-"], false, unknown),
+            ("--msvc-mode", &["/Brepro", "/Brepro-"], true, unknown),
+            ("--msvc-mode", &["/Brepro-", "/Brepro"], true, unknown),
+        ] {
+            let (text, diagnostics) = expand(mode, options);
+            assert_eq!(text == ones, spelled_one, "{mode} {options:?}: {text}");
+            assert!(
+                spelled_one || text.starts_with("d = \"") && !text.contains("\"1\""),
+                "{mode} {options:?}: {text}"
+            );
+            // `cl` names the source on stderr.
+            match mode {
+                | "--clang-cl-mode" => assert_eq!(diagnostics, warning, "{options:?}"),
+                | "--msvc-mode" => assert_eq!(diagnostics, format!("{warning}t.c\n")),
+                | _ => {},
+            }
+        }
+        // It wins over `SOURCE_DATE_EPOCH`, which would spell 1970.
+        let output = directory.bcc_with(
+            "--clang-cl-mode",
+            &["/EP", "t.c", "/Brepro"],
+            &[("SOURCE_DATE_EPOCH", "0")],
+        );
+        succeeds(&output);
+        assert_eq!(stdout(&output).trim(), ones);
     }
 
     /// The GCC-style options clang-cl ignores bcc ignores too, rather than

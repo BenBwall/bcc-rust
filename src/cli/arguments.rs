@@ -409,6 +409,7 @@ impl Cli {
                     && self.code_generation.stack_locals_apply(self.target),
             )
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
+            .with_literal_one_date_macros(self.literal_one_date_macros)
             .with_suppress_warnings(self.suppress_warnings)
             .with_syntax_only(self.driver.syntax_only)
             .with_compiler_identity(self.compiler_identity.into())

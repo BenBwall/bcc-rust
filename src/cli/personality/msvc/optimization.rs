@@ -21,7 +21,11 @@
 //! level, Clang's `-O3`, which stands among the level letters.
 //!
 //! `cl` reads combined letters as the options they name: "/Odi is the same
-//! as /Od /Oi" (Microsoft Learn, "/O options (Optimize code)").
+//! as /Od /Oi" (Microsoft Learn, "/O options (Optimize code)"). `cl` 19.44
+//! takes the letters it knows from an argument that also holds others, and
+//! warns about each other letter as an unknown option (`/O2-` is `/O2`, with
+//! warning D9002 about `/O-`); it warns that `/Og`, `/Og-` and `/O` alone are
+//! deprecated (D9035).
 
 use std::ffi::OsString;
 
@@ -140,22 +144,76 @@ fn is_intel_level(letters: &str, intel: bool) -> bool {
     intel && letters == "3"
 }
 
+/// One of the options `cl`'s `/O` combines ([`cl_letters`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClLetters<'a> {
+    /// The letters of an option `cl` knows, after `O` (`2`, `i-`, `b1`).
+    Option(&'a str),
+    /// Letters `cl` warns about as an unknown option (D9002) and skips.
+    Unknown(&'a str),
+}
+
 /// The options `cl`'s `/O` with `letters` combines, each as the letters
-/// after `O` (`2s` is `2` and `s`), or `None` if a letter is none of
-/// `cl`'s: `1`, `2`, `d`, `g`, `s`, `t` and `x` alone, `i` and `y` with an
-/// optional `-`, and `b` with a digit from 0 to 3.
-pub(super) fn cl_options(letters: &str) -> Option<Vec<&str>> {
+/// after `O` (`2s` is `2` and `s`): `1`, `2`, `d`, `s`, `t` and `x` alone,
+/// `g`, `i` and `y` with an optional `-`, and `b` with a digit from 0 to 3.
+/// Any other letter is an unknown option of its own, as is `b` with any
+/// other digit or with none, which `cl` 19.44 skips with its warning while
+/// it takes the rest (`/O2-` is `/O2` and warns about `/O-`).
+pub(super) fn cl_letters(letters: &str) -> Vec<ClLetters<'_>> {
     let bytes = letters.as_bytes();
     let mut options = Vec::new();
     let mut start = 0;
     while let Some(&letter) = bytes.get(start) {
-        let length = match (letter, bytes.get(start + 1)) {
-            | (b'i' | b'y', Some(b'-')) | (b'b', Some(b'0'..=b'3')) => 2,
-            | (b'1' | b'2' | b'd' | b'g' | b'i' | b's' | b't' | b'x' | b'y', _) => 1,
-            | _ => return None,
+        let next = bytes.get(start + 1).copied();
+        let (length, known) = match (letter, next) {
+            | (b'g' | b'i' | b'y', Some(b'-')) | (b'b', Some(b'0'..=b'3')) => (2, true),
+            | (b'b', Some(b'4'..=b'9')) => (2, false),
+            | (b'1' | b'2' | b'd' | b'g' | b'i' | b's' | b't' | b'x' | b'y', _) => (1, true),
+            // Any other character, whole.
+            | _ => (
+                letters[start..].chars().next().map_or(1, char::len_utf8),
+                false,
+            ),
         };
-        options.push(&letters[start..start + length]);
+        let piece = &letters[start..start + length];
+        options.push(if known {
+            ClLetters::Option(piece)
+        } else {
+            ClLetters::Unknown(piece)
+        });
         start += length;
     }
-    Some(options)
+    options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ClLetters::{
+            Option,
+            Unknown,
+        },
+        cl_letters,
+    };
+
+    /// Each row was checked against `cl` 19.44's warnings.
+    #[test]
+    fn cl_reads_the_letters_it_knows_and_skips_the_others() {
+        for (letters, expected) in [
+            ("2s", &[Option("2"), Option("s")][..]),
+            ("i-g-y-", &[Option("i-"), Option("g-"), Option("y-")]),
+            ("b2x", &[Option("b2"), Option("x")]),
+            ("2-", &[Option("2"), Unknown("-")]),
+            ("2zz", &[Option("2"), Unknown("z"), Unknown("z")]),
+            ("b4", &[Unknown("b4")]),
+            ("bx", &[Unknown("b"), Option("x")]),
+            ("b-", &[Unknown("b"), Unknown("-")]),
+            ("x-", &[Option("x"), Unknown("-")]),
+            ("3", &[Unknown("3")]),
+            ("\u{e9}", &[Unknown("\u{e9}")]),
+            ("", &[]),
+        ] {
+            assert_eq!(cl_letters(letters), expected, "{letters}");
+        }
+    }
 }

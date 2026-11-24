@@ -172,6 +172,17 @@ pub(super) fn clang_cl_option(option: &str) -> Option<ClOption> {
     known
 }
 
+/// The `cl` option of clang-cl's that `option`, an argument without its `/`
+/// or `-`, is, as its kind and name: the longest name that matches, as
+/// LLVM's `OptTable` sorts a name before any shorter name it starts with
+/// and takes the first match (`headerUnit:quotex` is `headerUnit:quote`,
+/// not `headerUnit`, and `FAx` is `FA`, not `F`).
+pub(super) fn clang_cl_entry(option: &str) -> Option<(&'static str, &'static str)> {
+    clang_cl_options()
+        .filter(|&(kind, name)| name == option || (kind != "flag" && option.starts_with(name)))
+        .max_by_key(|&(kind, name)| (name.len(), kind == "flag"))
+}
+
 /// Whether `option`, an argument without its `/` or `-`, is the whole name
 /// of one of clang-cl's `cl` flags, which its option parser prefers to a
 /// Clang option of the same name (`-u` is `/u`, which takes no value).
@@ -542,6 +553,20 @@ mod tests {
         assert_eq!(clang_cl_option("home/user/a.c"), None);
         assert_eq!(clang_cl_option("Users/a.c"), Some(ClOption::Whole));
         assert_eq!(clang_cl_option("opt/a.c"), Some(ClOption::Whole));
+    }
+
+    #[test]
+    fn clang_cl_reads_the_longest_option_an_argument_starts_with() {
+        assert_eq!(
+            clang_cl_entry("headerUnit:quotex"),
+            Some(("separate", "headerUnit:quote"))
+        );
+        assert_eq!(clang_cl_entry("FAx"), Some(("joined", "FA")));
+        assert_eq!(clang_cl_entry("Fx"), Some(("flag", "Fx")));
+        assert_eq!(clang_cl_entry("Fxy"), Some(("separate", "F")));
+        assert_eq!(clang_cl_entry("w"), Some(("flag", "w")));
+        assert_eq!(clang_cl_entry("w14996"), Some(("joined", "w")));
+        assert_eq!(clang_cl_entry("nologox"), None);
     }
 
     #[test]

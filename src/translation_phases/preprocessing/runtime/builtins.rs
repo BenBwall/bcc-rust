@@ -176,6 +176,19 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     source_vectors: token.source_vectors,
                 })
             },
+            // MSVC extension: `cl`'s and clang-cl's `/Brepro` spell every date
+            // and time `"1"`, so that an object does not record when it, or
+            // its source, was written. That departs from C99 §6.10.8p1, which
+            // asks for the date and time of translation, as a pinned
+            // `SOURCE_DATE_EPOCH` does too.
+            | "__DATE__" | "__TIME__" | "__TIMESTAMP__"
+                if self.context.configuration.literal_one_date_macros() =>
+                Some(PreprocessorToken {
+                    spacing:        TokenSpacing::NONE,
+                    kind:           PreprocessorTokenType::String,
+                    contents:       intern_string_literal(self.context, self.scratch, "1"),
+                    source_vectors: token.source_vectors,
+                }),
             | name @ ("__DATE__" | "__TIME__") => {
                 let is_date = name == "__DATE__";
                 let source_date_epoch = self.context.configuration.source_date_epoch();
