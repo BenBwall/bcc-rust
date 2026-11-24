@@ -741,6 +741,48 @@ mod tests {
         }
     }
 
+    /// icx-cl's `/O3` and `-O3` are Intel's level 3, which clang-cl does not
+    /// have: "Possible values are 1, 2, or 3", and "The last O option
+    /// specified on the command line takes precedence over any others"
+    /// (Intel oneAPI DPC++/C++ Compiler Developer Guide and Reference
+    /// 2026.2, "O"). They draw no warning.
+    #[test]
+    fn icx_cl_reads_o3_as_intels_level_3() {
+        let directory = Directory::new();
+        let logo = "Intel(R) oneAPI DPC++/C++ Compiler for applications running on Intel(R) 64, \
+                    Version 2026.2.0 Build 20261001\nbcc 0.1.0, an icx-cl-compatible C compiler; \
+                    not an Intel product.\n\n";
+        for (options, optimized, size) in [
+            (&["/O3"][..], true, false),
+            (&["-O3"], true, false),
+            (&["/Zi", "/O3"], true, false),
+            (&["/O3", "/Od"], false, false),
+            (&["/Od", "/O3"], true, false),
+            (&["/O3", "/O1"], true, true),
+            (&["/O1", "/O3"], true, false),
+            (&["/O2s", "/O3"], true, false),
+            (&["/O3", "/Os"], true, true),
+        ] {
+            let mut all = options.to_vec();
+            all.extend_from_slice(&["/clang:-dM", "/E", "e.c"]);
+            let output = directory.bcc("--icx-cl-mode", &all);
+            reports(&output, 0, logo);
+            let macros = stdout(&output);
+            assert_eq!(names(&macros, "__OPTIMIZE__"), optimized, "{options:?}");
+            assert_eq!(names(&macros, "__OPTIMIZE_SIZE__"), size, "{options:?}");
+            assert_eq!(names(&macros, "__NO_INLINE__"), !optimized, "{options:?}");
+        }
+        // clang-cl's `/O3` sets nothing, with its warning.
+        let output = directory.bcc("--clang-cl-mode", &["/O3", "/clang:-dM", "/E", "e.c"]);
+        reports(
+            &output,
+            0,
+            "clang-cl: warning: argument unused during compilation: '/O3' \
+             [-Wunused-command-line-argument]\n",
+        );
+        assert!(!names(&stdout(&output), "__OPTIMIZE__"));
+    }
+
     /// The executable names: `icx` and `icx-cc` are icx (`icx` is icx-cl on
     /// Windows, as Intel's own is), `icx-cl` is icx-cl, and `icc` is not
     /// icx.

@@ -157,7 +157,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // clang-cl reads its warning options before it parses the others.
     let unknown_argument = unknown_argument_severity(&expanded);
     // The `/O` letter that sets clang-cl's level, wherever it stands.
-    state.level_letter = optimization::clang_cl_level_letter(optimization_options(&expanded));
+    state.level_letter =
+        optimization::clang_cl_level_letter(optimization_options(&expanded), intel.is_some());
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -2504,7 +2505,14 @@ impl State {
                 .level_letter
                 .filter(|&(at, _)| at == index)
                 .map(|(_, offset)| offset);
-            if optimization::clang_cl_options(letters, level, &mut self.inlining, &mut self.bcc) {
+            let intel = invocation.personality == Personality::IcxCl;
+            if optimization::clang_cl_options(
+                letters,
+                level,
+                intel,
+                &mut self.inlining,
+                &mut self.bcc,
+            ) {
                 return Some(false);
             }
             let group = "unused-command-line-argument";

@@ -2392,7 +2392,12 @@ command line as the clang-cl personality does, with:
 - The identity above with `__LONG_DOUBLE_SIZE__` 64, and `_ISO_VOLATILE`
   and `_UCRT_NOISY_NAN`, and `/O2` and `/fp:fast` by default: `_M_FP_FAST`
   and `_M_FP_CONTRACT`, or `_M_FP_PRECISE` under `/fp:precise`, and
-  `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define. `/Zi`,
+  `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define.
+  `/O3` and `-O3` are Intel's level 3 (Clang's `-O3`), which clang-cl
+  lacks; Intel documents `/O[n]` with n 1, 2 or 3, and "The last O option
+  specified on the command line takes precedence over any others"
+  (Developer Guide and Reference 2026.2, "O"). This rests on the
+  documentation alone: the 34 command lines compared had no `/O3`. `/Zi`,
   `/Z7` or `/ZI` without an `/O` option turns optimization off with the
   remark above naming it and `/Od`. An optimized `main` flushes subnormals
   as under `icx`, unless the last of `/fp:` and `/Qftz[-]` is

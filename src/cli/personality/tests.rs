@@ -255,7 +255,7 @@ fn combined_optimization_letters_read_as_each_driver_reads_them() {
             .filter(|argument| {
                 matches!(
                     argument.as_str(),
-                    "-O0" | "-Os" | "-O2" | "-fbuiltin" | "-fno-builtin" | "-fno-inline"
+                    "-O0" | "-Os" | "-O2" | "-O3" | "-fbuiltin" | "-fno-builtin" | "-fno-inline"
                 )
             })
             .collect::<Vec<_>>()
@@ -294,6 +294,20 @@ fn combined_optimization_letters_read_as_each_driver_reads_them() {
     ] {
         assert_eq!(
             optimization(Personality::ClangCl, options),
+            expected,
+            "{options:?}"
+        );
+    }
+    // icx-cl's `/O3` is a level, which the last level letter overrides.
+    for (options, expected) in [
+        (&["/O3"][..], &["-O3"][..]),
+        (&["-O3"], &["-O3"]),
+        (&["/O3", "/O2"], &["-fbuiltin", "-O2"]),
+        (&["/O2", "/O3"], &["-O3"]),
+        (&["/O3", "/Os"], &["-O3", "-Os"]),
+    ] {
+        assert_eq!(
+            optimization(Personality::IcxCl, options),
             expected,
             "{options:?}"
         );

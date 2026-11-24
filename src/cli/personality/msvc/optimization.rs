@@ -14,6 +14,12 @@
 //! clang-cl's driver warns about. bcc's `-O2` stands for Clang's `-O3`, as for
 //! clang-cl's `/O2`.
 //!
+//! icx-cl also has `/O3`, which clang-cl does not: Intel documents `/O[n]`
+//! with "1, 2, or 3", and "The last O option specified on the command line
+//! takes precedence over any others" (oneAPI DPC++/C++ Compiler Developer
+//! Guide and Reference 2026.2, "O"). So icx-cl reads `/O3` and `-O3` as a
+//! level, Clang's `-O3`, which stands among the level letters.
+//!
 //! `cl` reads combined letters as the options they name: "/Odi is the same
 //! as /Od /Oi" (Microsoft Learn, "/O options (Optimize code)").
 
@@ -24,12 +30,18 @@ use super::ClangInlining;
 /// Where the letter that sets clang-cl's level is: the last `1`, `2`, `x`
 /// or `d` among the letters of the `/O` options in `values`, by the index
 /// each comes with and the letter's byte offset. A letter right after `b`
-/// is `b`'s value, never a level, as clang-cl skips it.
+/// is `b`'s value, never a level, as clang-cl skips it. For icx-cl
+/// (`intel`), `/O3` is a level too.
 pub(super) fn clang_cl_level_letter<'a>(
     values: impl IntoIterator<Item = (usize, &'a str)>,
+    intel: bool,
 ) -> Option<(usize, usize)> {
     let mut last = None;
     for (index, letters) in values {
+        if is_intel_level(letters, intel) {
+            last = Some((index, 0));
+            continue;
+        }
         let bytes = letters.as_bytes();
         for (offset, letter) in bytes.iter().enumerate() {
             let after_b = offset > 0 && bytes[offset - 1] == b'b';
@@ -44,14 +56,22 @@ pub(super) fn clang_cl_level_letter<'a>(
 /// Appends to `out` the bcc options clang-cl's `/O` with `letters` gives,
 /// in order, where `level` is the offset of the letter that sets the level
 /// if this argument holds it, and gives `inlining` the inlining options
-/// `b` stands for. Returns whether any letter does anything; clang-cl warns
-/// about the argument otherwise.
+/// `b` stands for. icx-cl's `/O3` (`intel`) is `-O3` if it sets the level.
+/// Returns whether any letter does anything; clang-cl warns about the
+/// argument otherwise.
 pub(super) fn clang_cl_options(
     letters: &str,
     level: Option<usize>,
+    intel: bool,
     inlining: &mut ClangInlining,
     out: &mut Vec<OsString>,
 ) -> bool {
+    if is_intel_level(letters, intel) {
+        if level == Some(0) {
+            out.push("-O3".into());
+        }
+        return true;
+    }
     let bytes = letters.as_bytes();
     let mut used = false;
     let mut offset = 0;
@@ -113,6 +133,11 @@ pub(super) fn clang_cl_options(
         offset += 1;
     }
     used
+}
+
+/// Whether `letters` are those of icx-cl's `/O3` under `intel`.
+fn is_intel_level(letters: &str, intel: bool) -> bool {
+    intel && letters == "3"
 }
 
 /// The options `cl`'s `/O` with `letters` combines, each as the letters
