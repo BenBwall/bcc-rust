@@ -1739,10 +1739,11 @@ fn growth(
         };
         return Some(format!(
             "Some of the extra code is copied: at the bottom of a loop, where the jump back leads \
-             to a short block that tests whether to go round again, the back end puts a copy of \
-             that block instead (loop rotation), so each pass branches back once rather than \
-             jumping and then branching. Here the copies take {} instructions at -O2 and {before} \
-             at -O0, each in place of one jump.",
+             to a short block that ends by testing whether to go round again, the back end puts a \
+             copy of that whole block instead (loop rotation), so each pass branches back once \
+             rather than jumping and then branching. Such a block can be a while or for loop's \
+             test alone, or a small do loop's whole body with its test. Here the copies take {} \
+             instructions at -O2 and {before} at -O0, each in place of one jump.",
             after.instructions
         ));
     }
