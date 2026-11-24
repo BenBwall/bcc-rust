@@ -114,10 +114,8 @@ pub(super) fn cl_options(letters: &str) -> Option<Vec<&str>> {
     let mut start = 0;
     while let Some(&letter) = bytes.get(start) {
         let length = match (letter, bytes.get(start + 1)) {
-            | (b'1' | b'2' | b'd' | b'g' | b's' | b't' | b'x', _) => 1,
-            | (b'i' | b'y', Some(b'-')) => 2,
-            | (b'i' | b'y', _) => 1,
-            | (b'b', Some(b'0'..=b'3')) => 2,
+            | (b'i' | b'y', Some(b'-')) | (b'b', Some(b'0'..=b'3')) => 2,
+            | (b'1' | b'2' | b'd' | b'g' | b'i' | b's' | b't' | b'x' | b'y', _) => 1,
             | _ => return None,
         };
         options.push(&letters[start..start + length]);
