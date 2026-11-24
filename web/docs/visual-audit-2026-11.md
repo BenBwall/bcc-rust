@@ -7111,11 +7111,12 @@ encodings, as each item says.
 
 - **Size suffixes.** The assembly explanation said every instruction's
   last letter gives its size, which `jl`, `jne`, `sete`, `movsd`,
-  `cvtsi2sd` and `cltq` on the site contradict. It now says most
+  `ucomisd` and `cvttsd2si` on the site contradict. It now says most
   instructions that move or compute integers carry one, and names jumps
   and floating-point instructions as exceptions.
-- **`%slot0`.** The bcc IR key now says a slot is the *address* of the
-  memory `alloca` reserves, as the IR uses it.
+- **`%slot0`.** The LLVM IR key now says `%slot0` is the *address* of
+  the memory `alloca` reserves, as LLVM IR uses it. The bcc IR key, where
+  `slot0` names the frame region itself, is unchanged.
 - **Left for later, from the review:** a swipe hint for the machine
   code on phones; the figure's height on phones (490 to 565 px); saying
   in the key that labels and padding lines are not bytes; a reason for
