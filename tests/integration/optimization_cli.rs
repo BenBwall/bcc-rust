@@ -162,9 +162,10 @@ mod tests {
     /// clang-cl reads `/O`'s letters one at a time, and only the last `1`,
     /// `2`, `x` or `d` on the command line sets a level, so `/O2s` defines
     /// `__OPTIMIZE_SIZE__` and `/Os2` does not; `-O` is the same option,
-    /// `/Ob0` defines `__NO_INLINE__`, and an argument no letter of which
-    /// does anything (`/O3`) is unused. The macros, the warnings and the
-    /// status match the pinned clang-cl's. `cl` reads `/O2s` as `/O2 /Os`
+    /// `/Ob0` defines `__NO_INLINE__` unless a `/clang:-finline` takes it
+    /// back (`/clang:` options come last), and an argument no letter of
+    /// which does anything (`/O3`) is unused. The macros, the warnings and
+    /// the status match the pinned clang-cl's. `cl` reads `/O2s` as `/O2 /Os`
     /// and defines none of these GNU macros (Microsoft Learn, "/O options
     /// (Optimize code)" and "Predefined macros").
     #[test]
@@ -230,6 +231,20 @@ mod tests {
             &["/Og-"],
             &["/WX", "/O3"],
             &["/O2s", "/clang:-O0"],
+            // Clang's driver reads the last of `-finline` and `-fno-inline`,
+            // and without either the last of the `-f[no-]inline-functions`
+            // group, which `/Ob1` to `/Ob3` belong to; `/clang:`'s options
+            // come after the others.
+            &["/O2", "/Ob0", "/clang:-finline"],
+            &["/O2", "/clang:-fno-inline", "/clang:-finline"],
+            &["/O2", "/clang:-finline", "/Ob0"],
+            &["/O2", "/Ob0", "/Ob2"],
+            &["/O2", "/Ob2", "/Ob0"],
+            &["/O2", "/clang:-fno-inline-functions"],
+            &["/O2", "/clang:-fno-inline-functions", "/Ob1"],
+            &["/O2", "/clang:-fno-inline-functions", "/clang:-finline"],
+            &["/O2", "/Ob0", "/clang:-finline-functions"],
+            &["/Od", "/clang:-finline"],
         ] {
             let expected = run(Command::new(&clang).arg("--driver-mode=cl"), options);
             let actual = run(
@@ -253,6 +268,71 @@ mod tests {
             "{cl:?}"
         );
         drop(std::fs::remove_dir_all(&directory));
+    }
+
+    /// Clang's driver passes on the last of `-finline` and `-fno-inline`,
+    /// and without either the last of `-finline-functions`,
+    /// `-finline-hint-functions` and `-fno-inline-functions`
+    /// (`Clang::ConstructJob`); an optimized compilation defines
+    /// `__NO_INLINE__` after `-fno-inline` or `-fno-inline-functions` there,
+    /// silently. The Clang, zig cc and icx personalities match the pinned
+    /// Clang. GCC 14 reads only the last of `-finline` and `-fno-inline`.
+    #[test]
+    fn inlining_options_define_no_inline_as_each_driver_does() {
+        let clang = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        });
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let no_inline = |command: &mut Command, options: &[&str]| {
+            let output = command
+                .args(options)
+                .args(["-dM", "-E", "-x", "c", null])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{options:?}: {output:?}");
+            assert!(output.stderr.is_empty(), "{options:?}: {output:?}");
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line == "#define __NO_INLINE__ 1")
+        };
+        let lines: &[&[&str]] = &[
+            &["-O2", "-fno-inline", "-finline"],
+            &["-O2", "-finline", "-fno-inline"],
+            &["-O2", "-finline"],
+            &["-O0", "-finline"],
+            &["-O2", "-fno-inline-functions"],
+            &["-O2", "-fno-inline-functions", "-finline-functions"],
+            &["-O2", "-finline-functions", "-fno-inline-functions"],
+            &["-O2", "-finline-hint-functions", "-fno-inline-functions"],
+            &["-O2", "-fno-inline", "-finline-functions"],
+            &["-O2", "-fno-inline-functions", "-finline"],
+            &["-O2", "-fno-inline-functions", "-fno-inline", "-finline"],
+        ];
+        for options in lines {
+            let expected = no_inline(&mut Command::new(&clang), options);
+            for mode in ["--clang-mode", "--zig-cc-mode", "--icx-mode"] {
+                let actual = no_inline(
+                    Command::new(env!("CARGO_BIN_EXE_bcc-rust")).arg(mode),
+                    options,
+                );
+                assert_eq!(actual, expected, "{mode} {options:?}");
+            }
+        }
+        for (options, expected) in [
+            (&["-O2", "-fno-inline", "-finline"][..], false),
+            (&["-O2", "-finline", "-fno-inline"], true),
+            (&["-O2", "-fno-inline-functions"], false),
+            (&["-O2", "-fno-inline", "-finline-functions"], true),
+            (&["-O0", "-finline"], true),
+        ] {
+            let actual = no_inline(
+                Command::new(env!("CARGO_BIN_EXE_bcc-rust")).arg("--gcc-mode"),
+                options,
+            );
+            assert_eq!(actual, expected, "--gcc-mode {options:?}");
+        }
     }
 
     /// A read of an uninitialized local is a fixed value, so masking it clears

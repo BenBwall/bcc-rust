@@ -120,6 +120,10 @@ IGNORED_GROUP = re.compile(r"Group<clang_ignored_(?:gcc_optimization_f|f|m|legac
 IGNORED_OPTION = re.compile(r'def\s*\w*\s*:\s*(Flag|Joined)<\["-"\],\s*"([^"]*)">')
 IGNORED_BOOLEAN = re.compile(r'defm\s*\w*\s*:\s*BooleanFFlag<"([^"]*)">')
 ALIAS = re.compile(r'def\s*:\s*Flag<\["-"\],\s*"([fm][^"]*)">,\s*Alias<(\w+)>')
+# The options of an ignored group that the pinned Clang's driver reads all
+# the same: `-finline` takes back an earlier `-fno-inline`
+# (`Clang::ConstructJob` reads the last of the two).
+READ_DESPITE_GROUP = {"-finline"}
 # How the pinned Clang reports an option it ignores (Clang.cpp,
 # `Clang::ConstructJob`).
 IGNORED_REPORTS = (
@@ -136,7 +140,8 @@ def clang_ignored_options(options_td):
     `ignore` (nothing), and as `alias` the unnamed aliases of a `-f` or `-m`
     flag it lists, the TARGET they stand for. A joined option's PATTERN ends
     in `*`. The driver itself classifies each, so an option it refuses is
-    left out."""
+    left out, as are those it reads despite their group
+    (`READ_DESPITE_GROUP`)."""
     import tempfile
 
     text = Path(options_td).read_text()
@@ -155,6 +160,8 @@ def clang_ignored_options(options_td):
             continue
         option = IGNORED_OPTION.match(definition)
         boolean = IGNORED_BOOLEAN.match(definition)
+        if option and "-" + option.group(2) in READ_DESPITE_GROUP:
+            continue
         if option:
             joined = option.group(1) == "Joined"
             candidates["-" + option.group(2)] = ("joined" if joined else "flag", None)

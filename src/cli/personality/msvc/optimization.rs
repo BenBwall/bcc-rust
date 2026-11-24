@@ -5,18 +5,21 @@
 //! and even `-ObjC` too), and turns its letters into Clang options in order
 //! (`TranslateOptArg` in Clang's `MSVC.cpp`): `s` is `-Os`, `t` is `-O3`, `i`
 //! and `i-` are `-fbuiltin` and `-fno-builtin`, `b0` is `-fno-inline`, `b1`
-//! to `b3` ask for inlining bcc decides itself, and `g` and `y` (on x86-64)
-//! do nothing. Only the last `1`, `2`, `x` or `d` on the whole command line
-//! sets a level: `1` is `-Os`, `2` and `x` are `-fbuiltin -O3`, and `d` is
-//! `-O0`; the others do nothing. Clang's last level wins, so `/O2s` is
-//! `-Os` and `/Os2` is `-O3`. An argument no letter of which does anything,
-//! like `/O3`, is unused, which clang-cl's driver warns about. bcc's `-O2`
-//! stands for Clang's `-O3`, as for clang-cl's `/O2`.
+//! is `-finline-hint-functions`, `b2` and `b3` are `-finline-functions`
+//! (which [`ClangInlining`] reads), and `g` and `y` (on x86-64) do nothing.
+//! Only the last `1`, `2`, `x` or `d` on the whole command line sets a level:
+//! `1` is `-Os`, `2` and `x` are `-fbuiltin -O3`, and `d` is `-O0`; the others
+//! do nothing. Clang's last level wins, so `/O2s` is `-Os` and `/Os2` is `-O3`.
+//! An argument no letter of which does anything, like `/O3`, is unused, which
+//! clang-cl's driver warns about. bcc's `-O2` stands for Clang's `-O3`, as for
+//! clang-cl's `/O2`.
 //!
 //! `cl` reads combined letters as the options they name: "/Odi is the same
 //! as /Od /Oi" (Microsoft Learn, "/O options (Optimize code)").
 
 use std::ffi::OsString;
+
+use super::ClangInlining;
 
 /// Where the letter that sets clang-cl's level is: the last `1`, `2`, `x`
 /// or `d` among the letters of the `/O` options in `values`, by the index
@@ -40,11 +43,13 @@ pub(super) fn clang_cl_level_letter<'a>(
 
 /// Appends to `out` the bcc options clang-cl's `/O` with `letters` gives,
 /// in order, where `level` is the offset of the letter that sets the level
-/// if this argument holds it. Returns whether any letter does anything;
-/// clang-cl warns about the argument otherwise.
+/// if this argument holds it, and gives `inlining` the inlining options
+/// `b` stands for. Returns whether any letter does anything; clang-cl warns
+/// about the argument otherwise.
 pub(super) fn clang_cl_options(
     letters: &str,
     level: Option<usize>,
+    inlining: &mut ClangInlining,
     out: &mut Vec<OsString>,
 ) -> bool {
     let bytes = letters.as_bytes();
@@ -67,9 +72,15 @@ pub(super) fn clang_cl_options(
             | b'b' =>
                 if let Some(digit) = next.filter(u8::is_ascii_digit) {
                     offset += 1;
-                    used |= digit <= b'3';
-                    if digit == b'0' {
-                        out.push("-fno-inline".into());
+                    let option = match digit {
+                        | b'0' => Some("-fno-inline"),
+                        | b'1' => Some("-finline-hint-functions"),
+                        | b'2' | b'3' => Some("-finline-functions"),
+                        | _ => None,
+                    };
+                    if let Some(option) = option {
+                        used = true;
+                        _ = inlining.read(option);
                     }
                 },
             | b'i' => {

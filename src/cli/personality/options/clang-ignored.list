@@ -29,7 +29,6 @@ ignore -fgnu
 alias -fhonor-infinites -fhonor-infinities
 ignore -fimplement-inlines
 ignore -fimplicit-templates
-ignore -finline
 warn -finline-functions-called-once
 warn -finline-limit
 warn -finline-limit=*

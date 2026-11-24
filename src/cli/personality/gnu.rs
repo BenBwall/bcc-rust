@@ -31,6 +31,7 @@ use super::{
     TemporaryDirectory,
     host_target,
     icx,
+    inlining::ClangInlining,
     known::{
         ClangIgnored,
         Compiler,
@@ -180,6 +181,7 @@ pub(super) fn plan_translated(
         eval_method: false,
         fp_model: None,
         basic_complex: None,
+        inlining: ClangInlining::default(),
         overrides: Vec::new(),
         ofast_models: Vec::new(),
         positions: Vec::new(),
@@ -207,6 +209,9 @@ pub(super) fn plan_translated(
     }
     if let Some(file) = state.dependency_file.take() {
         state.out.extend(["-MF".into(), file]);
+    }
+    if let Some(option) = state.inlining.option() {
+        state.out.push(option.into());
     }
     // GCC reports the options it does not recognize once it has read the
     // whole command line, after its other complaints.
@@ -737,6 +742,8 @@ struct State<'a> {
     /// The option that last set Clang's complex range to "basic"
     /// (`-ffast-math`), which a later model overrides with a warning.
     basic_complex: Option<&'static str>,
+    /// Clang's inlining options, which its driver reads together.
+    inlining: ClangInlining,
     /// Clang's warnings about overridden floating-point options, with
     /// their groups, reported once the warning options are known.
     overrides: Vec<(&'static str, String)>,
@@ -2105,6 +2112,11 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
+        // Clang's driver reads its inlining options together, once it has
+        // them all; GCC's `-finline` and `-fno-inline` are bcc's own.
+        if self.compiler == Compiler::Clang && self.inlining.read(text) {
+            return;
+        }
         // The options Clang takes and ignores, and the aliases it defines
         // without a name of their own.
         if self.compiler == Compiler::Clang

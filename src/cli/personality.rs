@@ -37,6 +37,8 @@
 //! - The option names each compiler knows: `personality/known.rs`, over the
 //!   lists in `personality/options/`; which of those bcc ignores, warns about
 //!   or refuses: `personality/unimplemented.rs`.
+//! - How Clang's driver reads its inlining options, which the Clang and
+//!   clang-cl personalities share: `personality/inlining.rs`.
 //!
 //! Driver conventions are host CLI policy; the translated options select
 //! the language modes of C99 §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
@@ -57,6 +59,7 @@ mod tcc;
 mod zig;
 
 // Shared tables and text
+mod inlining;
 mod known;
 mod unimplemented;
 mod version;

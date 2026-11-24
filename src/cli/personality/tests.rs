@@ -270,6 +270,21 @@ fn combined_optimization_letters_read_as_each_driver_reads_them() {
         (&["/O12", "/Os"], &["-fbuiltin", "-O2", "-Os"]),
         (&["/Od", "/Ob0"], &["-O0", "-fno-inline"]),
         (&["/O2", "/Ob0"], &["-fbuiltin", "-O2", "-fno-inline"]),
+        // The last of `/Ob0` and `/clang:-finline` decides, and `/Ob2` is
+        // `-finline-functions`, which a `-fno-inline` overrides.
+        (&["/O2", "/Ob0", "/clang:-finline"], &["-fbuiltin", "-O2"]),
+        (
+            &["/O2", "/Ob0", "/Ob2"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
+        (
+            &["/O2", "/clang:-fno-inline-functions"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
+        (
+            &["/O2", "/clang:-fno-inline-functions", "/Ob2"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
         (&["/Oi-2"], &["-fno-builtin", "-fbuiltin", "-O2"]),
         (&["/Ob12"], &["-fbuiltin", "-O2"]),
         // A letter after `b` is its value, so `x` sets nothing here.

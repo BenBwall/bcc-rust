@@ -59,6 +59,7 @@ use super::{
     Step,
     host_target,
     icx,
+    inlining::ClangInlining,
     known::{
         self,
         ClOption,
@@ -435,6 +436,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     common.append(&mut clang_options);
+    if let Some(option) = state.inlining.option() {
+        common.push(option.into());
+    }
     // `cl` compiles every source even after one fails, then skips the link;
     // clang-cl stops at the first failure.
     let mut plan = Plan {
@@ -1037,6 +1041,8 @@ struct State {
     /// The letter of a clang-cl `/O` option that sets the level: the index
     /// of its argument and its offset there (`optimization`).
     level_letter:            Option<(usize, usize)>,
+    /// clang-cl's inlining options: `/Ob` and `/clang:`'s Clang ones.
+    inlining:                ClangInlining,
     sources:                 Vec<Source>,
     /// Linker options after `/link`, as bcc's link options.
     link:                    Vec<OsString>,
@@ -1123,6 +1129,7 @@ impl Default for State {
             bcc:                     Vec::new(),
             openmp:                  None,
             level_letter:            None,
+            inlining:                ClangInlining::default(),
             sources:                 Vec::new(),
             link:                    Vec::new(),
             linking:                 false,
@@ -1832,6 +1839,11 @@ impl State {
                 self.sources.push(Source::new(OsStr::new(text), false));
                 continue;
             }
+            // Clang's inlining options, which its driver reads together
+            // with `/Ob`'s.
+            if words.len() == 1 && self.inlining.read(text) {
+                continue;
+            }
             // The options Clang takes and ignores, and the aliases it
             // defines without a name of their own.
             if words.len() == 1
@@ -2492,7 +2504,7 @@ impl State {
                 .level_letter
                 .filter(|&(at, _)| at == index)
                 .map(|(_, offset)| offset);
-            if optimization::clang_cl_options(letters, level, &mut self.bcc) {
+            if optimization::clang_cl_options(letters, level, &mut self.inlining, &mut self.bcc) {
                 return Some(false);
             }
             let group = "unused-command-line-argument";

@@ -513,7 +513,12 @@ mod tests {
             Some(ClangIgnored::Optimization)
         );
         assert_eq!(clang_ignored("-mmpx"), Some(ClangIgnored::Deprecated));
-        assert_eq!(clang_ignored("-finline"), Some(ClangIgnored::Silent));
+        assert_eq!(
+            clang_ignored("-fimplement-inlines"),
+            Some(ClangIgnored::Silent)
+        );
+        // Of an ignored group, but read beside `-fno-inline`.
+        assert_eq!(clang_ignored("-finline"), None);
         assert_eq!(
             clang_ignored("-ftree-vectorize"),
             Some(ClangIgnored::Alias("-fvectorize"))
