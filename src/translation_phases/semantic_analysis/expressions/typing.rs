@@ -639,6 +639,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         })
                     {
                         self.report_void_arithmetic(e, target);
+                        let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                        self.gcc_array_qualifier_pedwarn(lt, rt, operator);
                         info.ty = self.types.scalar(self.types.target.ptrdiff_t);
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
@@ -750,9 +752,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))
                     {
-                        self.pointer_compatible(lp, rp, equality)
+                        let compatible = self.pointer_compatible(lp, rp, equality)
                             && (equality
-                                || !matches!(self.types.nodes[lp.index], TypeKind::Function { .. }))
+                                || !matches!(
+                                    self.types.nodes[lp.index],
+                                    TypeKind::Function { .. }
+                                ));
+                        if compatible {
+                            let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                            self.gcc_array_qualifier_pedwarn(lt, rt, operator);
+                        }
+                        compatible
                     } else {
                         false
                     };

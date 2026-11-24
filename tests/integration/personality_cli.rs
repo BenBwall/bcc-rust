@@ -2618,7 +2618,8 @@ mod tests {
     /// GCC 14 files a qualifier lost from a pointed-to array's elements
     /// under `-Wdiscarded-array-qualifiers`, which `-Wdiscarded-qualifiers`
     /// does not reach, and makes it a pedantic warning from C23 on, which
-    /// `-pedantic-errors` makes an error and `-w` still silences. Each row
+    /// `-pedantic-errors` makes an error and `-w` still silences; before
+    /// C23 its `-Wpedantic` error for the pointers comes first. Each row
     /// was checked against GCC 14 (`-std=c2x` for C23).
     #[test]
     fn gcc_files_array_qualifiers_under_their_own_option() {
@@ -2632,6 +2633,10 @@ mod tests {
         let warning = line("warning", "-Wdiscarded-array-qualifiers");
         let werror = line("error", "-Werror=discarded-array-qualifiers");
         let pedantic = line("error", "-Wdiscarded-array-qualifiers");
+        let before_c23 = format!(
+            "c.c:2:30: error: invalid use of pointers to arrays with different qualifiers in ISO \
+             C before C23 [-Wpedantic]\n{warning}"
+        );
         for (options, pragma, expected, status) in [
             (&[][..], "", warning.as_str(), 0),
             (&["-Wno-discarded-qualifiers"], "", &warning, 0),
@@ -2646,7 +2651,7 @@ mod tests {
                 &warning,
                 0,
             ),
-            (&["-pedantic-errors"], "", &warning, 0),
+            (&["-pedantic-errors"], "", &before_c23, 1),
             (&["-std=c2x", "-pedantic-errors"], "", &pedantic, 1),
             (&["-std=gnu2x", "-pedantic-errors"], "", &pedantic, 1),
             (

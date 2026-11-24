@@ -384,8 +384,22 @@ of that group, which leave it a warning; a pointed-to `const void` stays
 `sema-discards-array-qualifiers-gcc-c23` pins the same warning as an error
 under C23's `-pedantic-errors`. Every warning and error line and the status
 match GCC 14 (`-std=c2x` for C23); GCC's `note: expected` after an
-argument's diagnostic is not modelled, and neither is its `-Wpedantic`
-error for pointers to arrays with different qualifiers before C23.
+argument's diagnostic is not modelled.
+
+GCC's pre-C23 pedantic array qualifiers (2026-11-24):
+`sema-array-qualifiers-pedantic-gcc` pins GCC 14's `-pedantic-errors`
+error `invalid use of pointers to arrays with different qualifiers in ISO C
+before C23 [-Wpedantic]` under gnu17 wherever GCC compares such pointers'
+targets: a return, an initialization and an assignment in either direction,
+an argument, `==`, `<`, a subtraction and the arms of `?:`, each before the
+`-Wdiscarded-array-qualifiers` warning at the same place, and none inside
+`__extension__`. A qualified `void *` converted to a pointer to an array
+whose elements carry its qualifiers (a return, an initialization and an
+argument) is GCC's `-pedantic` `discards 'const volatile' qualifier`
+error, naming all the `void`'s qualifiers, which a pragma ignoring
+`-Wpedantic` does not silence. Every warning and error line and the status
+match GCC 14; carets over a cast or `&` operand span it where GCC marks one
+column, and GCC's `note: expected` after an argument is not modelled.
 
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for

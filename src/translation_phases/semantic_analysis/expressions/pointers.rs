@@ -16,10 +16,12 @@ use super::{
 use crate::{
     configuration::{
         DiagnosticGroup,
+        ExtensionPolicy,
         FeatureOrigin,
     },
     translation_phases::{
         SourceVectors,
+        parsing::declaration_syntax::TypeQualifiers,
         semantic_analysis::{
             Analyzer,
             types::{
@@ -120,6 +122,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         braced: bool,
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
+        // GCC points at an initializer, and elsewhere where it reports the
+        // conversion.
+        let gcc_site = if site == ConversionSite::Initialization {
+            source.expression.source_vectors
+        } else {
+            diagnostic_site
+        };
+        if self.gcc_pointer_rules() {
+            let (from, _) = self.value_conversion(source);
+            self.gcc_array_qualifier_pedwarn(self.types.non_atomic(target), from, gcc_site);
+        }
         if !self.bool_negations.is_empty() {
             let to_bool = matches!(
                 self.types.nodes[self.types.non_atomic(target).index],
@@ -139,6 +152,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) {
                 self.conversion_to_bool_warning(source);
             }
+            self.gcc_void_array_qualifiers(target, source, site, gcc_site);
             return true;
         }
         let target = self.types.non_atomic(target);
@@ -1172,6 +1186,107 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )))
     }
 
+    /// GCC's `-Wpedantic` report before C23 of the pointers `left` and
+    /// `right` to arrays whose elements differ only in qualifiers, which it
+    /// converts, compares and subtracts as C23 does (`comp_target_types` in
+    /// GCC's `c-typeck.cc`). Before C23 such arrays are not compatible,
+    /// since their element types are not; Clang reports a mismatch instead.
+    /// C99: §6.7.3 paragraph 8, p. 109; PDF p. 121; §6.7.5.2 paragraph 6,
+    /// p. 117; PDF p. 129.
+    pub(in crate::translation_phases::semantic_analysis) fn gcc_array_qualifier_pedwarn(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+        at: SourceVectors,
+    ) {
+        if self.gcc_pointer_rules()
+            && self.context.configuration.standard() < crate::configuration::CStandard::C23
+            && let (Some(lp), Some(rp)) = (self.pointer_target(left), self.pointer_target(right))
+            && self.differently_qualified_arrays(lp, rp)
+        {
+            self.gcc_pointer_pedwarn(ARRAY_QUALIFIERS_BEFORE_C23, at);
+        }
+    }
+
+    /// Whether `lp` and `rp` are array types whose elements differ in
+    /// qualifiers and that are compatible without them, `_Atomic` aside.
+    fn differently_qualified_arrays(&mut self, lp: TypeId, rp: TypeId) -> bool {
+        if !matches!(self.types.nodes[lp.index], TypeKind::Array(..))
+            || !matches!(self.types.nodes[rp.index], TypeKind::Array(..))
+            || self
+                .types
+                .composite(lp.unqualified(), rp.unqualified())
+                .is_some()
+        {
+            return false;
+        }
+        let (left, right) = (
+            self.types.unqualified_array(lp),
+            self.types.unqualified_array(rp),
+        );
+        self.types.composite(left, right).is_some()
+    }
+
+    /// GCC's `-pedantic` report before C23 of a qualified `void *` `source`
+    /// converted to the pointer to an array `target` whose elements have
+    /// those qualifiers: it compares the `void`'s qualifiers with the
+    /// array's own, which are none, and so reports them all as discarded,
+    /// as a pedantic warning (`convert_for_assignment` in GCC's
+    /// `c-typeck.cc`). Before C23 the array type itself is not qualified.
+    /// C99: §6.7.3 paragraph 8, p. 109; PDF p. 121; §6.5.16.1 paragraph 1,
+    /// p. 92; PDF p. 104.
+    fn gcc_void_array_qualifiers(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        site: ConversionSite,
+        at: SourceVectors,
+    ) {
+        if !self.gcc_pointer_rules()
+            || self.context.configuration.standard() >= crate::configuration::CStandard::C23
+            || self.under_extension()
+            || self.context.spelled_in_system_header(at)
+            || !self.gcc_pedantic_flag()
+        {
+            return;
+        }
+        let target = self.types.non_atomic(target);
+        let (from, _) = self.value_conversion(source);
+        let (Some(to), Some(from_target)) =
+            (self.pointer_target(target), self.pointer_target(from))
+        else {
+            return;
+        };
+        if !matches!(self.types.nodes[to.index], TypeKind::Array(..))
+            || !self.void_target(from_target)
+            || !self.types.object_qualifiers(from_target).intersects(
+                TypeQualifiers::CONST | TypeQualifiers::VOLATILE | TypeQualifiers::RESTRICT,
+            )
+        {
+            return;
+        }
+        let group = DiagnosticGroup::PointerQualifiers;
+        let wording = self.conversion_wording(group, site, target, from, source);
+        self.group_diagnostic(
+            group,
+            crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                group,
+            ),
+            at,
+            wording,
+            None,
+        );
+    }
+
+    /// GCC's `pedantic` flag, which `-pedantic`, `-Wpedantic`,
+    /// `-pedantic-errors` and `-Werror=pedantic` set and `-Wno-pedantic`
+    /// clears; a diagnostic pragma naming `-Wpedantic` leaves it alone.
+    fn gcc_pedantic_flag(&self) -> bool {
+        let configuration = self.context.configuration;
+        configuration.extension_policy() != ExtensionPolicy::Allow
+            || configuration.werror_pedantic().is_some()
+    }
+
     /// GCC's and TCC's target for arms that point to arrays whose elements
     /// differ only in qualifiers: the composite array with the union of
     /// both element qualifiers, as C23 has it, which GCC applies in every
@@ -1202,10 +1317,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         let composite = self.types.composite(left, right)?;
         if self.context.configuration.standard() < crate::configuration::CStandard::C23 {
-            self.report_pedantic_extension(
-                "invalid use of pointers to arrays with different qualifiers in ISO C before C23",
-                colon,
-            );
+            self.report_pedantic_extension(ARRAY_QUALIFIERS_BEFORE_C23, colon);
         }
         let qualifiers = self.types.object_qualifiers(lp) | self.types.object_qualifiers(rp);
         Some(self.types.qualified_object(composite, qualifiers))
@@ -1298,6 +1410,11 @@ fn integral_x87(value: crate::float_parsing::LongDouble) -> bool {
     };
     shift < 64 && significand & ((1_u64 << shift) - 1) == 0
 }
+
+/// GCC's words for pointers to arrays whose elements differ only in
+/// qualifiers, before C23.
+const ARRAY_QUALIFIERS_BEFORE_C23: &str =
+    "invalid use of pointers to arrays with different qualifiers in ISO C before C23";
 
 /// What GCC can tell about the address a pointer value holds.
 #[derive(Clone, Copy)]

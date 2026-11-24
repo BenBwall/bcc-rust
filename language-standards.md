@@ -56,8 +56,9 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   - the cast to a union type and the cast to the operand's own structure or
     union type (`UnionCasts`, `SameTypeCasts`), as in both compilers;
   - GCC's `-pedantic` reports of `__FUNCTION__` and `__PRETTY_FUNCTION__`,
-    of `__func__` before C99, of a conditional between pointers to arrays
-    whose elements differ in qualifiers before C23, and of a static
+    of `__func__` before C99, of pointers to arrays whose elements differ
+    in qualifiers before C23 (converted, compared, subtracted or the arms
+    of a conditional), and of a static
     initializer folded from an undefined shift (`1 << 40`), as in GCC 14,
     though an operand around that initializer leaves it reported, as GCC
     does;
@@ -2939,7 +2940,14 @@ names it (`discards 'const' qualifier from pointer target type
 pointed-to array's elements (`int (*)[3]` from `const int (*)[3]`) is GCC's
 own `-Wdiscarded-array-qualifiers` there, in the same words, which
 `-Wdiscarded-qualifiers` does not reach; from C23 on it is a pedantic
-warning that `-pedantic-errors` makes an error. Clang knows neither GCC
+warning that `-pedantic-errors` makes an error. Before C23, GCC's
+`-pedantic` also reports `invalid use of pointers to arrays with different
+qualifiers in ISO C before C23 [-Wpedantic]` wherever it takes such
+pointers as compatible (a conversion by assignment, either direction, a
+comparison, a subtraction and the arms of `?:`), and reports a qualified
+`void *` converted to a pointer to an array whose elements have its
+qualifiers as discarding them all, under `-Wdiscarded-qualifiers`. GCC's
+`-Wc11-c23-compat` forms of both are not modelled. Clang knows neither GCC
 option and reports both conversions in this group.
 Clang warns about the option itself with
 `unknown warning option '-Wdiscarded-qualifiers'; did you mean '-Wignored-qualifiers'?`
