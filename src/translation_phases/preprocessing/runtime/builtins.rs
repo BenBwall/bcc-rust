@@ -213,7 +213,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             },
             // GNU and MSVC extension: GCC manual, "Common Predefined Macros";
             // Microsoft Learn, "Predefined macros". Neither names a time zone
-            // for it, and `SOURCE_DATE_EPOCH` does not pin it.
+            // for it; Clang's `SOURCE_DATE_EPOCH` pins it, GCC's does not.
             | "__TIMESTAMP__" => {
                 let contents = self.source_file_timestamp();
                 Some(PreprocessorToken {
@@ -254,7 +254,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// The literal `__TIMESTAMP__` expands to: when the source file being read
     /// was last modified, in local time and spelled as `asctime` spells it, or
     /// GCC's and Clang's question marks when that cannot be known. `#line`
-    /// does not rename the file this asks about.
+    /// does not rename the file this asks about. Under Clang and clang-cl a
+    /// pinned `SOURCE_DATE_EPOCH` (or `--source-date-epoch`) stands for it,
+    /// in UTC, as for `__DATE__` and `__TIME__` (`ExpandBuiltinMacro` in
+    /// Clang's `PPMacroExpansion.cpp`); GCC 14 and `cl` keep the file's time.
     fn source_file_timestamp(&mut self) -> StringCacheId {
         let file = self
             .tokenizer_stack
@@ -267,7 +270,16 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 } => Some(physical_source_file_index),
                 | _ => None,
             });
-        let modified = file.and_then(|file| file_modification_time(self.context, file));
+        let pinned = match self.context.configuration.compiler_identity() {
+            | CompilerIdentity::Clang | CompilerIdentity::ClangCl =>
+                self.context.configuration.source_date_epoch(),
+            | CompilerIdentity::Gcc | CompilerIdentity::Msvc | CompilerIdentity::Tcc => None,
+        };
+        let modified = match pinned {
+            | Some(seconds) =>
+                chrono::DateTime::from_timestamp(seconds, 0).map(|time| time.naive_utc()),
+            | None => file.and_then(|file| file_modification_time(self.context, file)),
+        };
         let mut spelling = ArenaString::new_in(self.scratch);
         if let Some(modified) = modified {
             write!(spelling, "{}", modified.format("%a %b %e %H:%M:%S %Y"))

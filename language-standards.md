@@ -113,8 +113,10 @@ hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
 as well. GCC's and Clang's `__FILE_NAME__` (the last component of `__FILE__`),
 `__INCLUDE_LEVEL__` and `__TIMESTAMP__` are predefined too. `--msvc-mode` has
 only `__TIMESTAMP__` of the three and `--tcc-mode` none. `__TIMESTAMP__` is the
-current source file's modification time, in local time, and neither
-`SOURCE_DATE_EPOCH` nor `#line` changes it. Unlike the C99 names, these and
+current source file's modification time, in local time, and `#line` does not
+change it. Under the Clang and clang-cl identities a pinned
+`SOURCE_DATE_EPOCH` (or `--source-date-epoch`) replaces it with that time in
+UTC, as Clang does; GCC 14 and `cl` ignore the variable here. Unlike the C99 names, these and
 `__BASE_FILE__` may be redefined and undefined, with a warning.
 
 Compiler identity follows Clang's approach. Every language mode, including

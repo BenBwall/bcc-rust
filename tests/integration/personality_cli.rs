@@ -1168,8 +1168,10 @@ mod tests {
     }
 
     /// `__TIMESTAMP__` spells the modification time of the file being read as
-    /// `asctime` does, in every personality but TCC's, and
-    /// `SOURCE_DATE_EPOCH` does not pin it.
+    /// `asctime` does, in every personality but TCC's. `SOURCE_DATE_EPOCH`
+    /// pins it to that time in UTC under Clang and clang-cl, in an included
+    /// header and after `#line` too, as Clang 23 does; GCC 14 and `cl` 19.44
+    /// keep the file's time.
     #[test]
     fn timestamp_is_the_modification_time_of_the_current_file() {
         let directory = Directory::new();
@@ -1178,25 +1180,33 @@ mod tests {
             "m.c",
             "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
         );
-        for mode in ["--gcc-mode", "--clang-mode"] {
+        for (mode, preprocess, pinned) in [
+            ("--gcc-mode", "-E", false),
+            ("--msvc-mode", "/E", false),
+            ("--clang-mode", "-E", true),
+            ("--clang-cl-mode", "/E", true),
+        ] {
             let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .current_dir(&directory.0)
-                .args([mode, "-E", "-P", "m.c"])
-                .env("SOURCE_DATE_EPOCH", "0")
+                .args([mode, preprocess, "m.c"])
+                .env("SOURCE_DATE_EPOCH", "1700000000")
                 .output()
                 .unwrap();
             succeeds(&output);
             let text = stdout(&output);
-            let lines: Vec<&str> = text.lines().collect();
+            let lines: Vec<&str> = text.lines().filter(|line| line.starts_with('"')).collect();
             assert_eq!(lines.len(), 2, "{mode}: {text}");
             for line in lines {
+                if pinned {
+                    assert_eq!(line, "\"Tue Nov 14 22:13:20 2023\"", "{mode}");
+                    continue;
+                }
                 // "Thu Nov  5 23:13:48 2026" within quotes.
                 let bytes = line.as_bytes();
                 assert_eq!(bytes.len(), 26, "{mode}: {line}");
-                assert_eq!(bytes[0], b'"');
                 assert_eq!(&line[20..21], " ", "{mode}: {line}");
                 assert!(!line.contains("??"), "{mode}: {line}");
-                assert!(!line.ends_with("1970\""), "{mode}: {line}");
+                assert!(!line.ends_with("2023\""), "{mode}: {line}");
             }
         }
         directory.write("q.c", "__TIMESTAMP__\n");

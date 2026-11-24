@@ -254,7 +254,7 @@ struct Cli {
         value_parser = clap::value_parser!(u32).range(1..))]
     max_nesting_depth: u32,
     /// Spell `__DATE__` and `__TIME__` from seconds since the Unix epoch, in
-    /// UTC.
+    /// UTC, and `__TIMESTAMP__` too under the Clang identities.
     ///
     /// The flag overrides `SOURCE_DATE_EPOCH`. Without either, `__DATE__` and
     /// `__TIME__` spell the local time of translation. A malformed
