@@ -154,6 +154,10 @@ pub(crate) struct CompilerConfiguration {
     native: u128,
     repeated_specifier_warnings: bool,
     source_date_epoch: Option<i64>,
+    /// `__DATE__`, `__TIME__` and `__TIMESTAMP__` all spell `"1"`, whatever
+    /// `source_date_epoch` says, as `cl`'s and clang-cl's `/Brepro` make
+    /// them (Clang's `-init-datetime-macros=literalone`).
+    literal_one_date_macros: bool,
     hosted: bool,
     optimization: (bool, bool),
     /// `-fno-inline`: no function is to be inlined, which defines

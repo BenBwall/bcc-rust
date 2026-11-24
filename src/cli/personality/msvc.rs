@@ -430,6 +430,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
         common.push("-D_DEBUG".into());
     }
+    // `/Brepro` spells the date and time macros `"1"` in every step, as
+    // clang-cl's `-init-datetime-macros=literalone` and `cl.exe` do.
+    if state.reproducible {
+        common.push("--literal-one-date-macros".into());
+    }
     common.append(&mut state.system_directories());
     // Intel's defaults come before the command line's own options.
     if let Some(intel) = &intel {
@@ -640,8 +645,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if state.dll || state.shared {
         link.push("-shared".into());
     }
-    // clang-cl's `/Brepro` asks the linker for an image without a time
-    // stamp; bcc's objects carry none in any case.
+    // `/Brepro` asks the linker for an image without a time stamp; bcc's
+    // objects carry none in any case.
     if state.reproducible {
         link.push("-Wl,-Brepro".into());
     }
@@ -1106,7 +1111,8 @@ struct State {
     /// The warnings in clang-cl's group `-Woption-ignored` about its own
     /// options, given for each source it compiles (`own_options`).
     option_ignored:          Vec<String>,
-    /// clang-cl's `/Brepro`, the last of it and `/Brepro-`.
+    /// clang-cl's `/Brepro`, the last of it and `/Brepro-`; any `/Brepro`
+    /// for `cl`, which takes no `/Brepro-`.
     reproducible:            bool,
     /// clang-cl's `/showFilenames`, the last of it and `/showFilenames-`,
     /// and both as given.

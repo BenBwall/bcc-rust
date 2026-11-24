@@ -267,6 +267,11 @@ struct Cli {
         value_parser = SourceDateEpochParser
     )]
     source_date_epoch: Option<SourceDateEpoch>,
+    /// Spell `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`, over
+    /// `--source-date-epoch`, as `cl`'s and clang-cl's `/Brepro` do; their
+    /// personalities pass it.
+    #[arg(long, hide = true)]
+    literal_one_date_macros: bool,
 }
 
 // Tests

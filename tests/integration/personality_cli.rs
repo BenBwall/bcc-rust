@@ -9281,6 +9281,58 @@ mod tests {
         );
     }
 
+    /// `/Brepro` spells `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`, as
+    /// clang-cl 23.1.5 and `cl` 19.44 do, so an object does not record when
+    /// it was built. clang-cl's last of `/Brepro` and `/Brepro-` wins;
+    /// `cl.exe` reports `/Brepro-` as unknown, so its `/Brepro` wins
+    /// wherever it is.
+    #[test]
+    fn brepro_spells_the_date_and_time_macros_one() {
+        let directory = Directory::new();
+        directory.write("t.c", "d = __DATE__; t = __TIME__; s = __TIMESTAMP__;\n");
+        let ones = "d = \"1\"; t = \"1\"; s = \"1\";";
+        let expand = |mode: &str, options: &[&str]| {
+            let output = directory.bcc(mode, &[&["/nologo", "/EP", "t.c"], options].concat());
+            succeeds(&output);
+            (stdout(&output).trim().to_owned(), stderr(&output))
+        };
+        let unknown = "cl : Command line warning D9002 : ignoring unknown option '/Brepro-'\n";
+        for (mode, options, spelled_one, warning) in [
+            ("--clang-cl-mode", &["/Brepro"][..], true, ""),
+            ("--clang-cl-mode", &["-Brepro"], true, ""),
+            ("--clang-cl-mode", &["/Brepro-"], false, ""),
+            ("--clang-cl-mode", &["/Brepro", "/Brepro-"], false, ""),
+            ("--clang-cl-mode", &["/Brepro-", "/Brepro"], true, ""),
+            ("--icx-cl-mode", &["/Brepro"], true, ""),
+            ("--msvc-mode", &["/Brepro"], true, ""),
+            ("--msvc-mode", &["-Brepro"], true, ""),
+            ("--msvc-mode", &["/Brepro-"], false, unknown),
+            ("--msvc-mode", &["/Brepro", "/Brepro-"], true, unknown),
+            ("--msvc-mode", &["/Brepro-", "/Brepro"], true, unknown),
+        ] {
+            let (text, diagnostics) = expand(mode, options);
+            assert_eq!(text == ones, spelled_one, "{mode} {options:?}: {text}");
+            assert!(
+                spelled_one || text.starts_with("d = \"") && !text.contains("\"1\""),
+                "{mode} {options:?}: {text}"
+            );
+            // `cl` names the source on stderr.
+            match mode {
+                | "--clang-cl-mode" => assert_eq!(diagnostics, warning, "{options:?}"),
+                | "--msvc-mode" => assert_eq!(diagnostics, format!("{warning}t.c\n")),
+                | _ => {},
+            }
+        }
+        // It wins over `SOURCE_DATE_EPOCH`, which would spell 1970.
+        let output = directory.bcc_with(
+            "--clang-cl-mode",
+            &["/EP", "t.c", "/Brepro"],
+            &[("SOURCE_DATE_EPOCH", "0")],
+        );
+        succeeds(&output);
+        assert_eq!(stdout(&output).trim(), ones);
+    }
+
     /// The GCC-style options clang-cl ignores bcc ignores too, rather than
     /// honoring them: `-ffreestanding` leaves the hosted environment,
     /// `-std=c11` the C17 default and `-funsafe-math-optimizations` the

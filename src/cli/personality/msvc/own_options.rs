@@ -12,11 +12,11 @@
 //!   apart (`/AIdir` as `'/AI dir'`), as the driver renders it.
 //! - **Inert.** clang-cl takes them, and each changes nothing bcc writes; the
 //!   match in [`State::own_option`] says why for each.
-//! - **Applied.** `/FA` with any letters writes the listing, `/Brepro` asks the
-//!   linker for a reproducible image (bcc's objects carry no time stamp either
-//!   way), `/showFilenames` prints each source's name as it is compiled, and
-//!   `/vlen`, and `/JMC` without debug information, warn as clang-cl does where
-//!   they do nothing.
+//! - **Applied.** `/FA` with any letters writes the listing, `/Brepro` spells
+//!   the date and time macros `"1"` and asks the linker for a reproducible
+//!   image (bcc's objects carry no time stamp either way), `/showFilenames`
+//!   prints each source's name as it is compiled, and `/vlen`, and `/JMC`
+//!   without debug information, warn as clang-cl does where they do nothing.
 //! - **Ignored.** The precompiled header's (`/Yc`, `/Yu`) and `/JMC` with debug
 //!   information change only how fast a build runs or how a debugger steps,
 //!   never what the program does: bcc warns that it ignores them, as it does
@@ -168,6 +168,8 @@ impl State {
             | "funcoverride:" if value.is_empty() => {},
             // Applied.
             | "FA" => self.listing = true,
+            // `cl.exe` takes no `/Brepro-`, which it reports as unknown, so
+            // its `/Brepro` wins wherever it is.
             | "Brepro" | "Brepro-" => self.reproducible = name == "Brepro",
             | "showFilenames" | "showFilenames-" => {
                 self.show_filenames = name == "showFilenames";
@@ -374,10 +376,11 @@ impl State {
 }
 
 /// The own options of clang-cl's that the `cl` personality reads too, as
-/// `cl.exe` takes each without a word: the precompiled header's, which bcc
-/// ignores with a warning, and the rest, which change `cl.exe`'s output in
-/// ways bcc does not implement.
+/// `cl.exe` takes each without a word: `/Brepro`, which bcc applies, the
+/// precompiled header's, which it ignores with a warning, and the rest,
+/// which change `cl.exe`'s output in ways bcc does not implement.
 const CL_READ: &[&str] = &[
+    "Brepro",
     "GA",
     "QIntel-jcc-erratum",
     "Yc",

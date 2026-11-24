@@ -215,29 +215,41 @@ fn cl_takes_the_optimization_letters_it_knows() {
     assert!(!optimized("/Oz"));
 }
 
-/// clang-cl's `/Brepro` asks the linker for an image without a time
-/// stamp, the last of it and `/Brepro-` winning; bcc's objects carry none in
-/// any case.
+/// `/Brepro` spells the date and time macros `"1"` in every step and asks
+/// the linker for an image without a time stamp; bcc's objects carry none in
+/// any case. clang-cl's last of `/Brepro` and `/Brepro-` wins; `cl.exe` takes
+/// no `/Brepro-` (`D9002`, tested end to end), so its `/Brepro` wins.
 #[test]
-fn clang_cl_asks_for_a_reproducible_link_under_brepro() {
+fn brepro_asks_for_reproducible_macros_and_link() {
     let directory = std::env::temp_dir().join(format!("bcc-cl-brepro-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let source = directory.join("a.c");
     std::fs::write(&source, "int x;\n").unwrap();
     let source = source.to_str().unwrap();
-    let reproducible = |options: &[&str]| {
-        let mut arguments = vec![source];
+    let reproducible = |personality: Personality, options: &[&str]| {
+        let mut arguments = vec!["/nologo", source];
         arguments.extend(options);
-        planned(Personality::ClangCl, &arguments)
-            .pop()
-            .expect("a link step")
+        let steps = planned(personality, &arguments);
+        let [compile, link] = &steps[..] else {
+            panic!("a compile and a link step: {steps:?}")
+        };
+        let linked = link.iter().any(|argument| argument == "-Wl,-Brepro");
+        let macros = compile
             .iter()
-            .any(|argument| argument == "-Wl,-Brepro")
+            .any(|argument| argument == "--literal-one-date-macros");
+        assert_eq!(linked, macros, "{personality:?} {options:?}");
+        linked
     };
-    assert!(!reproducible(&[]));
-    assert!(reproducible(&["/Brepro"]));
-    assert!(reproducible(&["-Brepro-", "-Brepro"]));
-    assert!(!reproducible(&["/Brepro", "/Brepro-"]));
+    for personality in [Personality::ClangCl, Personality::Msvc] {
+        assert!(!reproducible(personality, &[]));
+        assert!(reproducible(personality, &["/Brepro"]));
+        assert!(reproducible(personality, &["-Brepro"]));
+    }
+    assert!(reproducible(Personality::ClangCl, &["-Brepro-", "-Brepro"]));
+    assert!(!reproducible(
+        Personality::ClangCl,
+        &["/Brepro", "/Brepro-"]
+    ));
     drop(std::fs::remove_dir_all(&directory));
 }
 

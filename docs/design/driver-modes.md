@@ -986,6 +986,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
 | `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect (clang-cl's `/fp:` options set the math functions' `errno`, see "clang-cl") |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/Yc`, `/Yu` (no `.pch` is written or read; the source is compiled as it is), clang-cl's `/JMC` with debug information, `/d1*`, `/d2*` | accepted with a warning |
+| `/Brepro` | `__DATE__`, `__TIME__` and `__TIMESTAMP__` spell `"1"`, and the link gets `/Brepro`, as `cl` 19.44 does; `cl` takes no `/Brepro-` (D9002), and clang-cl's last of the two wins |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
 **Defaults.** The `x86_64-pc-windows-msvc` target with every Microsoft
@@ -1469,11 +1470,12 @@ during compilation`, after everything else and only if nothing failed, which
 `-Wno-unused-command-line-argument` silences, as for the Clang options below;
 one that changes nothing bcc writes is accepted without a word (`/FC`,
 `/GX`, `/Zo`, `/ZH:`, whose file checksums bcc's CodeView omits, `/Qvec-`,
-`/vd2`); `/FA` with any letters writes the listing, `/Brepro` asks the
-linker for an image without a time stamp (bcc's objects carry none in any
-case), `/showFilenames` prints each source's name to stdout as it is
-compiled, and `/vlen=256` and `/JMC` without debug information warn as
-clang-cl does.
+`/vd2`); `/FA` with any letters writes the listing, `/Brepro` (the last of
+it and `/Brepro-`) spells `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`,
+as clang-cl's `-init-datetime-macros=literalone` does, and asks the linker
+for an image without a time stamp (bcc's objects carry none in any case),
+`/showFilenames` prints each source's name to stdout as it is compiled, and
+`/vlen=256` and `/JMC` without debug information warn as clang-cl does.
 The precompiled header's `/Yc` and `/Yu`, and `/JMC` with debug information
 where a step compiles, change only how fast a build runs or how a debugger
 steps: bcc warns that it ignores them (`'/Ycpch.h' is ignored: bcc does not
