@@ -141,7 +141,14 @@ pub fn llvm_ir(line: &str) -> Option<Reading> {
                 ),
                 part(
                     vec![("align", Qualifier), (&format!(" {align}"), Number)],
-                    format!("a promise that the address is a multiple of {align}"),
+                    // Every address is a multiple of 1: "An alignment of 1
+                    // is always safe" (LLVM Language Reference, "'load'
+                    // Instruction").
+                    if align == "1" {
+                        "no alignment is promised, so any address will do".to_owned()
+                    } else {
+                        format!("a promise that the address is a multiple of {align}")
+                    },
                 ),
             ],
             reads: format!("Read the {noun} at the address in {pointer}, and call it {result}."),
@@ -321,19 +328,29 @@ pub fn wasm_text(line: &str) -> Option<Reading> {
     // The hint is about the effective address, the popped address plus
     // the offset, where the memory is accessed: "intended to satisfy the
     // property ea mod 2^memarg.align = 0" (the note under "Memory
-    // Instructions"; `align=` is written as 2^memarg.align bytes).
+    // Instructions"; `align=` is written as 2^memarg.align bytes). With
+    // `align=1` every address satisfies it, so nothing is promised.
     if let Some(align) = align {
         let accessed = if load { "read" } else { "written" };
         let address = offset.map_or_else(
             || "the address".to_owned(),
             |offset| format!("the address plus {offset}"),
         );
-        parts.push(part(
-            vec![("align", Qualifier), ("=", Qualifier), (align, Number)],
+        let gloss = if align == "1" {
+            format!(
+                "no alignment is promised: {address}, where memory is {accessed}, may be any \
+                 address, since every address is a multiple of 1; it changes nothing the \
+                 instruction does"
+            )
+        } else {
             format!(
                 "a hint that {address}, where memory is {accessed}, is meant to be a multiple of \
                  {align}; it changes nothing the instruction does"
-            ),
+            )
+        };
+        parts.push(part(
+            vec![("align", Qualifier), ("=", Qualifier), (align, Number)],
+            gloss,
         ));
     }
     let place = offset.map_or_else(
@@ -924,6 +941,15 @@ mod tests {
             reading.example.parts[2].gloss,
             "the type it reads: an 8-bit integer"
         );
+        assert_eq!(
+            reading.example.parts[4].gloss,
+            "no alignment is promised, so any address will do"
+        );
+        let aligned = llvm_ir("  %v6 = load i32, ptr %v5, align 4").unwrap();
+        assert_eq!(
+            aligned.example.parts[4].gloss,
+            "a promise that the address is a multiple of 4"
+        );
         assert!(llvm_ir("  %v5 = load volatile i8, ptr %v4, align 1").is_none());
         let add = llvm_ir("  %v7 = add nsw i32 %v4, 3").unwrap();
         assert_eq!(spelled(&add.example), "%v7 = add nsw i32 %v4, 3");
@@ -1036,6 +1062,15 @@ mod tests {
             aligned.example.parts[2].gloss,
             "a hint that the address, where memory is written, is meant to be a multiple of 8; it \
              changes nothing the instruction does"
+        );
+        // `align=1` asks nothing of the address, so the gloss says so
+        // rather than "a multiple of 1".
+        let unaligned = wasm_text("    i32.load offset=65573 align=1").unwrap();
+        assert_eq!(
+            unaligned.example.parts[3].gloss,
+            "no alignment is promised: the address plus 65573, where memory is read, may be any \
+             address, since every address is a multiple of 1; it changes nothing the instruction \
+             does"
         );
         let store = wasm_text("    i32.store").unwrap();
         assert_eq!(store.rank, 3);
