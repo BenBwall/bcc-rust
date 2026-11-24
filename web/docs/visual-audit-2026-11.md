@@ -7181,16 +7181,16 @@ list, on `agent/site-part23`, in the brief's order.
    counts in the `-O2` note still come from the full listing.
 3. **Phones.** The figure is a disclosure, open at first but closed on a
    screen 600 px wide or less, where it was 490 to 565 px tall: closed, it
-   is one 40 px line under the output, "How to read a line", with a
-   triangle that opens it
+   is a 50 px strip under the output, "How to read a line", with a
+   triangle that opens it (its title is a 40 px target on a touch screen)
    ([before](screenshots/part23/before-machine-code-390-dark.png),
    [after](screenshots/part23/after-machine-code-390-dark.png)). The
    machine code, which scrolls sideways inside its frame, says so on a
    card 560 px wide or less: "Swipe the listing sideways: the
    instructions run on past its right edge" ("Scroll" with a pointer). The
-   pointing hints say "Tap a line" and "Tap a source line" where the
-   screen has no pointer that hovers, as the WebAssembly listing's legend
-   already did.
+   pointing hints, under the source and over the output, say "Tap a line"
+   and "Tap a source line" where the screen has no pointer that hovers, as
+   the WebAssembly listing's legend already did.
 4. **The figure's example comes from the program on screen.** It always
    showed a line of the first lesson, whatever program was on screen
    ([before](screenshots/part23/before-figure-1440-dark.png): Callbacks
