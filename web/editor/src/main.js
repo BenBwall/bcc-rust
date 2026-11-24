@@ -302,6 +302,10 @@ class Editor {
       // explanation) is not cut off by the editor's top edge (with
       // hoverRoom, which measures where it fits).
       hover: { above: false },
+      // The frame (.code-editor) clips what overflows it, so a hover is
+      // laid out and capped in width inside the editor rather than the
+      // window, where its right end was cut off.
+      allowOverflow: false,
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
       hideCursorInOverviewRuler: true,
