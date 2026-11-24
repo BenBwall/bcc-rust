@@ -588,10 +588,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             // calls outer levels unpredictable, and walks the frame-pointer
             // chain for them, as this does on Linux: each x86-64 frame
             // address holds the caller's, and the return address is the
-            // word after it. A function that asks keeps its frame pointer
-            // in every back end, and an unoptimized compilation keeps all
-            // of them, as GCC's and Clang's do. GNU extension: GCC "Return
-            // Address".
+            // word after it. A function that asks keeps a frame pointer
+            // linked to its caller's in the LLVM and native back ends, as
+            // GCC's and Clang's do. Its callers keep theirs only when
+            // unoptimized or under `-fno-omit-frame-pointer`, so a level
+            // past one that omits it is as unpredictable as in GCC. GNU
+            // extension: GCC "Return Address".
             // <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
             | CommonBuiltin::Address(return_address) => {
                 let level = match instance.operands[0].expression {

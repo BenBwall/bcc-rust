@@ -21,8 +21,9 @@
 //! ```
 //!
 //! A function whose `%rsp` moves at run time (`dyn_alloca`) keeps a frame
-//! pointer, and so does every function but a naked one under
-//! `-fno-omit-frame-pointer`. On System V it links the frames as GCC's
+//! pointer, and so does a System V function that takes its frame address
+//! and, under `-fno-omit-frame-pointer`, every function but a naked one.
+//! On System V it links the frames as GCC's
 //! does: `%rbp` is pushed first and set to `%rsp` right after that push, so
 //! it points at the caller's `%rbp` with the return address above it, and
 //! `__builtin_frame_address (1)` and its outer levels follow the chain (GCC

@@ -1142,6 +1142,35 @@ fn kept_frame_pointers_link_each_frame_to_its_caller() {
     );
 }
 
+/// A System V function that takes its frame address links its frame to its
+/// caller's without `-fno-omit-frame-pointer`, as GCC's and Clang's do at
+/// every optimization level, so `__builtin_frame_address (1)` and the outer
+/// levels walk the chain through it; no value takes `%rbp`. Win64 frames,
+/// whose frame address is the establisher frame, stay as they were. GNU
+/// extension: GCC manual, "Return Address".
+#[test]
+fn a_frame_address_links_the_frame_without_kept_frame_pointers() {
+    let ir = SIX_ACROSS_A_CALL.replace(
+        "    v7 = iadd.i64 v0, v1\n",
+        "    v12 = frame_address\n    call @g(v12)\n    v7 = iadd.i64 v0, v1\n",
+    );
+    let text = assembly(&ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.starts_with(
+            "\nf:\n\t.cfi_startproc\n\tpushq\t%rbp\n\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, \
+             -16\n\tmovq\t%rsp, %rbp\n\t.cfi_def_cfa_register %rbp\n"
+        ),
+        "{f}"
+    );
+    // Pushed, described, set, popped: nothing else names it.
+    assert_eq!(f.matches("%rbp").count(), 5, "{f}");
+    for target in [Target::WindowsMsvc, Target::WindowsGnu] {
+        let f = assembly(&ir, target);
+        assert!(!f.contains("movq\t%rsp, %rbp"), "{target:?}: {f}");
+    }
+}
+
 /// A leaf keeps its frame pointer and its frame in the red zone below
 /// `%rsp`, as GCC's leaves do; the frame address is `%rbp` itself.
 #[test]

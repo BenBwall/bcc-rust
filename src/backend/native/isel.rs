@@ -55,7 +55,10 @@ mod wide;
 mod x87;
 
 use super::{
-    conv::CallConv,
+    conv::{
+        CallConv,
+        ConvKind,
+    },
     frame,
     mir::{
         AluOp,
@@ -222,8 +225,17 @@ pub(crate) fn select<'a>(
     });
     selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]) || over_aligned_byval;
     selector.func.entry = function.entry;
+    // A System V function that takes its frame address keeps a frame pointer
+    // linked to its caller's at every optimization level, as GCC's and
+    // Clang's do: the address is where it saved the caller's `%rbp`, and the
+    // outer levels walk the chain from there. Its callers keep theirs only
+    // under `-fno-omit-frame-pointer`, so a level past a caller without one
+    // is unpredictable, as GCC's manual says. GNU extension: GCC manual,
+    // "Getting the Return or Frame Address of a Function".
+    let links_frame =
+        CallConv::of(target).kind == ConvKind::SystemV && uses(&[Opcode::FrameAddress]);
     selector.func.keep_frame_ptr =
-        options.keep_frame_pointer && function.entry != EntryConvention::Naked;
+        (options.keep_frame_pointer || links_frame) && function.entry != EntryConvention::Naked;
     selector.func.general_regs = module.general_regs_only();
     // A handler aligns its own stack, which leaves `%rsp` no fixed distance
     // from the processor's frame, and addresses its frame from `%rbp`. Neither

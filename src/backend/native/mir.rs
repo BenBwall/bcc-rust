@@ -84,10 +84,12 @@ pub(crate) struct MFunction<'a> {
     pub(crate) general_regs:     bool,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
-    /// `%rbp` is where a frame pointer would save it.
+    /// `%rbp` is where a frame pointer would save it. On System V such a
+    /// function also keeps a linked frame pointer ([`Self::keep_frame_ptr`]).
     pub(crate) first_push:       Option<PReg>,
-    /// Whether `-fno-omit-frame-pointer` keeps a frame pointer in `%rbp`
-    /// although the stack does not move.
+    /// Whether `-fno-omit-frame-pointer`, or a System V function's taking
+    /// its frame address, keeps a frame pointer in `%rbp` although the stack
+    /// does not move.
     pub(crate) keep_frame_ptr:   bool,
     /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
     pub(crate) indirect:         ArenaVec<'a, ArenaVec<'a, MBlock>>,

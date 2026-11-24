@@ -2430,6 +2430,54 @@ int main(void) { printf("%d\n", top()); return 0; }
         );
     }
 
+    /// A function that takes its frame address links its frame to its
+    /// caller's at every optimization level, as GCC's and Clang's do, so in
+    /// a recursion whose every frame asks, levels 1 to 4 name the frames
+    /// and return addresses the callers recorded, though frame pointers may
+    /// be omitted elsewhere. GNU extension: GCC manual, "Return Address".
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn frame_address_takers_link_their_frames_when_optimized() {
+        const SOURCE: &str = r#"extern int printf(const char *, ...);
+static void *frames[7], *returns[7];
+static volatile int sink;
+#define CHECK(k) printf("%d%d", __builtin_frame_address(k) == frames[6 - (k)], \
+                        __builtin_return_address(k) == returns[6 - (k)])
+__attribute__((noinline)) static int down(int n) {
+  frames[n] = __builtin_frame_address(0);
+  returns[n] = __builtin_return_address(0);
+  if (n < 6) { int r = down(n + 1); sink = r; return r + 1; }
+  CHECK(1); CHECK(2); CHECK(3); CHECK(4);
+  return 0; }
+int main(void) { printf(" %d\n", down(0)); return 0; }
+"#;
+        let target = "--target=x86_64-unknown-linux-gnu";
+        let executable = temporary("frame-takers.exe");
+        let mut failures = Vec::new();
+        for flags in [
+            &["-O2", "--backend=llvm"][..],
+            &["-O2", "--backend=native"][..],
+            &["-O1", "--backend=native", "--opt=bcc"][..],
+            &["-O0", "--backend=native", "--opt=bcc"][..],
+        ] {
+            let built = bcc(
+                SOURCE,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            if run.status.code() != Some(0) || text(&run.stdout) != "11111111 6\n" {
+                failures.push(format!(
+                    "{flags:?}: {:?}\n{}",
+                    run.status.code(),
+                    text(&run.stdout)
+                ));
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// C11 atomics under contention
     /// (`tests/fixtures/programs/atomic_threads.c`): counters that only atomic
     /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`
