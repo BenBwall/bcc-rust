@@ -1480,7 +1480,11 @@ The precompiled header's `/Yc` and `/Yu`, and `/JMC` with debug information
 where a step compiles, change only how fast a build runs or how a debugger
 steps: bcc warns that it ignores them (`'/Ycpch.h' is ignored: bcc does not
 build precompiled headers`), which `/WX` does not make an error, as for
-`/RTC1`, and compiles each source as it is, writing no `.pch`; CMake's
+`/RTC1`, and compiles each source as it is, writing no `.pch`. Under
+clang-cl, `/w`, `/W0`, `-w`, `--no-warnings` or `-Wno-everything` anywhere
+on the command line silences these warnings, as it silences clang-cl's own
+driver warnings; `cl`'s `/w` leaves them, as it leaves its D9002 and D9007
+command-line warnings. CMake's
 `target_precompile_headers` and MSBuild's Debug line build. The rest are
 refused, status 1, where they would change what the step writes:
 `/winsysroot`, `/vctoolsdir`, `/winsdkdir` and `/diasdkdir`, whose Visual

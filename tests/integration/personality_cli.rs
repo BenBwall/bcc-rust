@@ -1168,8 +1168,10 @@ mod tests {
     }
 
     /// `__TIMESTAMP__` spells the modification time of the file being read as
-    /// `asctime` does, in every personality but TCC's, and
-    /// `SOURCE_DATE_EPOCH` does not pin it.
+    /// `asctime` does, in every personality but TCC's. `SOURCE_DATE_EPOCH`
+    /// pins it to that time in UTC under Clang and clang-cl, in an included
+    /// header and after `#line` too, as Clang 23 does; GCC 14 and `cl` 19.44
+    /// keep the file's time.
     #[test]
     fn timestamp_is_the_modification_time_of_the_current_file() {
         let directory = Directory::new();
@@ -1178,25 +1180,33 @@ mod tests {
             "m.c",
             "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
         );
-        for mode in ["--gcc-mode", "--clang-mode"] {
+        for (mode, preprocess, pinned) in [
+            ("--gcc-mode", "-E", false),
+            ("--msvc-mode", "/E", false),
+            ("--clang-mode", "-E", true),
+            ("--clang-cl-mode", "/E", true),
+        ] {
             let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .current_dir(&directory.0)
-                .args([mode, "-E", "-P", "m.c"])
-                .env("SOURCE_DATE_EPOCH", "0")
+                .args([mode, preprocess, "m.c"])
+                .env("SOURCE_DATE_EPOCH", "1700000000")
                 .output()
                 .unwrap();
             succeeds(&output);
             let text = stdout(&output);
-            let lines: Vec<&str> = text.lines().collect();
+            let lines: Vec<&str> = text.lines().filter(|line| line.starts_with('"')).collect();
             assert_eq!(lines.len(), 2, "{mode}: {text}");
             for line in lines {
+                if pinned {
+                    assert_eq!(line, "\"Tue Nov 14 22:13:20 2023\"", "{mode}");
+                    continue;
+                }
                 // "Thu Nov  5 23:13:48 2026" within quotes.
                 let bytes = line.as_bytes();
                 assert_eq!(bytes.len(), 26, "{mode}: {line}");
-                assert_eq!(bytes[0], b'"');
                 assert_eq!(&line[20..21], " ", "{mode}: {line}");
                 assert!(!line.contains("??"), "{mode}: {line}");
-                assert!(!line.ends_with("1970\""), "{mode}: {line}");
+                assert!(!line.ends_with("2023\""), "{mode}: {line}");
             }
         }
         directory.write("q.c", "__TIMESTAMP__\n");
@@ -9279,6 +9289,73 @@ mod tests {
             "cl : Command line warning : '/Ycpch.h' is ignored: bcc does not build precompiled \
              headers\n"
         );
+    }
+
+    /// clang-cl's `/w`, `/W0`, `-w`, `--no-warnings` and `-Wno-everything`,
+    /// wherever they stand, silence every warning of its driver (clang-cl
+    /// 23.1.5's `/JMC` one), so they silence bcc's own about the options it
+    /// ignores too. `cl` 19.44's `/w` leaves its command-line warnings
+    /// (D9002, D9007), so bcc's stay there.
+    #[test]
+    fn slash_w_silences_ignored_option_warnings_as_each_driver_does() {
+        let directory = Directory::new();
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        let warning = |option: &str, why: &str| format!("'{option}' is ignored: {why}");
+        let checks = warning("/RTC1", "bcc does not emit run-time checks");
+        let pch = warning("/Yc", "bcc does not build precompiled headers");
+        for options in [
+            &["/RTC1", "/Yc"][..],
+            &["/RTC1", "/Yc", "/W4"],
+            &["/RTC1", "/Yc", "/WX"],
+        ] {
+            let output = directory.bcc(
+                "--clang-cl-mode",
+                &[&["/nologo", "/c", "m.c"], options].concat(),
+            );
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("clang-cl: warning: {checks}\nclang-cl: warning: {pch}\n"),
+                "{options:?}"
+            );
+        }
+        for quiet in [
+            &["/w"][..],
+            &["/W0"],
+            &["-w"],
+            &["--no-warnings"],
+            &["-Wno-everything"],
+            &["/w", "/W4"],
+            &["/W0", "/WX"],
+        ] {
+            for options in [
+                [&["/RTC1", "/Yc"][..], quiet].concat(),
+                [quiet, &["/RTC1", "/Yc"]].concat(),
+            ] {
+                let output = directory.bcc(
+                    "--clang-cl-mode",
+                    &[&["/nologo", "/c", "m.c"][..], &options].concat(),
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{options:?}");
+            }
+        }
+        for options in [&["/RTC1", "/Yc", "/w"][..], &["/w", "/RTC1", "/Yc"]] {
+            let output = directory.bcc(
+                "--msvc-mode",
+                &[&["/nologo", "/c", "m.c"], options].concat(),
+            );
+            succeeds(&output);
+            // `cl` names the source on standard output.
+            assert_eq!(stdout(&output), "m.c\n");
+            assert_eq!(
+                stderr(&output),
+                format!(
+                    "cl : Command line warning : {checks}\ncl : Command line warning : {pch}\n"
+                ),
+                "{options:?}"
+            );
+        }
     }
 
     /// `/Brepro` spells `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`, as
