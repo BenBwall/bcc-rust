@@ -751,9 +751,11 @@ impl Stage {
                  each value, and how the stack frame is laid out. bcc's own native back end does \
                  this. The syntax is AT&T's, which GCC and Clang print by default: % marks a \
                  register, $ a constant, and a register in parentheses the memory at the address \
-                 it holds, and the destination comes last, so addl $1, %eax adds 1 to eax. The \
-                 instruction's last letter gives the size: b, w, l and q for 8, 16, 32 and 64 \
-                 bits. Arguments arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
+                 it holds, and the destination comes last, so addl $1, %eax adds 1 to eax. Most \
+                 instructions that move or compute integers end in a letter for the operand \
+                 size (movl, addq: b, w, l and q for 8, 16, 32 and 64 bits); jumps such as jl \
+                 and floating-point instructions such as movsd are named differently. Arguments \
+                 arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
                  starting with a dot are directives for the assembler, not instructions.",
             | Self::MachineCode =>
                 "Decided here: each instruction's exact encoding and length. Each line is the \

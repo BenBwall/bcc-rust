@@ -165,7 +165,7 @@ const LLVM_IR: Notation = Notation {
         ),
         part(
             &[("%slot0", Slot)],
-            "memory that alloca reserves in the frame",
+            "the address of memory that alloca reserves in the frame",
         ),
         part(&[("@main", Function)], "a function: @ marks a global name"),
         part(&[("2", Number)], "a constant"),

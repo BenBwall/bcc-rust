@@ -6984,7 +6984,10 @@ encodings, as each item says.
    syntax. **Fixed:** the explanation names AT&T syntax, which GCC and
    Clang print by default, its `%`, `$` and parentheses, that the
    destination comes last (`addl $1, %eax` adds 1 to eax, a line of
-   Objects), and the size suffixes b, w, l and q.
+   Objects), and the size suffixes b, w, l and q that most integer
+   instructions carry (jumps such as `jl` and floating-point instructions
+   such as `movsd` are named differently; GNU as says instructions *may*
+   carry one; review round 1).
 5. **The machine code said only calls show zero bytes.** A string
    literal's and a floating constant's address do too: Floating point's
    `leaq .str(%rip), %rdi` is `48 8d 3d 00 00 00 00` and
@@ -7103,3 +7106,18 @@ encodings, as each item says.
   mean a tap on a phone, which the text does not say.
 - **The before walk** at 1366x768 and 390x844 covered five lessons, not
   all nineteen; the 1440x900 walk covered every lesson in both themes.
+
+### Review, round 1
+
+- **Size suffixes.** The assembly explanation said every instruction's
+  last letter gives its size, which `jl`, `jne`, `sete`, `movsd`,
+  `cvtsi2sd` and `cltq` on the site contradict. It now says most
+  instructions that move or compute integers carry one, and names jumps
+  and floating-point instructions as exceptions.
+- **`%slot0`.** The bcc IR key now says a slot is the *address* of the
+  memory `alloca` reserves, as the IR uses it.
+- **Left for later, from the review:** a swipe hint for the machine
+  code on phones; the figure's height on phones (490 to 565 px); saying
+  in the key that labels and padding lines are not bytes; a reason for
+  the assembly and machine code growing at `-O2`; the inlining note's
+  "kept" clause on user code that inlines a `static` function.
