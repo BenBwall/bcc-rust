@@ -1701,8 +1701,9 @@ fn kept_inlined(stage: Stage, optimized: &Compilation, inlined: &[&String]) -> V
 /// Why `stage`'s code is bigger at -O2, when it `grew` or its machine code
 /// takes more bytes: a cost the saving reasons do not explain. Where a
 /// function was inlined (`inlining`), its copies, and whether it is `kept`
-/// ([`kept_inlined`]); else, in the assembly and machine code, the blocks
-/// the back end copied; and in the machine code, longer encodings.
+/// ([`kept_inlined`]); else, in the assembly and machine code, the loop
+/// tests the back end copied ([`Rotation`]); and in the machine code,
+/// longer encodings.
 fn growth(
     stage: Stage,
     plain: &Compilation,
@@ -1729,15 +1730,21 @@ fn growth(
         && native
         && let (Some(plain), Some(optimized)) =
             (plain.output(Stage::Asm), optimized.output(Stage::Asm))
-        && copied_tests(optimized) > copied_tests(plain)
+        && let (before, after) = (Rotation::of(plain), Rotation::of(optimized))
+        && after.added() > before.added()
     {
-        return Some(
-            "That is why there is more code at -O2: where a jump leads to a block of at most \
-             eight instructions that ends in a test, the back end puts a copy of the block in \
-             place of the jump (loop rotation, for a loop's jump back), and here it copies more \
-             at -O2 than at -O0."
-                .to_owned(),
-        );
+        let before = match before.instructions {
+            | 0 => "none".to_owned(),
+            | count => count.to_string(),
+        };
+        return Some(format!(
+            "Some of the extra code is copied: at the bottom of a loop, where the jump back leads \
+             to a short block that tests whether to go round again, the back end puts a copy of \
+             that block instead (loop rotation), so each pass branches back once rather than \
+             jumping and then branching. Here the copies take {} instructions at -O2 and {before} \
+             at -O0, each in place of one jump.",
+            after.instructions
+        ));
     }
     // More bytes from no more instructions: longer encodings.
     (stage == Stage::MachineCode && optimized.code_bytes > plain.code_bytes && !grew).then(|| {
@@ -1810,45 +1817,163 @@ fn definitions(stage: Stage, compilation: &Compilation) -> Vec<(String, bool)> {
     }
 }
 
-/// How many instructions of `assembly` sit in a block that ends in a
-/// conditional jump and repeats, with its jump's condition aside, as the
-/// end of another such block: the copies the back end's loop rotation
-/// makes (`docs/design/native-backend.md`, "Loop rotation": a `jmp` to a
-/// block of at most eight instructions that ends in a conditional branch
-/// takes a copy of that block).
-fn copied_tests(assembly: &str) -> usize {
-    let mut blocks: Vec<Vec<&str>> = Vec::new();
-    for line in assembly.lines() {
-        if line.ends_with(':') && !line.starts_with('\t') {
-            blocks.push(Vec::new());
-        } else if let Some(block) = blocks.last_mut()
-            && line.starts_with('\t')
-            && !line.trim_start().starts_with('.')
-        {
-            block.push(line.trim());
+/// The copies of loop tests in an assembly listing, which the back end's
+/// loop rotation makes (`docs/design/native-backend.md`, "Loop rotation";
+/// `duplicate_tests` in `src/backend/native/regalloc/edges.rs`): a `jmp`
+/// back to a loop's test, a block of at most eight instructions that ends
+/// in a conditional branch, takes a copy of that block. A copy is known by
+/// what only rotation makes, read from the text: a block that ends in the
+/// instructions of an earlier block's test, branches where that test
+/// branches (with the condition negated where the two targets swap), and
+/// branches back into the loop, to a label from that test down to itself.
+/// Blocks that merely end alike, such as two loops' tests of the same
+/// condition, branch elsewhere and are not counted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Rotation {
+    /// How many blocks end in a copy.
+    copies:       usize,
+    /// How many instructions the copies take, their branches included.
+    instructions: usize,
+}
+
+impl Rotation {
+    fn of(assembly: &str) -> Self {
+        let tests = Test::all(assembly);
+        let mut rotation = Self::default();
+        for bottom in &tests {
+            let copied = tests.iter().find(|test| {
+                test.block < bottom.block
+                    && bottom.body.ends_with(&test.body)
+                    && bottom.exits_as(test)
+                    && bottom
+                        .targets()
+                        .any(|target| (test.block..=bottom.block).contains(&target))
+            });
+            if let Some(test) = copied {
+                rotation.copies += 1;
+                rotation.instructions += test.body.len() + test.branches.len();
+            }
+        }
+        rotation
+    }
+
+    /// The instructions the copies add: each takes the place of one jump.
+    const fn added(self) -> usize {
+        self.instructions - self.copies
+    }
+}
+
+/// A block of an assembly listing that ends in a conditional branch.
+struct Test<'a> {
+    /// The block's index in the listing, counting a block for each label.
+    block:     usize,
+    /// Its instructions before the branch.
+    body:      Vec<&'a str>,
+    /// Its conditional jumps, as the condition and the target's block.
+    branches:  Vec<(&'a str, Option<usize>)>,
+    /// Where it goes when no branch is taken: the target of a `jmp` after
+    /// them, or else the next block.
+    otherwise: Option<usize>,
+}
+
+impl<'a> Test<'a> {
+    /// Every block of `assembly` that ends in a conditional branch.
+    fn all(assembly: &'a str) -> Vec<Self> {
+        let mut labels: Vec<&str> = Vec::new();
+        let mut blocks: Vec<Vec<&str>> = Vec::new();
+        for line in assembly.lines() {
+            if let Some(label) = line.strip_suffix(':')
+                && !line.starts_with('\t')
+            {
+                labels.push(label);
+                blocks.push(Vec::new());
+            } else if let Some(block) = blocks.last_mut()
+                && line.starts_with('\t')
+                && !line.trim_start().starts_with('.')
+            {
+                block.push(line.trim());
+            }
+        }
+        let block_of = |label: &str| labels.iter().position(|each| *each == label);
+        blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(block, instructions)| {
+                let mut body = instructions.clone();
+                let mut otherwise = Some(block + 1).filter(|next| *next < blocks.len());
+                if let Some(target) = body.last().and_then(|last| last.strip_prefix("jmp")) {
+                    otherwise = block_of(target.trim());
+                    body.pop();
+                }
+                let mut branches = Vec::new();
+                while let Some((condition, target)) = body.last().and_then(|last| {
+                    let (mnemonic, target) = last.split_once(char::is_whitespace)?;
+                    let condition = mnemonic
+                        .strip_prefix('j')
+                        .filter(|_| !mnemonic.starts_with("jmp"))?;
+                    Some((condition, block_of(target.trim())))
+                }) {
+                    branches.insert(0, (condition, target));
+                    body.pop();
+                }
+                (!branches.is_empty() && !body.is_empty()).then_some(Self {
+                    block,
+                    body,
+                    branches,
+                    otherwise,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether this block leaves as `other` does: the same branches, or
+    /// one branch on the negated condition with its two ways swapped.
+    fn exits_as(&self, other: &Self) -> bool {
+        if self.branches == other.branches && self.otherwise == other.otherwise {
+            return true;
+        }
+        match (self.branches.as_slice(), other.branches.as_slice()) {
+            | ([(condition, taken)], [(other_condition, other_taken)]) =>
+                negated(condition) == Some(*other_condition)
+                    && *taken == other.otherwise
+                    && self.otherwise == *other_taken,
+            | _ => false,
         }
     }
-    // Each block that ends in a conditional jump, as the instructions before
-    // that jump.
-    let tested: Vec<&[&str]> = blocks
-        .iter()
-        .filter_map(|block| {
-            let (last, rest) = block.split_last()?;
-            let mnemonic = last.split_whitespace().next()?;
-            (mnemonic.starts_with('j') && mnemonic != "jmp").then_some(rest)
-        })
-        .collect();
-    tested
-        .iter()
-        .enumerate()
-        .filter(|&(index, body)| {
-            !body.is_empty()
-                && tested.iter().enumerate().any(|(other, longer)| {
-                    other != index && longer.len() > body.len() && longer.ends_with(body)
-                })
-        })
-        .map(|(_, body)| body.len() + 1)
-        .sum()
+
+    /// The blocks this block can go to.
+    fn targets(&self) -> impl Iterator<Item = usize> + '_ {
+        self.branches
+            .iter()
+            .map(|&(_, target)| target)
+            .chain(std::iter::once(self.otherwise))
+            .flatten()
+    }
+}
+
+/// The x86 condition that holds when `condition` does not (Intel SDM Vol. 2,
+/// "Jcc"), as a jump's mnemonic spells it after the `j`.
+fn negated(condition: &str) -> Option<&'static str> {
+    const PAIRS: [(&str, &str); 9] = [
+        ("e", "ne"),
+        ("z", "nz"),
+        ("l", "ge"),
+        ("le", "g"),
+        ("b", "ae"),
+        ("be", "a"),
+        ("o", "no"),
+        ("s", "ns"),
+        ("p", "np"),
+    ];
+    PAIRS.iter().find_map(|&(one, other)| {
+        if condition == one {
+            Some(other)
+        } else if condition == other {
+            Some(one)
+        } else {
+            None
+        }
+    })
 }
 
 /// The optimizer comparison as numbers: for each measure of `stage`'s

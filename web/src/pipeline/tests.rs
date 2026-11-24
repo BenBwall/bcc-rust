@@ -675,16 +675,6 @@ fn the_optimizer_comparison_names_what_changed() {
             "{stage:?}: {changes:?}"
         );
     }
-    // The loops lesson's assembly grows with no call inlined: its back end
-    // copies more blocks at -O2.
-    let (loops_plain, loops_optimized) = lesson("loops");
-    let changes = optimizer_changes(Stage::Asm, &loops_plain, &loops_optimized);
-    assert!(
-        changes
-            .last()
-            .is_some_and(|change| change.contains("loop rotation")),
-        "{changes:?}"
-    );
     // Fewer instructions in more bytes say why.
     let (constants_plain, constants_optimized) = lesson("constants");
     let changes = optimizer_changes(Stage::MachineCode, &constants_plain, &constants_optimized);
@@ -982,4 +972,187 @@ fn the_assembly_example_counts_calls_through_pointers() {
              a function pointer."
         )
     );
+}
+
+/// A program whose -O2 code grows with no call inlined and no more loop
+/// tests copied: each loop's `continue` becomes a select (`cmovel`), which
+/// takes more instructions than the branch it replaces. `twice`'s two
+/// `if (y == 2)` tests end alike at -O2, as two loops' tests of the same
+/// condition can, though neither is a copy.
+const SELECTS: &str = "int skip(int n) {
+    int a = 0, b = 0, c = 0, d = 0;
+    for (int i = 0; i < 3; i++) {
+        if (i == n)
+            continue;
+        a += i;
+    }
+    for (int j = 0; j < 3; j++) {
+        if (j == n)
+            continue;
+        b += j * 2;
+    }
+    for (int k = 0; k < 3; k++) {
+        if (k == n)
+            continue;
+        c += k * 3;
+    }
+    for (int m = 0; m < 3; m++) {
+        if (m == n)
+            continue;
+        d += m * 5;
+    }
+    return a + b + c + d;
+}
+
+int twice(int x, int y) {
+    int r = 0;
+    if (x < 3) {
+        r += y;
+        if (y == 2)
+            r = 7;
+    }
+    if (x < 3) {
+        r -= y;
+        if (y == 2)
+            r = 9;
+    }
+    return r;
+}
+";
+
+/// The note names loop rotation only where the -O2 assembly has more
+/// copies of a loop's test, each a block that ends as an earlier test
+/// does, branches where that test does and branches back into the loop:
+/// the loops lesson's, and not a program that grows for another reason
+/// while blocks of it merely end alike.
+#[test]
+fn loop_rotation_is_claimed_only_from_copies_of_a_loops_test() {
+    let loops = crate::demos::find("loops").expect("the loops lesson");
+    let rotation = |optimize| {
+        let compilation = crate::explorer::compile(loops.source, optimize);
+        Rotation::of(compilation.output(Stage::Asm).expect("assembly"))
+    };
+    // -O0 copies the while and for loops' tests, two instructions each; -O2
+    // copies the do loop's body, a block of six that ends in its test, and
+    // the for loop's test.
+    assert_eq!(
+        rotation(false),
+        Rotation {
+            copies:       2,
+            instructions: 4,
+        }
+    );
+    assert_eq!(
+        rotation(true),
+        Rotation {
+            copies:       2,
+            instructions: 8,
+        }
+    );
+
+    // The loops lesson's assembly grows with no call inlined: its back end
+    // copies more of its loops' tests at -O2, which the note counts.
+    let (loops_plain, loops_optimized) = (
+        crate::explorer::compile(loops.source, false),
+        crate::explorer::compile(loops.source, true),
+    );
+    for stage in [Stage::Asm, Stage::MachineCode] {
+        let changes = optimizer_changes(stage, &loops_plain, &loops_optimized);
+        assert_eq!(
+            changes.last().map(String::as_str),
+            Some(
+                "Some of the extra code is copied: at the bottom of a loop, where the jump back \
+                 leads to a short block that tests whether to go round again, the back end puts a \
+                 copy of that block instead (loop rotation), so each pass branches back once \
+                 rather than jumping and then branching. Here the copies take 8 instructions at \
+                 -O2 and 4 at -O0, each in place of one jump."
+            ),
+            "{stage:?}"
+        );
+    }
+
+    let plain = crate::explorer::compile(SELECTS, false);
+    let optimized = crate::explorer::compile(SELECTS, true);
+    let (before, after) = (
+        plain.output(Stage::Asm).expect("assembly"),
+        optimized.output(Stage::Asm).expect("assembly"),
+    );
+    assert!(
+        Census::of(Stage::Asm, after).instructions > Census::of(Stage::Asm, before).instructions,
+        "the program grows at -O2"
+    );
+    assert_eq!(Rotation::of(before), Rotation::of(after));
+    let alike = Test::all(after)
+        .iter()
+        .filter(|test| test.body.last() == Some(&"cmpl\t$2, %esi"))
+        .count();
+    assert_eq!(alike, 2, "twice's two tests end alike:\n{after}");
+    for stage in [Stage::Asm, Stage::MachineCode] {
+        let changes = optimizer_changes(stage, &plain, &optimized);
+        assert!(
+            !changes
+                .iter()
+                .any(|change| change.contains("loop rotation") || change.contains("extra code")),
+            "{stage:?}: {changes:?}"
+        );
+    }
+}
+
+/// Over every lesson's assembly at both levels, the listing with its
+/// call-frame directives folded links as the full listing does: each line
+/// to the source lines the line it shows links to, with the same origin,
+/// and each source line to the same lines; the summary line to none.
+#[test]
+fn every_lessons_folded_assembly_links_as_the_full_listing() {
+    let shown_full = Unfolded {
+        frames: true,
+        ..Unfolded::default()
+    };
+    let mut instructions = 0;
+    for demo in &DEMOS {
+        for optimize in [false, true] {
+            let at = format!("{} at -O{}", demo.name, if optimize { 2 } else { 0 });
+            let compilation = crate::explorer::compile(demo.source, optimize);
+            let output = compilation.output(Stage::Asm).expect("assembly");
+            let (_, shown) = frames::fold(output).expect("directives to fold");
+            let folded = links(Stage::Asm, &compilation, demo.source, Unfolded::default());
+            let full = links(Stage::Asm, &compilation, demo.source, shown_full);
+            assert!(full.has_origins(), "{at}");
+            let directive = |line: usize| {
+                output
+                    .lines()
+                    .nth(line - 1)
+                    .is_some_and(|text| text.trim_start().starts_with(".cfi_"))
+            };
+            for (index, line) in shown.iter().enumerate() {
+                let view = index + 1;
+                let Some(line) = line.map(|line| line + 1) else {
+                    assert_eq!(folded.sources_for(view), Vec::<usize>::new(), "{at}");
+                    assert_eq!(folded.origin(view), LineOrigin::default(), "{at}");
+                    continue;
+                };
+                assert_eq!(
+                    folded.sources_for(view),
+                    full.sources_for(line),
+                    "{at}: line {view} of the folded listing, {line} of the full one"
+                );
+                assert_eq!(folded.origin(view), full.origin(line), "{at}: line {line}");
+                instructions += usize::from(full.origin(line).code);
+            }
+            for source in 1..=demo.source.lines().count() {
+                let mapped: Vec<usize> = folded
+                    .outputs_for(source)
+                    .into_iter()
+                    .map(|view| shown[view - 1].expect("an output line") + 1)
+                    .collect();
+                let expected: Vec<usize> = full
+                    .outputs_for(source)
+                    .into_iter()
+                    .filter(|&line| !directive(line))
+                    .collect();
+                assert_eq!(mapped, expected, "{at}: source line {source}");
+            }
+        }
+    }
+    assert!(instructions > 1000, "{instructions} instructions compared");
 }

@@ -238,36 +238,82 @@ impl State {
             return self.describe_beside(beside);
         }
         let (side, line) = match (pointing.line(Side::Source), pointing.line(Side::Output)) {
-            | (0, 0) => return Some("Point at a line to read what it links to.".to_owned()),
+            | (0, 0) => return Some(ASK.to_owned()),
             | (0, output) => (Side::Output, output),
             | (source, _) => (Side::Source, source),
         };
         self.describe_link(side, line)
     }
 
+    /// The longest sentences [`Self::link_reading`] can give in the view on
+    /// screen, longest first. The reading's box keeps room for them, so the
+    /// listing under it stays put as the pointer moves from line to line,
+    /// whichever line it reaches.
+    pub(super) fn link_reading_room(self) -> Vec<String> {
+        if self.mode.get() != Mode::Pipeline {
+            return Vec::new();
+        }
+        let stage = self.stage.get();
+        let unfolded = self.unfolded.get();
+        let count = |compilation: Memo<Option<pipeline::Compilation>>| {
+            compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .and_then(|compilation| pipeline::displayed(stage, compilation, unfolded))
+                    .map_or(0, |(text, _)| text.lines().count())
+            })
+        };
+        let source = self.editor_text.with(|text| text.lines().count());
+        let mut sentences = vec![ASK.to_owned()];
+        sentences.extend(self.describe_links(Side::Output, 1..=count(self.compilation)));
+        sentences.extend(self.describe_links(Side::Source, 1..=source));
+        if self.compare.get() && stage.differs_by_level() {
+            sentences.extend(self.describe_beside_lines(1..=count(self.other_level)));
+        }
+        sentences.sort_unstable_by_key(|sentence| std::cmp::Reverse(sentence.len()));
+        sentences.truncate(ROOM);
+        sentences
+    }
+
     /// What `line` of the other level's output, beside the selected one,
     /// links to in the source.
     fn describe_beside(self, line: usize) -> Option<String> {
+        self.describe_beside_lines(std::iter::once(line)).pop()
+    }
+
+    /// What each of `lines` of the other level's output, beside the selected
+    /// one, links to in the source, as [`Self::describe_beside`] says it.
+    fn describe_beside_lines(self, lines: impl IntoIterator<Item = usize>) -> Vec<String> {
         let stage = self.stage.get();
         let unfolded = self.unfolded.get();
         let optimized = !self.optimize.get();
         self.other_level.with(|compilation| {
-            let compilation = compilation.as_ref()?;
+            let Some(compilation) = compilation.as_ref() else {
+                return Vec::new();
+            };
             let name = format!("{} {}", level_name(optimized), stage.view_name());
-            if let Some(text) = folded_target(stage, compilation, unfolded, line, &name) {
-                return Some(text);
-            }
+            let numbered = stage != Stage::MachineCode
+                && pipeline::gutter(stage, compilation, unfolded).is_empty();
             self.other_links.with(|links| {
-                let linked = links.sources_for(line);
                 let view = View {
-                    name:     stage.view_name(),
-                    level:    Some(level_name(optimized)),
-                    exact:    links.is_exact(),
-                    numbered: stage != Stage::MachineCode
-                        && pipeline::gutter(stage, compilation, unfolded).is_empty(),
+                    name: stage.view_name(),
+                    level: Some(level_name(optimized)),
+                    exact: links.is_exact(),
+                    numbered,
                 };
-                let origins = Origins::of_output_line(links, line, stage, optimized);
-                Some(describe(Side::Output, line, &linked, view, origins))
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        folded_target(stage, compilation, unfolded, line, &name).unwrap_or_else(
+                            || {
+                                let linked = links.sources_for(line);
+                                let origins =
+                                    Origins::of_output_line(links, line, stage, optimized);
+                                describe(Side::Output, line, &linked, view, origins)
+                            },
+                        )
+                    })
+                    .collect()
             })
         })
     }
@@ -275,8 +321,14 @@ impl State {
     /// What `line` of `side` links to in the view on screen, as a sentence,
     /// or `None` in a view without links.
     fn describe_link(self, side: Side, line: usize) -> Option<String> {
+        self.describe_links(side, std::iter::once(line)).pop()
+    }
+
+    /// What each of `lines` of `side` links to in the view on screen, as
+    /// [`Self::describe_link`] says it; none in a view without links.
+    fn describe_links(self, side: Side, lines: impl IntoIterator<Item = usize>) -> Vec<String> {
         match self.mode.get() {
-            | Mode::Machine => None,
+            | Mode::Machine => Vec::new(),
             | Mode::Pipeline => {
                 let stage = self.stage.get();
                 let unfolded = self.unfolded.get();
@@ -285,62 +337,66 @@ impl State {
                 // it reads.
                 let compared = self.compare.get() && stage.differs_by_level();
                 self.compilation.with(|compilation| {
-                    let compilation = compilation.as_ref()?;
-                    if side == Side::Output {
-                        let name = if compared {
-                            format!("{} {}", level_name(optimized), stage.view_name())
-                        } else {
-                            stage.view_name().to_owned()
-                        };
-                        let folded = folded_target(stage, compilation, unfolded, line, &name);
-                        if folded.is_some() {
-                            return folded;
-                        }
-                    }
+                    let Some(compilation) = compilation.as_ref() else {
+                        return Vec::new();
+                    };
+                    let name = if compared {
+                        format!("{} {}", level_name(optimized), stage.view_name())
+                    } else {
+                        stage.view_name().to_owned()
+                    };
+                    // The machine code and the views that label their lines
+                    // with source lines show no line numbers to refer to.
+                    let numbered = stage != Stage::MachineCode
+                        && pipeline::gutter(stage, compilation, unfolded).is_empty();
                     self.links.with(|links| {
-                        if links.is_empty() {
-                            return None;
-                        }
-                        let linked = match side {
-                            | Side::Source => links.outputs_for(line),
-                            | Side::Output => links.sources_for(line),
-                        };
-                        // The machine code and the views that label their
-                        // lines with source lines show no line numbers to
-                        // refer to.
-                        let numbered = stage != Stage::MachineCode
-                            && pipeline::gutter(stage, compilation, unfolded).is_empty();
                         let view = View {
                             name: stage.view_name(),
                             level: compared.then(|| level_name(optimized)),
                             exact: links.is_exact(),
                             numbered,
                         };
-                        let origins = match side {
-                            | Side::Source => {
-                                let removed = linked.is_empty()
-                                    && optimized
-                                    && self.other_level.with(|plain| {
-                                        plain.as_ref().is_some_and(|plain| {
-                                            plain.origins(stage).iter().any(|origin| {
-                                                origin.line == line || origin.call == line
-                                            })
-                                        })
-                                    });
-                                Origins::of_source_line(links, line, &linked, removed)
-                            },
-                            | Side::Output =>
-                                Origins::of_output_line(links, line, stage, optimized),
-                        };
-                        Some(describe(side, line, &linked, view, origins))
+                        lines
+                            .into_iter()
+                            .filter_map(|line| {
+                                if side == Side::Output
+                                    && let Some(folded) =
+                                        folded_target(stage, compilation, unfolded, line, &name)
+                                {
+                                    return Some(folded);
+                                }
+                                if links.is_empty() {
+                                    return None;
+                                }
+                                let linked = match side {
+                                    | Side::Source => links.outputs_for(line),
+                                    | Side::Output => links.sources_for(line),
+                                };
+                                let origins = match side {
+                                    | Side::Source => {
+                                        let removed = linked.is_empty()
+                                            && optimized
+                                            && self.other_level.with(|plain| {
+                                                plain.as_ref().is_some_and(|plain| {
+                                                    plain.origins(stage).iter().any(|origin| {
+                                                        origin.line == line || origin.call == line
+                                                    })
+                                                })
+                                            });
+                                        Origins::of_source_line(links, line, &linked, removed)
+                                    },
+                                    | Side::Output =>
+                                        Origins::of_output_line(links, line, stage, optimized),
+                                };
+                                Some(describe(side, line, &linked, view, origins))
+                            })
+                            .collect()
                     })
                 })
             },
             | Mode::Wasm => self.wasm.program.with(|program| {
-                let program = program.as_ref().filter(|program| program.has_lines)?;
-                let linked = match side {
-                    | Side::Source => program.wat_lines_for(line),
-                    | Side::Output => program.source_for(line).into_iter().collect(),
+                let Some(program) = program.as_ref().filter(|program| program.has_lines) else {
+                    return Vec::new();
                 };
                 let view = View {
                     name:     "WebAssembly text",
@@ -348,11 +404,28 @@ impl State {
                     exact:    true,
                     numbered: true,
                 };
-                Some(describe(side, line, &linked, view, Origins::default()))
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        let linked = match side {
+                            | Side::Source => program.wat_lines_for(line),
+                            | Side::Output => program.source_for(line).into_iter().collect(),
+                        };
+                        describe(side, line, &linked, view, Origins::default())
+                    })
+                    .collect()
             }),
         }
     }
 }
+
+/// What the reading says while the reader points at no line.
+const ASK: &str = "Point at a line to read what it links to.";
+
+/// How many of the longest sentences the reading's box keeps room for: the
+/// longest in characters is nearly always the tallest, and the next ones
+/// cover a shorter sentence that wraps worse.
+const ROOM: usize = 3;
 
 /// What line 1 of `stage`'s view, `name`, is when it stands for the folded
 /// target lines (`pipeline::target`) or call-frame directives

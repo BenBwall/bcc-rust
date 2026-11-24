@@ -1311,11 +1311,15 @@
   .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .stage-toolbar .stage-note { flex: 1 1 260px; }
   /* What the line the reader points at links to. Its room is kept, so the
-     editor below does not move under the pointer as the sentence changes. */
-  .link-reading { margin-top: 10px; min-height: calc(2 * 1.55em + 12px); padding: 6px 12px; border-left: 3px solid var(--flow); background: var(--screen); color: var(--screen-ink); font-size: 12px; line-height: 1.55; }
+     editor below does not move under the pointer as the sentence changes:
+     the longest sentences the view can give lie unseen in the same grid
+     cell as the one shown, and the box is as tall as the tallest. */
+  .link-reading { display: grid; margin-top: 10px; min-height: calc(2 * 1.55em + 12px); padding: 6px 12px; border-left: 3px solid var(--flow); background: var(--screen); color: var(--screen-ink); font-size: 12px; line-height: 1.55; }
+  .link-reading > span { grid-area: 1 / 1; min-width: 0; }
+  .link-reading-room { visibility: hidden; }
   .link-reading.is-source { margin-top: 0; min-height: calc(4 * 1.55em + 16px); padding: 8px 16px; border-left: 0; border-top: 1px solid var(--screen-rule); font-size: 11px; }
   .link-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; color: var(--ink-3); font-size: 10.5px; letter-spacing: .04em; }
-  .link-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .link-legend > span { display: inline-flex; align-items: center; gap: 7px; }
   .toggle-chip {
     display: inline-flex; align-items: center; gap: 8px; height: 30px; margin-top: 10px; padding: 0 10px;
     border: 2px solid var(--key-edge); background: var(--key); color: var(--key-ink); box-shadow: 0 2px 0 var(--key-edge);

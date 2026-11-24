@@ -504,6 +504,82 @@ mod tests {
         );
     }
 
+    /// The WebAssembly example comes from the lesson's own functions, those
+    /// with a C line, in Clang's modules and in bcc's: not from the C
+    /// library a lesson that prints links in, which comes first in Clang's
+    /// module (`$_start` ahead of the lesson) and after `$main` in bcc's.
+    #[cfg(all(feature = "worker", feature = "compiler"))]
+    #[test]
+    fn the_wasm_example_comes_from_the_lessons_own_functions() {
+        use crate::wasm::{
+            Bcc,
+            Precompiled,
+            WasmBackEnd,
+            worker::WasmWorker,
+        };
+        let name = |line: &str| {
+            line.trim_start()
+                .strip_prefix("(func ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .map(str::to_owned)
+        };
+        let compilers: [(&str, &dyn WasmBackEnd); 2] = [("clang", &Precompiled), ("bcc", &Bcc)];
+        let mut library_first = 0;
+        for (compiler, back_end) in compilers {
+            let mut own_examples = 0;
+            for demo in &DEMOS {
+                let at = format!("{compiler}, {}", demo.name);
+                let module = back_end.compile(demo.source).expect("a lesson module");
+                let program = WasmWorker::default().load(module).expect("it loads");
+                // Each function, whether a line of it has a C line, and
+                // whether the figure's reader takes a line of it.
+                let mut functions: Vec<(String, bool, bool)> = Vec::new();
+                for (line, wat) in program.wat.lines().zip(&program.lines) {
+                    if let Some(name) = name(line) {
+                        functions.push((name, false, false));
+                    }
+                    if let Some((_, placed, readable)) = functions.last_mut() {
+                        *placed |= wat.source.is_some();
+                        *readable |= (WASM_TEXT.read)(line).is_some();
+                    }
+                }
+                let own = program.own_code();
+                let own_names: Vec<String> = own.lines().filter_map(name).collect();
+                let placed: Vec<&String> = functions
+                    .iter()
+                    .filter(|(_, placed, _)| *placed)
+                    .map(|(name, ..)| name)
+                    .collect();
+                assert_eq!(own_names.iter().collect::<Vec<_>>(), placed, "{at}");
+                // Clang names C's `main(void)` `$__original_main`, under a
+                // `$main` of its own with no C line.
+                assert!(
+                    placed
+                        .iter()
+                        .any(|name| *name == "$__original_main" || *name == "$main")
+                        && !placed.iter().any(|name| *name == "$_start"),
+                    "{at}: {placed:?}"
+                );
+                let line = spelled(&WASM_TEXT.example(&own));
+                if own.lines().any(|line| (WASM_TEXT.read)(line).is_some()) {
+                    own_examples += 1;
+                    assert!(has_line(&own, &line), "{at}: `{line}`");
+                } else {
+                    assert_eq!(line, squeezed(WASM_TEXT.fallback), "{at}");
+                }
+                // Read from the whole listing, a lesson that prints took
+                // its example from the C library's `$_start` in Clang's
+                // module.
+                let first_read = functions.iter().find(|(.., readable)| *readable);
+                if first_read.is_some_and(|(name, ..)| name == "$_start") {
+                    library_first += 1;
+                }
+            }
+            assert!(own_examples * 2 > DEMOS.len(), "{compiler}: {own_examples}");
+        }
+        assert!(library_first > 0, "a lesson links the C library first");
+    }
+
     /// The example comes from the first function with a line the reader
     /// takes, and is the most instructive line there.
     #[test]

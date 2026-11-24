@@ -318,12 +318,21 @@ pub fn wasm_text(line: &str) -> Option<Reading> {
             format!("added to the address: the memory {offset} bytes past it"),
         ));
     }
+    // The hint is about the effective address, the popped address plus
+    // the offset, where the memory is accessed: "intended to satisfy the
+    // property ea mod 2^memarg.align = 0" (the note under "Memory
+    // Instructions"; `align=` is written as 2^memarg.align bytes).
     if let Some(align) = align {
+        let accessed = if load { "read" } else { "written" };
+        let address = offset.map_or_else(
+            || "the address".to_owned(),
+            |offset| format!("the address plus {offset}"),
+        );
         parts.push(part(
             vec![("align", Qualifier), ("=", Qualifier), (align, Number)],
             format!(
-                "a hint that the address is a multiple of {align}; it changes nothing the \
-                 instruction does"
+                "a hint that {address}, where memory is {accessed}, is meant to be a multiple of \
+                 {align}; it changes nothing the instruction does"
             ),
         ));
     }
@@ -1015,6 +1024,19 @@ mod tests {
             "Pop an address, read the 32-bit integer 12 bytes past that address, and push it."
         );
         assert_eq!(load.rank, 0);
+        // `align=` is a hint about the address plus the offset, where the
+        // memory is accessed.
+        assert_eq!(
+            load.example.parts[3].gloss,
+            "a hint that the address plus 12, where memory is read, is meant to be a multiple of \
+             4; it changes nothing the instruction does"
+        );
+        let aligned = wasm_text("    f64.store align=8").unwrap();
+        assert_eq!(
+            aligned.example.parts[2].gloss,
+            "a hint that the address, where memory is written, is meant to be a multiple of 8; it \
+             changes nothing the instruction does"
+        );
         let store = wasm_text("    i32.store").unwrap();
         assert_eq!(store.rank, 3);
         assert_eq!(

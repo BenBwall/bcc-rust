@@ -67,6 +67,9 @@ pub fn PipelineView(
     links: Memo<Links>,
     /// What the line the reader points at links to, in a sentence.
     reading: Signal<Option<String>>,
+    /// The longest sentences `reading` can be in this view, which its box
+    /// keeps room for.
+    reading_room: Signal<Vec<String>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
     /// Whether `-O0` and `-O2` are shown side by side.
@@ -416,7 +419,7 @@ pub fn PipelineView(
                         !main && !beside
                     }
                 >
-                    {move || reading.get().map(|text| super::touch_words(&text))}
+                    <ReadingText reading reading_room />
                 </p>
                 <div
                     class="stage-output"
@@ -460,7 +463,14 @@ pub fn PipelineView(
                         <Beside stage optimize other other_links lesson theme pointing unfolded place />
                     })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
-                        <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
+                        <span>
+                            <i class="swatch swatch-link"></i>
+                            <span>
+                                "came from the line you "
+                                <span class="on-pointer">"point at"</span>
+                                <span class="on-touch">"tap"</span>
+                            </span>
+                        </span>
                         <span><i class="swatch swatch-inlined"></i>"inlined from another function"</span>
                         <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
                     </footer>
@@ -486,6 +496,29 @@ pub fn PipelineView(
             </article>
             <Diagnostics compilation live on_reveal />
         </section>
+    }
+}
+
+/// The sentence a link reading shows, over the longest sentences it can
+/// show in the view, laid out unseen in the same place: the box is as tall
+/// as the tallest of them, so it does not grow when the pointer reaches a
+/// line with a longer sentence, and the listing under it stays put.
+#[component]
+pub fn ReadingText(
+    reading: Signal<Option<String>>,
+    reading_room: Signal<Vec<String>>,
+) -> impl IntoView {
+    view! {
+        <span class="link-reading-text">
+            {move || reading.get().map(|text| super::touch_words(&text))}
+        </span>
+        {move || {
+            reading_room
+                .get()
+                .into_iter()
+                .map(|text| view! { <span class="link-reading-room">{super::touch_words(&text)}</span> })
+                .collect_view()
+        }}
     }
 }
 
@@ -1479,6 +1512,7 @@ mod tests {
                     shown
                     links=Memo::new(|_| crate::pipeline::Links::default())
                     reading=Signal::stored(None)
+                    reading_room=Signal::stored(Vec::new())
                     other
                     compare=RwSignal::new(compare)
                     other_links=Memo::new(|_| crate::pipeline::Links::default())
