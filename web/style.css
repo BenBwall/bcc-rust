@@ -1319,7 +1319,7 @@
   .link-reading-room { visibility: hidden; }
   .link-reading.is-source { margin-top: 0; min-height: calc(4 * 1.55em + 16px); padding: 8px 16px; border-left: 0; border-top: 1px solid var(--screen-rule); font-size: 11px; }
   .link-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; color: var(--ink-3); font-size: 10.5px; letter-spacing: .04em; }
-  .link-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .link-legend > span { display: inline-flex; align-items: center; gap: 7px; }
   .toggle-chip {
     display: inline-flex; align-items: center; gap: 8px; height: 30px; margin-top: 10px; padding: 0 10px;
     border: 2px solid var(--key-edge); background: var(--key); color: var(--key-ink); box-shadow: 0 2px 0 var(--key-edge);

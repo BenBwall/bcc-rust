@@ -463,7 +463,14 @@ pub fn PipelineView(
                         <Beside stage optimize other other_links lesson theme pointing unfolded place />
                     })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
-                        <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
+                        <span>
+                            <i class="swatch swatch-link"></i>
+                            <span>
+                                "came from the line you "
+                                <span class="on-pointer">"point at"</span>
+                                <span class="on-touch">"tap"</span>
+                            </span>
+                        </span>
                         <span><i class="swatch swatch-inlined"></i>"inlined from another function"</span>
                         <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
                     </footer>
