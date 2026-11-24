@@ -8779,7 +8779,8 @@ mod tests {
     /// its value as an input (`/clang:-imacros /clang:m.h` used to compile
     /// without the macros, with only clang-cl's "argument unused" warning).
     /// It applies `-include` joined and separate, and the `-O` level
-    /// warning prints once.
+    /// warning prints once. A bare `-O9` is clang-cl's `/O9`, whose letter
+    /// does nothing, so it is unused.
     #[test]
     fn clang_cl_applies_or_refuses_each_clang_option() {
         let directory = Directory::new();
@@ -8821,16 +8822,20 @@ mod tests {
             assert!(stdout(&output).contains("int v = 7;"), "{options:?}");
         }
         directory.write("a.c", "int main(void) { return 0; }\n");
-        for options in [&["/clang:-O9"][..], &["-O9"]] {
-            let mut args = vec!["/c", "/Fo:a.obj", "a.c"];
-            args.extend(options);
-            let output = directory.bcc("--clang-cl-mode", &args);
-            succeeds(&output);
-            assert_eq!(
-                stderr(&output),
+        for (option, warning) in [
+            (
+                "/clang:-O9",
                 "warning: optimization level '-O9' is not supported; using '-O3' instead\n",
-                "{options:?}"
-            );
+            ),
+            (
+                "-O9",
+                "clang-cl: warning: argument unused during compilation: '-O9' \
+                 [-Wunused-command-line-argument]\n",
+            ),
+        ] {
+            let output = directory.bcc("--clang-cl-mode", &["/c", "/Fo:a.obj", "a.c", option]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), warning, "{option}");
         }
     }
 

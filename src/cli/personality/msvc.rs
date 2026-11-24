@@ -47,6 +47,7 @@ use std::{
 use crate::configuration::CL_CODED_WARNINGS;
 
 mod command_files;
+mod optimization;
 
 use command_files::CommandFileError;
 
@@ -154,6 +155,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     // clang-cl reads its warning options before it parses the others.
     let unknown_argument = unknown_argument_severity(&expanded);
+    // The `/O` letter that sets clang-cl's level, wherever it stands.
+    let level_letter = if clang_cl {
+        optimization::clang_cl_level_letter(optimization_options(&expanded))
+    } else {
+        None
+    };
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -279,6 +286,37 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
             state.imsvc(invocation, text, directory, &mut arguments);
             continue;
+        }
+        if let Some(letters) = option.strip_prefix('O') {
+            let index = expanded.len() - arguments.len() - 1;
+            if clang_cl {
+                let level = level_letter
+                    .filter(|&(at, _)| at == index)
+                    .map(|(_, offset)| offset);
+                if !optimization::clang_cl_options(letters, level, &mut state.bcc) {
+                    let severity =
+                        driver_warning_severity(&expanded, "unused-command-line-argument");
+                    let message = format!("argument unused during compilation: '{text}'");
+                    if state.driver_warning(
+                        invocation,
+                        severity,
+                        "unused-command-line-argument",
+                        &message,
+                    ) {
+                        return Err(MainError::Reported(1));
+                    }
+                }
+                continue;
+            }
+            if letters.len() > 1
+                && let Some(options) = optimization::cl_options(letters)
+                && options.len() > 1
+            {
+                for letters in options {
+                    _ = state.option(invocation, &format!("O{letters}"), &mut std::iter::empty());
+                }
+                continue;
+            }
         }
         let remaining = arguments.len();
         if state.option(invocation, option, &mut arguments) {
@@ -808,6 +846,28 @@ enum DriverSeverity {
 /// counts here.
 fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
     driver_warning_severity(arguments, "unknown-argument")
+}
+
+/// The letters of clang-cl's `/O` options in `arguments` before `/link`,
+/// with each argument's index: every argument `/O` or `-O` starts, but for
+/// the value of an option that takes the next argument.
+fn optimization_options(arguments: &[OsString]) -> impl Iterator<Item = (usize, &str)> {
+    let mut value = false;
+    arguments
+        .iter()
+        .map(|argument| argument.to_str().unwrap_or_default())
+        .enumerate()
+        .take_while(|(_, argument)| !matches!(*argument, "/link" | "-link" | "--"))
+        .filter_map(move |(index, argument)| {
+            if std::mem::take(&mut value) {
+                return None;
+            }
+            let option = argument
+                .strip_prefix('/')
+                .or_else(|| argument.strip_prefix('-'))?;
+            value = known::clang_cl_option(option) == Some(ClOption::TakesNext);
+            option.strip_prefix('O').map(|letters| (index, letters))
+        })
 }
 
 /// How clang-cl reports a warning of its driver's in `group` that is on by
