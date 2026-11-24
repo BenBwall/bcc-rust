@@ -135,6 +135,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             return Err(MainError::Reported(1));
         },
     };
+    state.quiet_driver = clang_cl && driver_warnings_silenced(&expanded);
     // `cl` prints its banner before anything it says about the command
     // line, unless `/nologo` stands anywhere before `/link`. Meson reads the
     // banner `cl /?` prints to recognize `cl` and its version.
@@ -809,7 +810,7 @@ enum DriverSeverity {
 /// for. clang-cl hands a `/clang:` option to its front end alone, so none
 /// counts here.
 fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
-    driver_warning_severity(arguments, "unknown-argument")
+    driver_warning_severity(arguments, Some("unknown-argument"))
 }
 
 /// How clang-cl reports an argument no job uses, a warning in the group
@@ -833,7 +834,7 @@ fn unused_argument_severity(arguments: &[OsString]) -> DriverSeverity {
     if quiet {
         DriverSeverity::Ignored
     } else {
-        driver_warning_severity(arguments, "unused-command-line-argument")
+        driver_warning_severity(arguments, Some("unused-command-line-argument"))
     }
 }
 
@@ -867,9 +868,18 @@ fn optimization_options(arguments: &[OsString]) -> impl Iterator<Item = (usize, 
         })
 }
 
-/// How clang-cl reports a warning of its driver's in `group` that is on by
-/// default, as [`unknown_argument_severity`] says for `-Wunknown-argument`.
-fn driver_warning_severity(arguments: &[OsString], group: &str) -> DriverSeverity {
+/// Whether clang-cl's warning options silence a warning of its driver
+/// that belongs to no group, as bcc's own about the options it ignores do:
+/// `/w`, `/W0`, `-w`, `--no-warnings` or `-Wno-everything`, wherever they
+/// stand before `/link`, as for every warning of its driver.
+fn driver_warnings_silenced(arguments: &[OsString]) -> bool {
+    driver_warning_severity(arguments, None) == DriverSeverity::Ignored
+}
+
+/// How clang-cl reports a warning of its driver's in `group` (or in none)
+/// that is on by default, as [`unknown_argument_severity`] says for
+/// `-Wunknown-argument`.
+fn driver_warning_severity(arguments: &[OsString], group: Option<&str>) -> DriverSeverity {
     let (mut ignore_all, mut all_errors, mut all_fatal) = (false, false, false);
     let mut mapping = DriverSeverity::Warning;
     let (mut no_error, mut no_fatal) = (false, false);
@@ -891,7 +901,7 @@ fn driver_warning_severity(arguments: &[OsString], group: &str) -> DriverSeverit
         let group = |prefix: &str| {
             argument
                 .strip_prefix(prefix)
-                .is_some_and(|name| name == group)
+                .is_some_and(|name| Some(name) == group)
         };
         // `cl`'s options start with `/` or `-`, Clang's with `-`.
         match (option, argument.starts_with('-')) {
@@ -1111,6 +1121,11 @@ struct State {
     /// The warnings in clang-cl's group `-Woption-ignored` about its own
     /// options, given for each source it compiles (`own_options`).
     option_ignored:          Vec<String>,
+    /// Whether clang-cl's warning options silence its driver's warnings,
+    /// bcc's own about the options it ignores among them
+    /// ([`driver_warnings_silenced`]); never for `cl`, whose `/w` leaves
+    /// its command-line warnings.
+    quiet_driver:            bool,
     /// clang-cl's `/Brepro`, the last of it and `/Brepro-`; any `/Brepro`
     /// for `cl`, which takes no `/Brepro-`.
     reproducible:            bool,
@@ -1220,6 +1235,7 @@ impl Default for State {
             unused:                  Vec::new(),
             unused_severity:         DriverSeverity::Warning,
             option_ignored:          Vec::new(),
+            quiet_driver:            false,
             reproducible:            false,
             show_filenames:          false,
             filename_options:        Vec::new(),
@@ -1577,14 +1593,14 @@ impl State {
             | "analyze-" => {},
             // Hardening and run-time checks a correct program does not
             // depend on.
-            | "GS" => ignored(
+            | "GS" => self.ignored(
                 invocation,
                 option,
                 "bcc does not emit buffer security checks",
             ),
-            | "sdl" => ignored(invocation, option, "bcc does not add SDL checks"),
+            | "sdl" => self.ignored(invocation, option, "bcc does not add SDL checks"),
             | "guard:cf" | "guard:ehcont" =>
-                ignored(invocation, option, "bcc does not emit Control Flow Guard"),
+                self.ignored(invocation, option, "bcc does not emit Control Flow Guard"),
             | "Gv" => self.unsupported(
                 invocation,
                 option,
@@ -1671,9 +1687,9 @@ impl State {
                         }
                     }
                 } else if option.starts_with("RTC") && option != "RTC-" {
-                    ignored(invocation, option, "bcc does not emit run-time checks");
+                    self.ignored(invocation, option, "bcc does not emit run-time checks");
                 } else if option.starts_with("Qspectre") {
-                    ignored(invocation, option, "bcc does not emit Spectre mitigations");
+                    self.ignored(invocation, option, "bcc does not emit Spectre mitigations");
                 } else if option.starts_with("arch:") {
                     self.unsupported(
                         invocation,
@@ -1713,7 +1729,7 @@ impl State {
                     // `/external:` warning levels: none changes a C
                     // program bcc builds.
                 } else if option.starts_with("d1") || option.starts_with("d2") {
-                    ignored(
+                    self.ignored(
                         invocation,
                         option,
                         "bcc has no undocumented compiler switches",
@@ -1861,6 +1877,34 @@ impl State {
                     );
                 }
             }
+        }
+    }
+
+    /// Accepts hardening or a run-time check bcc does not implement, with a
+    /// warning: `cl`'s command-line warning, which its `/w` leaves, as `cl`
+    /// leaves its own (D9002, D9007), or a clang-cl driver warning, which
+    /// clang-cl's `/w` silences with the rest of its driver's
+    /// ([`State::own_warning`]).
+    fn ignored(&self, invocation: &Invocation, option: &str, why: &str) {
+        if invocation.personality.is_clang_cl() {
+            self.own_warning(invocation, format_args!("'/{option}' is ignored: {why}"));
+        } else {
+            super::print(
+                &format!(
+                    "{} : Command line warning : '/{option}' is ignored: {why}\n",
+                    invocation.name
+                ),
+                true,
+            );
+        }
+    }
+
+    /// Warns, as clang-cl's driver words it, of something only bcc reports,
+    /// unless clang-cl's warning options silence its driver's warnings
+    /// ([`driver_warnings_silenced`]).
+    fn own_warning(&self, invocation: &Invocation, message: std::fmt::Arguments<'_>) {
+        if !self.quiet_driver {
+            invocation.warning(message);
         }
     }
 
@@ -2206,7 +2250,7 @@ impl State {
             // wrong one.
             | Treatment::Ignore | Treatment::WrongTarget => {},
             | Treatment::Warn(why) =>
-                invocation.warning(format_args!("'{shown}' is ignored: {why}")),
+                self.own_warning(invocation, format_args!("'{shown}' is ignored: {why}")),
             | Treatment::Reject(why) => self.command_line_error(
                 invocation,
                 None,
@@ -2517,7 +2561,7 @@ impl State {
                 source.is_c() && (source.path == "-" || Path::new(&source.path).exists())
             })
             .count();
-        let severity = driver_warning_severity(arguments, "option-ignored");
+        let severity = driver_warning_severity(arguments, Some("option-ignored"));
         for _ in 0..sources {
             for message in &option_ignored {
                 if self.driver_warning(invocation, severity, "option-ignored", message) {
@@ -2528,7 +2572,7 @@ impl State {
                 (ClangIgnored::Optimization, "ignored-optimization-argument"),
                 (ClangIgnored::Deprecated, "unused-command-line-argument"),
             ] {
-                let severity = driver_warning_severity(arguments, group);
+                let severity = driver_warning_severity(arguments, Some(group));
                 for (_, option) in ignored.iter().filter(|(other, _)| *other == kind) {
                     let message = if kind == ClangIgnored::Optimization {
                         format!("optimization flag '{option}' is not supported")
@@ -2769,22 +2813,6 @@ fn switch_class(option: &str) -> Option<(&'static str, &str)> {
                 (class, option)
             },
     })
-}
-
-/// Accepts hardening or a run-time check bcc does not implement, with a
-/// warning.
-fn ignored(invocation: &Invocation, option: &str, why: &str) {
-    if invocation.personality.is_clang_cl() {
-        invocation.warning(format_args!("'/{option}' is ignored: {why}"));
-    } else {
-        super::print(
-            &format!(
-                "{} : Command line warning : '/{option}' is ignored: {why}\n",
-                invocation.name
-            ),
-            true,
-        );
-    }
 }
 
 /// What `/wd`, `/we`, `/wo` or `/w1`-`/w4` says of one warning.

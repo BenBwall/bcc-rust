@@ -219,8 +219,8 @@ impl State {
             // A precompiled header only saves the time of compiling the
             // headers before it again: the source still includes them, or
             // `/FI` does, so bcc compiles them as written.
-            | "Yc" => super::ignored(invocation, option, "bcc does not build precompiled headers"),
-            | "Yu" => super::ignored(invocation, option, "bcc does not use precompiled headers"),
+            | "Yc" => self.ignored(invocation, option, "bcc does not build precompiled headers"),
+            | "Yu" => self.ignored(invocation, option, "bcc does not use precompiled headers"),
             | "kernel" =>
                 self.own_refused(invocation, text, "bcc does not compile for kernel mode"),
             | "showIncludes:user" => self.own_refused(
@@ -282,7 +282,7 @@ impl State {
     fn guard(&mut self, invocation: &Invocation, text: &str, option: &str, value: &str) {
         match value.to_ascii_lowercase().as_str() {
             | "cf" | "cf,nochecks" | "ehcont" =>
-                super::ignored(invocation, option, "bcc does not emit Control Flow Guard"),
+                self.ignored(invocation, option, "bcc does not emit Control Flow Guard"),
             | "cf-" | "ehcont-" => {},
             | _ => self.command_line_error(
                 invocation,
@@ -327,7 +327,7 @@ impl State {
                         .into(),
                 );
             } else if compiles {
-                super::ignored(
+                self.ignored(
                     invocation,
                     "JMC",
                     "bcc does not instrument functions for Just My Code debugging",

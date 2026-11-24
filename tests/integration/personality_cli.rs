@@ -9291,6 +9291,73 @@ mod tests {
         );
     }
 
+    /// clang-cl's `/w`, `/W0`, `-w`, `--no-warnings` and `-Wno-everything`,
+    /// wherever they stand, silence every warning of its driver (clang-cl
+    /// 23.1.5's `/JMC` one), so they silence bcc's own about the options it
+    /// ignores too. `cl` 19.44's `/w` leaves its command-line warnings
+    /// (D9002, D9007), so bcc's stay there.
+    #[test]
+    fn slash_w_silences_ignored_option_warnings_as_each_driver_does() {
+        let directory = Directory::new();
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        let warning = |option: &str, why: &str| format!("'{option}' is ignored: {why}");
+        let checks = warning("/RTC1", "bcc does not emit run-time checks");
+        let pch = warning("/Yc", "bcc does not build precompiled headers");
+        for options in [
+            &["/RTC1", "/Yc"][..],
+            &["/RTC1", "/Yc", "/W4"],
+            &["/RTC1", "/Yc", "/WX"],
+        ] {
+            let output = directory.bcc(
+                "--clang-cl-mode",
+                &[&["/nologo", "/c", "m.c"], options].concat(),
+            );
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("clang-cl: warning: {checks}\nclang-cl: warning: {pch}\n"),
+                "{options:?}"
+            );
+        }
+        for quiet in [
+            &["/w"][..],
+            &["/W0"],
+            &["-w"],
+            &["--no-warnings"],
+            &["-Wno-everything"],
+            &["/w", "/W4"],
+            &["/W0", "/WX"],
+        ] {
+            for options in [
+                [&["/RTC1", "/Yc"][..], quiet].concat(),
+                [quiet, &["/RTC1", "/Yc"]].concat(),
+            ] {
+                let output = directory.bcc(
+                    "--clang-cl-mode",
+                    &[&["/nologo", "/c", "m.c"][..], &options].concat(),
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{options:?}");
+            }
+        }
+        for options in [&["/RTC1", "/Yc", "/w"][..], &["/w", "/RTC1", "/Yc"]] {
+            let output = directory.bcc(
+                "--msvc-mode",
+                &[&["/nologo", "/c", "m.c"], options].concat(),
+            );
+            succeeds(&output);
+            // `cl` names the source on standard output.
+            assert_eq!(stdout(&output), "m.c\n");
+            assert_eq!(
+                stderr(&output),
+                format!(
+                    "cl : Command line warning : {checks}\ncl : Command line warning : {pch}\n"
+                ),
+                "{options:?}"
+            );
+        }
+    }
+
     /// `/Brepro` spells `__DATE__`, `__TIME__` and `__TIMESTAMP__` `"1"`, as
     /// clang-cl 23.1.5 and `cl` 19.44 do, so an object does not record when
     /// it was built. clang-cl's last of `/Brepro` and `/Brepro-` wins;
