@@ -1621,17 +1621,6 @@ impl State {
         true
     }
 
-    /// Diagnoses the inputs as the compiler does before it compiles any.
-    /// clang-cl's driver refuses a missing source and compiles none, while
-    /// `cl` reports it when it reaches it (fatal error C1083, in bcc's job),
-    /// and compiles the others. `cl` warns that a file whose extension it
-    /// does not know is assumed to be an object (warning D9024), and both
-    /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
-    /// D9027). clang-cl preprocesses standard input (`-`) as C, but
-    /// compiles it only as `/Tc` or `/Tp` names its language. It leaves a
-    /// missing input for the linker to the linker, unless its name starts
-    /// with `/`, as a mistyped option's does, and suggests the option one
-    /// edit away from a missing input's name.
     /// Refuses clang-cl's last `/openmp` flag if it asks for OpenMP, which
     /// bcc does not implement; an earlier one that `/openmp-` overrides is
     /// fine, as clang-cl's last flag wins.
@@ -1645,6 +1634,17 @@ impl State {
         }
     }
 
+    /// Diagnoses the inputs as the compiler does before it compiles any.
+    /// clang-cl's driver refuses a missing source and compiles none, while
+    /// `cl` reports it when it reaches it (fatal error C1083, in bcc's job),
+    /// and compiles the others. `cl` warns that a file whose extension it
+    /// does not know is assumed to be an object (warning D9024), and both
+    /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
+    /// D9027). clang-cl preprocesses standard input (`-`) as C, but
+    /// compiles it only as `/Tc` or `/Tp` names its language. It leaves a
+    /// missing input for the linker to the linker, unless its name starts
+    /// with `/`, as a mistyped option's does, and suggests the option one
+    /// edit away from a missing input's name.
     fn check_inputs(&mut self, invocation: &Invocation) {
         let clang_cl = invocation.personality.is_clang_cl();
         let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
