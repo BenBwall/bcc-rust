@@ -83,6 +83,9 @@ use crate::{
 #[expect(clippy::too_many_lines, reason = "The page's one tree of views.")]
 pub fn App() -> impl IntoView {
     let state = State::new();
+    // The longest sentences the link reading can show in the view on
+    // screen, which its box keeps room for.
+    let reading_room = Memo::new(move |_| state.link_reading_room());
     // Effects run only in the browser, so prerendering never starts a Worker.
     Effect::new(move || state.initialize());
     Effect::new(move |previous: Option<()>| {
@@ -137,7 +140,7 @@ pub fn App() -> impl IntoView {
                 <Toolbar state />
                 <SiteError state />
                 <div class="workbench-grid">
-                    <SourcePane state />
+                    <SourcePane state reading_room />
                     <div class="insight" id="insight">
                         <Show
                             when=move || state.mode.get() == Mode::Machine
@@ -152,6 +155,7 @@ pub fn App() -> impl IntoView {
                                             shown=state.shown
                                             links=state.links
                                             reading=Signal::derive(move || state.link_reading())
+                                            reading_room=reading_room.into()
                                             other=state.other_level
                                             compare=state.compare
                                             other_links=state.other_links
@@ -2547,7 +2551,11 @@ fn watch_workbench(on_screen: RwSignal<bool>) {
 }
 
 #[component]
-fn SourcePane(state: State) -> impl IntoView {
+fn SourcePane(
+    state: State,
+    /// What the link reading under the source keeps room for.
+    reading_room: Memo<Vec<String>>,
+) -> impl IntoView {
     let layers = Signal::derive(move || state.source_layers());
     let on_change = Callback::new(move |text: String| {
         if text != state.editor_text.get_untracked() {
@@ -2624,7 +2632,10 @@ fn SourcePane(state: State) -> impl IntoView {
                 aria-hidden="true"
                 hidden=move || state.mode.get() != Mode::Pipeline
             >
-                {move || state.link_reading().map(|text| crate::panels::touch_words(&text))}
+                <crate::panels::ReadingText
+                    reading=Signal::derive(move || state.link_reading())
+                    reading_room=reading_room.into()
+                />
             </p>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
                 <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or click a line to find what it became"</span>

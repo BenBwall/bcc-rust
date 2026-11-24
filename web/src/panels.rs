@@ -35,6 +35,7 @@ pub use output::Output;
 pub use pipeline::{
     LiveCompile,
     PipelineView,
+    ReadingText,
     focus_stage_key,
 };
 pub use schematic::Schematic;
