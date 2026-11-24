@@ -221,6 +221,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return Self::expression_result(e, self.types.unknown());
         }
+        if gcc
+            && matches!(operation, O::TestSet | O::Clear)
+            && matches!(self.types.nodes[object.index], TypeKind::Function { .. })
+        {
+            self.gcc_function_flag_argument(name, args[0]);
+        }
         if builtin.generic && gcc {
             self.gcc_generic_arguments(e, name, operation, args, object);
         } else {
@@ -419,6 +425,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         self.convert(e, target, super::expressions::ConversionKind::Assignment);
+    }
+
+    /// GCC's pedantic warning for the function pointer `e` passed to
+    /// `__atomic_test_and_set` or `__atomic_clear`, the builtin `name`,
+    /// whose `volatile void *` parameter takes it as by assignment
+    /// (`convert_for_assignment` in GCC's `c-typeck.cc`): no constraint lets
+    /// a function pointer convert to a pointer to `void`. Clang is silent.
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84; §6.5.16.1 paragraph 1,
+    /// p. 92; PDF p. 104.
+    fn gcc_function_flag_argument(&mut self, name: StringCacheId, e: &'tu Expression<'tu>) {
+        let void = self
+            .types
+            .scalar(Scalar::Void)
+            .qualified(TypeQualifiers::VOLATILE);
+        let target = self.types.intern(TypeKind::Pointer(void));
+        let info = self.expression_info(e);
+        let site = ConversionSite::Argument {
+            position: 1,
+            callee:   Some(name),
+        };
+        // A function pointer converts with the warning, so it never fails.
+        _ = self.assignment_conversion_at(target, info, e.source_vectors, site, false);
     }
 
     /// GCC's checks of the pointer operands of the call `call` to the

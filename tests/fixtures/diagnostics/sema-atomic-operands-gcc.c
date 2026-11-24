@@ -69,4 +69,13 @@ void values(void) {
     __atomic_clear(&a, 0);
 }
 
+/* A function pointer is an argument of `__atomic_clear`'s or
+   `__atomic_test_and_set`'s `volatile void *` parameter. */
+void (*fp)(void);
+
+void flags(void) {
+    __atomic_clear(values, 0);
+    (void)__atomic_test_and_set(fp, 0);
+}
+
 int following_valid;

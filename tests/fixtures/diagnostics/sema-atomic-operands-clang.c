@@ -32,4 +32,10 @@ void clear(void) {
     __atomic_clear(&i, 0);
 }
 
+/* Clang takes a function pointer silently. */
+void functions(void) {
+    __atomic_clear(functions, 0);
+    (void)__atomic_test_and_set(functions, 0);
+}
+
 int following_valid;
