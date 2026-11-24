@@ -245,6 +245,19 @@ impl CompilerConfiguration {
         self.optimization
     }
 
+    /// `-fno-inline` (true) or `-finline`: the last one decides.
+    pub(crate) const fn with_no_inline(mut self, no_inline: bool) -> Self {
+        self.no_inline = no_inline;
+        self
+    }
+
+    /// Whether `-fno-inline` asks that no function be inlined, as an
+    /// unoptimized compilation does too. bcc's inliners do not read it
+    /// yet; it decides `__NO_INLINE__`.
+    pub(crate) const fn no_inline(self) -> bool {
+        self.no_inline
+    }
+
     pub(crate) const fn with_debug_info(mut self, debug_info: Option<super::DebugOptions>) -> Self {
         self.debug_info = debug_info;
         self
@@ -1176,6 +1189,7 @@ impl CompilerConfiguration {
             source_date_epoch: None,
             hosted: true,
             optimization: (false, false),
+            no_inline: false,
             debug_info: None,
             stack_locals: false,
             flushes_denormals_in_main: false,

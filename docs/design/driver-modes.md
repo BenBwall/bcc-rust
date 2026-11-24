@@ -847,13 +847,21 @@ compiler takes, so once per C source or `.S` file, and none for a link or a
 inputs. They follow the warning options as Clang's driver warnings do: `-w`
 or `-Wno-GROUP` silences them, and `-Werror` makes them errors (exit status
 1) unless `-Wno-error=GROUP` exempts them. The options of its ignored `-f`
-and `-m` groups (`-finline`, `-fno-var-tracking`, `-frandom-seed=`,
-`-mieee-fp`, `-Wlarger-than=`) are ignored without a word, and an alias
-`Options.td` defines without a name of its own (`-ftree-vectorize` for
-`-fvectorize`, `-fno-tree-slp-vectorize`) is read as the option it stands
-for. The zig and Intel personalities inherit this, and clang-cl's driver
-ignores all of them as unknown arguments (`unknown argument ignored in
-clang-cl`).
+and `-m` groups (`-fimplement-inlines`, `-fno-var-tracking`,
+`-frandom-seed=`, `-mieee-fp`, `-Wlarger-than=`) are ignored without a word,
+and an alias `Options.td` defines without a name of its own
+(`-ftree-vectorize` for `-fvectorize`, `-fno-tree-slp-vectorize`) is read as
+the option it stands for. The zig and Intel personalities inherit this, and
+clang-cl's driver ignores all of them as unknown arguments (`unknown
+argument ignored in clang-cl`). `-finline` is of an ignored group too, but
+Clang's driver reads it, silently: the last of `-finline` and `-fno-inline`
+decides, and without either the last of `-finline-functions`,
+`-finline-hint-functions` and `-fno-inline-functions`. An optimized
+compilation that ends with `-fno-inline` or `-fno-inline-functions` there
+defines `__NO_INLINE__`, as Clang's does, and clang-cl's `/Ob0`, `/Ob1` and
+`/Ob2` count as `-fno-inline`, `-finline-hint-functions` and
+`-finline-functions` where they stand (`personality/inlining.rs`). GCC
+reads only the last of `-finline` and `-fno-inline`.
 
 **Inputs and stages.** Clang's driver checks every input file before it
 runs anything: each missing one is `clang: error: no such file or
@@ -2384,7 +2392,12 @@ command line as the clang-cl personality does, with:
 - The identity above with `__LONG_DOUBLE_SIZE__` 64, and `_ISO_VOLATILE`
   and `_UCRT_NOISY_NAN`, and `/O2` and `/fp:fast` by default: `_M_FP_FAST`
   and `_M_FP_CONTRACT`, or `_M_FP_PRECISE` under `/fp:precise`, and
-  `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define. `/Zi`,
+  `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define.
+  `/O3` and `-O3` are Intel's level 3 (Clang's `-O3`), which clang-cl
+  lacks; Intel documents `/O[n]` with n 1, 2 or 3, and "The last O option
+  specified on the command line takes precedence over any others"
+  (Developer Guide and Reference 2026.2, "O"). This rests on the
+  documentation alone: the 34 command lines compared had no `/O3`. `/Zi`,
   `/Z7` or `/ZI` without an `/O` option turns optimization off with the
   remark above naming it and `/Od`. An optimized `main` flushes subnormals
   as under `icx`, unless the last of `/fp:` and `/Qftz[-]` is

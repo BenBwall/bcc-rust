@@ -47,6 +47,7 @@ use std::{
 use crate::configuration::CL_CODED_WARNINGS;
 
 mod command_files;
+mod optimization;
 
 use command_files::CommandFileError;
 
@@ -58,6 +59,7 @@ use super::{
     Step,
     host_target,
     icx,
+    inlining::ClangInlining,
     known::{
         self,
         ClOption,
@@ -154,6 +156,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     // clang-cl reads its warning options before it parses the others.
     let unknown_argument = unknown_argument_severity(&expanded);
+    // The `/O` letter that sets clang-cl's level, wherever it stands.
+    state.level_letter =
+        optimization::clang_cl_level_letter(optimization_options(&expanded), intel.is_some());
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -177,51 +182,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
-        // Intel's own options, which clang-cl would refuse or read as
-        // paths: the remark switch (read already), the dependency options
-        // CMake gives `icx-cl` (`-QMD -QMT TARGET -QMF FILE`), options for
-        // the linker (`/Qoption,link,/machine:x64`), and the other `/Q`
-        // options.
-        if intel.is_some() {
-            if matches!(
-                option,
-                "Rno-debug-disables-optimization" | "Rdebug-disables-optimization"
-            ) {
-                continue;
-            }
-            if let Some(dependency) = option.strip_prefix('Q')
-                && matches!(dependency, "MD" | "MMD" | "MT" | "MF" | "MQ")
-            {
-                state.bcc.push(format!("-{dependency}").into());
-                if matches!(dependency, "MT" | "MF" | "MQ")
-                    && let Some(operand) = arguments.next()
-                {
-                    state.bcc.push(operand.into());
-                }
-                continue;
-            }
-            // CMake has `icx-cl` make a static library with
-            // `-fuse-ld=llvm-lib -o NAME.lib OBJECTS`, where `-o` (`/o`,
-            // below) names the library.
-            if option == "fuse-ld=llvm-lib" {
-                state.archive = true;
-                continue;
-            }
-            if let Some(words) = option.strip_prefix("Qoption,link,") {
-                state
-                    .link
-                    .extend(words.split(',').map(|word| link_option(OsStr::new(word))));
-                continue;
-            }
-        }
-        if intel.is_some()
-            && let Some(intel) = option.strip_prefix('Q')
-            && let Some(options) = icx::cl_option(intel)
-        {
-            match options {
-                | Ok(options) => state.bcc.extend(options.iter().map(OsString::from)),
-                | Err(why) => state.unsupported(invocation, option, why),
-            }
+        if intel.is_some() && state.intel_option(invocation, option, &mut arguments) {
             continue;
         }
         // Whether the argument is an option at all is decided first, so no
@@ -279,6 +240,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if clang_cl && let Some(directory) = option.strip_prefix("imsvc") {
             state.imsvc(invocation, text, directory, &mut arguments);
             continue;
+        }
+        if let Some(letters) = option.strip_prefix('O') {
+            let index = expanded.len() - arguments.len() - 1;
+            match state.optimization_option(invocation, &expanded, index, text, letters) {
+                | Some(true) => return Err(MainError::Reported(1)),
+                | Some(false) => continue,
+                | None => {},
+            }
         }
         let remaining = arguments.len();
         if state.option(invocation, option, &mut arguments) {
@@ -468,6 +437,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     common.append(&mut clang_options);
+    if let Some(option) = state.inlining.option() {
+        common.push(option.into());
+    }
     // `cl` compiles every source even after one fails, then skips the link;
     // clang-cl stops at the first failure.
     let mut plan = Plan {
@@ -810,6 +782,28 @@ fn unknown_argument_severity(arguments: &[OsString]) -> DriverSeverity {
     driver_warning_severity(arguments, "unknown-argument")
 }
 
+/// The letters of clang-cl's `/O` options in `arguments` before `/link`,
+/// with each argument's index: every argument `/O` or `-O` starts, but for
+/// the value of an option that takes the next argument.
+fn optimization_options(arguments: &[OsString]) -> impl Iterator<Item = (usize, &str)> {
+    let mut value = false;
+    arguments
+        .iter()
+        .map(|argument| argument.to_str().unwrap_or_default())
+        .enumerate()
+        .take_while(|(_, argument)| !matches!(*argument, "/link" | "-link" | "--"))
+        .filter_map(move |(index, argument)| {
+            if std::mem::take(&mut value) {
+                return None;
+            }
+            let option = argument
+                .strip_prefix('/')
+                .or_else(|| argument.strip_prefix('-'))?;
+            value = known::clang_cl_option(option) == Some(ClOption::TakesNext);
+            option.strip_prefix('O').map(|letters| (index, letters))
+        })
+}
+
 /// How clang-cl reports a warning of its driver's in `group` that is on by
 /// default, as [`unknown_argument_severity`] says for `-Wunknown-argument`.
 fn driver_warning_severity(arguments: &[OsString], group: &str) -> DriverSeverity {
@@ -1045,6 +1039,11 @@ struct State {
     /// clang-cl's last `/openmp` flag when it asks for OpenMP, which bcc
     /// refuses; `/openmp-` after it clears it.
     openmp:                  Option<String>,
+    /// The letter of a clang-cl `/O` option that sets the level: the index
+    /// of its argument and its offset there (`optimization`).
+    level_letter:            Option<(usize, usize)>,
+    /// clang-cl's inlining options: `/Ob` and `/clang:`'s Clang ones.
+    inlining:                ClangInlining,
     sources:                 Vec<Source>,
     /// Linker options after `/link`, as bcc's link options.
     link:                    Vec<OsString>,
@@ -1130,6 +1129,8 @@ impl Default for State {
         Self {
             bcc:                     Vec::new(),
             openmp:                  None,
+            level_letter:            None,
+            inlining:                ClangInlining::default(),
             sources:                 Vec::new(),
             link:                    Vec::new(),
             linking:                 false,
@@ -1839,6 +1840,11 @@ impl State {
                 self.sources.push(Source::new(OsStr::new(text), false));
                 continue;
             }
+            // Clang's inlining options, which its driver reads together
+            // with `/Ob`'s.
+            if words.len() == 1 && self.inlining.read(text) {
+                continue;
+            }
             // The options Clang takes and ignores, and the aliases it
             // defines without a name of their own.
             if words.len() == 1
@@ -2428,6 +2434,99 @@ impl State {
 }
 
 impl State {
+    /// Reads one of Intel's own options, which clang-cl would refuse or
+    /// read as paths: the remark switch (read already), the dependency
+    /// options `CMake` gives `icx-cl` (`-QMD -QMT TARGET -QMF FILE`), options
+    /// for the linker (`/Qoption,link,/machine:x64`), and the other `/Q`
+    /// options. Returns whether `option` is one.
+    fn intel_option<'r>(
+        &mut self,
+        invocation: &Invocation,
+        option: &str,
+        arguments: &mut impl Iterator<Item = &'r OsStr>,
+    ) -> bool {
+        if matches!(
+            option,
+            "Rno-debug-disables-optimization" | "Rdebug-disables-optimization"
+        ) {
+            return true;
+        }
+        if let Some(dependency) = option.strip_prefix('Q')
+            && matches!(dependency, "MD" | "MMD" | "MT" | "MF" | "MQ")
+        {
+            self.bcc.push(format!("-{dependency}").into());
+            if matches!(dependency, "MT" | "MF" | "MQ")
+                && let Some(operand) = arguments.next()
+            {
+                self.bcc.push(operand.into());
+            }
+            return true;
+        }
+        // CMake has `icx-cl` make a static library with
+        // `-fuse-ld=llvm-lib -o NAME.lib OBJECTS`, where `-o` (`/o`) names
+        // the library.
+        if option == "fuse-ld=llvm-lib" {
+            self.archive = true;
+            return true;
+        }
+        if let Some(words) = option.strip_prefix("Qoption,link,") {
+            self.link
+                .extend(words.split(',').map(|word| link_option(OsStr::new(word))));
+            return true;
+        }
+        if let Some(intel) = option.strip_prefix('Q')
+            && let Some(options) = icx::cl_option(intel)
+        {
+            match options {
+                | Ok(options) => self.bcc.extend(options.iter().map(OsString::from)),
+                | Err(why) => self.unsupported(invocation, option, why),
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Reads `/O` with `letters`, the argument `text` at `index` of
+    /// `arguments` (`optimization`): clang-cl's letter by letter, with the
+    /// level from [`Self::level_letter`], and `cl`'s combined letters as
+    /// the options they name. Returns `None` for a `cl` option to read as
+    /// any other, and otherwise whether a fatal error stops the command
+    /// line.
+    fn optimization_option(
+        &mut self,
+        invocation: &Invocation,
+        arguments: &[OsString],
+        index: usize,
+        text: &str,
+        letters: &str,
+    ) -> Option<bool> {
+        if invocation.personality.is_clang_cl() {
+            let level = self
+                .level_letter
+                .filter(|&(at, _)| at == index)
+                .map(|(_, offset)| offset);
+            let intel = invocation.personality == Personality::IcxCl;
+            if optimization::clang_cl_options(
+                letters,
+                level,
+                intel,
+                &mut self.inlining,
+                &mut self.bcc,
+            ) {
+                return Some(false);
+            }
+            let group = "unused-command-line-argument";
+            let severity = driver_warning_severity(arguments, group);
+            let message = format!("argument unused during compilation: '{text}'");
+            return Some(self.driver_warning(invocation, severity, group, &message));
+        }
+        let options = optimization::cl_options(letters).filter(|options| options.len() > 1)?;
+        for letters in options {
+            _ = self.option(invocation, &format!("O{letters}"), &mut std::iter::empty());
+        }
+        Some(false)
+    }
+
     /// Records `spelling`, the switch of `class` with `value`, warning as
     /// `cl` does (D9025) when it overrides an earlier one of the class with a
     /// different value: `overriding '/W3' with '/W4'`. clang-cl does not

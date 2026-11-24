@@ -1043,6 +1043,8 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// `-fno-inline` (true) or `-finline` (false).
+    NoInline(bool),
     /// `-fsigned-char` or `-fno-unsigned-char` (true), `-funsigned-char` or
     /// `-fno-signed-char` (false).
     CharSigned(bool),
@@ -1185,6 +1187,8 @@ impl LanguageFlag {
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
+            | "-fno-inline" => return Some(Self::NoInline(true)),
+            | "-finline" => return Some(Self::NoInline(false)),
             | "-fsigned-char" | "-fno-unsigned-char" => return Some(Self::CharSigned(true)),
             | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
             | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
@@ -1436,6 +1440,7 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::NoInline(enabled) => configuration.with_no_inline(enabled),
             | Self::CharSigned(signed) => configuration.with_char_signed(signed),
             | Self::InterchangeFloatTypes(enabled) =>
                 configuration.with_interchange_float_types(enabled),

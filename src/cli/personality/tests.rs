@@ -232,3 +232,98 @@ fn cl_links_the_runtime_library_it_selects() {
         "{alone:?}"
     );
 }
+
+/// clang-cl reads `/O`'s letters in order and sets the level from the last
+/// `1`, `2`, `x` or `d` on the command line alone (`TranslateOptArg` in
+/// Clang's `MSVC.cpp`), so `/O2s` asks for size and `/Os2` for speed; `-O`
+/// is the same option, and `-O3` none of Clang's. `cl` reads combined
+/// letters as the options they name (Microsoft Learn, "/O options
+/// (Optimize code)": "/Odi is the same as /Od /Oi").
+#[test]
+fn combined_optimization_letters_read_as_each_driver_reads_them() {
+    let directory = std::env::temp_dir().join(format!("bcc-cl-letters-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("a.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let source = source.to_str().unwrap();
+    let optimization = |personality: Personality, options: &[&str]| {
+        let mut arguments = vec!["/nologo", "/c"];
+        arguments.extend(options);
+        arguments.push(source);
+        let step = planned(personality, &arguments).pop().expect("a step");
+        step.into_iter()
+            .filter(|argument| {
+                matches!(
+                    argument.as_str(),
+                    "-O0" | "-Os" | "-O2" | "-O3" | "-fbuiltin" | "-fno-builtin" | "-fno-inline"
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    for (options, expected) in [
+        (&["/O2s"][..], &["-fbuiltin", "-O2", "-Os"][..]),
+        (&["-O2s"], &["-fbuiltin", "-O2", "-Os"]),
+        (&["/Os2"], &["-Os", "-fbuiltin", "-O2"]),
+        (&["/Oxs"], &["-fbuiltin", "-O2", "-Os"]),
+        // Only the last level letter sets a level, wherever it stands.
+        (&["/O1", "/O2"], &["-fbuiltin", "-O2"]),
+        (&["/O12", "/Os"], &["-fbuiltin", "-O2", "-Os"]),
+        (&["/Od", "/Ob0"], &["-O0", "-fno-inline"]),
+        (&["/O2", "/Ob0"], &["-fbuiltin", "-O2", "-fno-inline"]),
+        // The last of `/Ob0` and `/clang:-finline` decides, and `/Ob2` is
+        // `-finline-functions`, which a `-fno-inline` overrides.
+        (&["/O2", "/Ob0", "/clang:-finline"], &["-fbuiltin", "-O2"]),
+        (
+            &["/O2", "/Ob0", "/Ob2"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
+        (
+            &["/O2", "/clang:-fno-inline-functions"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
+        (
+            &["/O2", "/clang:-fno-inline-functions", "/Ob2"],
+            &["-fbuiltin", "-O2", "-fno-inline"],
+        ),
+        (&["/Oi-2"], &["-fno-builtin", "-fbuiltin", "-O2"]),
+        (&["/Ob12"], &["-fbuiltin", "-O2"]),
+        // A letter after `b` is its value, so `x` sets nothing here.
+        (&["/Obx"], &[]),
+        (&["-O3"], &[]),
+        (&["-Ofast"], &["-Os", "-O2"]),
+    ] {
+        assert_eq!(
+            optimization(Personality::ClangCl, options),
+            expected,
+            "{options:?}"
+        );
+    }
+    // icx-cl's `/O3` is a level, which the last level letter overrides.
+    for (options, expected) in [
+        (&["/O3"][..], &["-O3"][..]),
+        (&["-O3"], &["-O3"]),
+        (&["/O3", "/O2"], &["-fbuiltin", "-O2"]),
+        (&["/O2", "/O3"], &["-O3"]),
+        (&["/O3", "/Os"], &["-O3", "-Os"]),
+    ] {
+        assert_eq!(
+            optimization(Personality::IcxCl, options),
+            expected,
+            "{options:?}"
+        );
+    }
+    for (options, expected) in [
+        (&["/O2s"][..], &["-O2", "-Os"][..]),
+        (&["-Oxs"], &["-O2", "-Os"]),
+        (&["/Odi"], &["-O0"]),
+        (&["/Ob2i-t"], &["-O2"]),
+        (&["/O2b9"], &[]),
+    ] {
+        assert_eq!(
+            optimization(Personality::Msvc, options),
+            expected,
+            "{options:?}"
+        );
+    }
+    drop(std::fs::remove_dir_all(&directory));
+}

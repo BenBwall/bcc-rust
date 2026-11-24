@@ -1110,10 +1110,13 @@ pub(super) fn with_identity_macros<'a>(
         );
     }
     // GNU optimization macros (reserved implementation names, C99 §7.1.3p1).
+    // `-fno-inline` defines `__NO_INLINE__` at any level, in GCC ("Common
+    // Predefined Macros") and in Clang.
     let (optimized, size) = configuration.optimization();
     if optimized {
         out.push_str("#define __OPTIMIZE__ 1\n");
-    } else {
+    }
+    if !optimized || configuration.no_inline() {
         out.push_str("#define __NO_INLINE__ 1\n");
     }
     if size {
@@ -1621,7 +1624,9 @@ fn clang_only_macro(name: &str) -> bool {
 /// ([`write_gcc_floating_point_macros`]); its `_FloatN`
 /// keywords come with the identity (`interchange_float_types`), not from
 /// here. MSVC 19.33 (`cl.exe`)
-/// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
+/// defines neither GNU nor Clang macros (not the optimization ones either,
+/// which Microsoft Learn's "Predefined macros" does not list),
+/// `_MSVC_TRADITIONAL` as 0 for bcc's
 /// conforming preprocessor (MSVC's `/Zc:preprocessor`) and `_MT` for the
 /// default static runtime; clang-cl keeps the Clang macros. On the targets
 /// other than Linux, whose TCC set [`tcc_linux_macros`] writes whole, TCC
@@ -1652,6 +1657,7 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
              __llvm__\n#undef __VERSION__\n",
             "#undef __GNUC__\n#undef __GNUC_MINOR__\n#undef __GNUC_PATCHLEVEL__\n",
             "#undef __GNUC_STDC_INLINE__\n#undef __GNUC_GNU_INLINE__\n",
+            "#undef __OPTIMIZE__\n#undef __OPTIMIZE_SIZE__\n#undef __NO_INLINE__\n",
             "#define _MSVC_TRADITIONAL 0\n#define _MT 1\n",
         ),
         | CompilerIdentity::ClangCl => concat!(

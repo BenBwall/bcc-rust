@@ -156,6 +156,9 @@ pub(crate) struct CompilerConfiguration {
     source_date_epoch: Option<i64>,
     hosted: bool,
     optimization: (bool, bool),
+    /// `-fno-inline`: no function is to be inlined, which defines
+    /// `__NO_INLINE__` at every level.
+    no_inline: bool,
     /// What `-g` asks for; `None` without it, or where the back end writes
     /// no debug information.
     debug_info: Option<DebugOptions>,
