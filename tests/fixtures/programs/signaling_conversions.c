@@ -6,7 +6,8 @@
    folded in a static initializer and in an automatic one, and Clang's
    `__builtin_isfpclass` folds the same class. An initializer of an object
    of another format converts the value as by assignment, which quiets it:
-   a scalar, a member, an `x87` array element, or a complex part. */
+   a scalar, a member, an `x87` array element, or a complex part. A real
+   value's imaginary part is +0 in a complex object, a negated NaN's too. */
 #include <stdio.h>
 #include <string.h>
 
@@ -135,9 +136,24 @@ int main(void) {
     C(_Complex double, 8, __builtin_complex(__builtin_nansf(""), 0.0f))
     C(_Complex float, 4, __builtin_complex(0.0, -__builtin_nans("")))
     C(_Complex long double, 10, __builtin_complex(__builtin_nans(""), 1.0))
+    C(_Complex double, 8, -__builtin_nan(""))
+    C(_Complex double, 8, -__builtin_nans(""))
+    C(_Complex float, 4, -__builtin_nansf(""))
+    C(_Complex long double, 10, -__builtin_nanl(""))
+    C(_Complex double, 8, -1.0)
 #ifdef __x86_64__
     C(_Complex float, 4, __builtin_nansf16(""))
+    C(_Complex float, 4, -(_Float16)1.0)
+    C(_Complex float, 4, -__builtin_nansf16(""))
 #endif
+    {
+        static _Complex long double fixed[1] = {-__builtin_nansl("")};
+        _Complex long double automatic[1] = {-__builtin_nansl("")};
+        dump("static complex element", (char *)fixed + 16, 10,
+             __builtin_issignaling(__imag__ fixed[0]));
+        dump("automatic complex element", (char *)automatic + 16, 10,
+             __builtin_issignaling(__imag__ automatic[0]));
+    }
     {
         static struct members fixed = MEMBERS;
         struct members automatic = MEMBERS;
