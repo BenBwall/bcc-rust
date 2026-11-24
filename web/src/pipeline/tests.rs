@@ -675,23 +675,6 @@ fn the_optimizer_comparison_names_what_changed() {
             "{stage:?}: {changes:?}"
         );
     }
-    // The loops lesson's assembly grows with no call inlined: its back end
-    // copies more of its loops' tests at -O2, which the note counts.
-    let (loops_plain, loops_optimized) = lesson("loops");
-    for stage in [Stage::Asm, Stage::MachineCode] {
-        let changes = optimizer_changes(stage, &loops_plain, &loops_optimized);
-        assert_eq!(
-            changes.last().map(String::as_str),
-            Some(
-                "Some of the extra code is copied: at the bottom of a loop, where the jump back \
-                 leads to a short block that tests whether to go round again, the back end puts a \
-                 copy of that block instead (loop rotation), so each pass branches back once \
-                 rather than jumping and then branching. Here the copies take 8 instructions at \
-                 -O2 and 4 at -O0, each in place of one jump."
-            ),
-            "{stage:?}"
-        );
-    }
     // Fewer instructions in more bytes say why.
     let (constants_plain, constants_optimized) = lesson("constants");
     let changes = optimizer_changes(Stage::MachineCode, &constants_plain, &constants_optimized);
@@ -1066,6 +1049,27 @@ fn loop_rotation_is_claimed_only_from_copies_of_a_loops_test() {
             instructions: 8,
         }
     );
+
+    // The loops lesson's assembly grows with no call inlined: its back end
+    // copies more of its loops' tests at -O2, which the note counts.
+    let (loops_plain, loops_optimized) = (
+        crate::explorer::compile(loops.source, false),
+        crate::explorer::compile(loops.source, true),
+    );
+    for stage in [Stage::Asm, Stage::MachineCode] {
+        let changes = optimizer_changes(stage, &loops_plain, &loops_optimized);
+        assert_eq!(
+            changes.last().map(String::as_str),
+            Some(
+                "Some of the extra code is copied: at the bottom of a loop, where the jump back \
+                 leads to a short block that tests whether to go round again, the back end puts a \
+                 copy of that block instead (loop rotation), so each pass branches back once \
+                 rather than jumping and then branching. Here the copies take 8 instructions at \
+                 -O2 and 4 at -O0, each in place of one jump."
+            ),
+            "{stage:?}"
+        );
+    }
 
     let plain = crate::explorer::compile(SELECTS, false);
     let optimized = crate::explorer::compile(SELECTS, true);
