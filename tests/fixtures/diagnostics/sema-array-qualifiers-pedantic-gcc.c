@@ -4,7 +4,9 @@
    ahead of any -Wdiscarded-array-qualifiers warning at the same place. A
    qualified void * converted to a pointer to an array whose elements carry
    its qualifiers loses them all under -pedantic. __extension__ silences the
-   first; a pragma naming -Wpedantic does not reach the second. */
+   first; a pragma naming -Wpedantic does not reach the second. The operands
+   of the __atomic and __sync builtins convert as by a cast, so neither
+   applies to them. */
 const int carr[3];
 int (*pa)[3];
 const int (*cpa)[3];
@@ -27,6 +29,15 @@ int f(int c) {
   take((const void *)0);
   (void)a; (void)b; (void)v; (void)w;
   return r;
+}
+void atomics(void) {
+  __atomic_store_n(&cpa, pa, 0);
+  __atomic_store_n(&cpa, (const void *)0, 0);
+  (void)__atomic_exchange_n(&cpa, pa, 0);
+  (void)__atomic_compare_exchange_n(&cpa, &cpa, pa, 0, 0, 0);
+  (void)__sync_lock_test_and_set(&cpa, pa);
+  (void)__sync_val_compare_and_swap(&cpa, pa, (const void *)0);
+  (void)__sync_bool_compare_and_swap(&cpa, cpa, pa);
 }
 #pragma GCC diagnostic ignored "-Wpedantic"
 const int (*quiet)[3] = (const void *)0;

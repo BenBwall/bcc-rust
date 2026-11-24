@@ -129,7 +129,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             diagnostic_site
         };
-        if self.gcc_pointer_rules() {
+        // GCC checks a conversion as by assignment only at these sites
+        // (`convert_for_assignment`); an atomic builtin's operands convert
+        // as by a cast (`sync_resolve_params` in GCC's `c-common.cc`).
+        let gcc_checked = site != ConversionSite::Other;
+        if gcc_checked && self.gcc_pointer_rules() {
             let (from, _) = self.value_conversion(source);
             self.gcc_array_qualifier_pedwarn(self.types.non_atomic(target), from, gcc_site);
         }
@@ -152,7 +156,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) {
                 self.conversion_to_bool_warning(source);
             }
-            self.gcc_void_array_qualifiers(target, source, site, gcc_site);
+            if gcc_checked {
+                self.gcc_void_array_qualifiers(target, source, site, gcc_site);
+            }
             return true;
         }
         let target = self.types.non_atomic(target);

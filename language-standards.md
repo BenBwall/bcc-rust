@@ -2954,7 +2954,9 @@ qualifiers in ISO C before C23 [-Wpedantic]` wherever it takes such
 pointers as compatible (a conversion by assignment, either direction, a
 comparison, a subtraction and the arms of `?:`), and reports a qualified
 `void *` converted to a pointer to an array whose elements have its
-qualifiers as discarding them all, under `-Wdiscarded-qualifiers`. GCC's
+qualifiers as discarding them all, under `-Wdiscarded-qualifiers`. Neither
+applies to the operands of the `__atomic` and `__sync` builtins, which GCC
+converts as by a cast. GCC's
 `-Wc11-c23-compat` forms of both are not modelled. Clang knows neither GCC
 option and reports both conversions in this group.
 Clang warns about the option itself with

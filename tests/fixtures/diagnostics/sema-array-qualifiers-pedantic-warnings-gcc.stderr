@@ -1,0 +1,17 @@
+sema-array-qualifiers-pedantic-warnings-gcc.c: In function 'retv':
+sema-array-qualifiers-pedantic-warnings-gcc.c:7:37: warning: return discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+    7 | const int (*retv(void))[3] { return (const void *)0; }
+      |                                     ^~~~~~~~~~~~~~~
+sema-array-qualifiers-pedantic-warnings-gcc.c: In function 'f':
+sema-array-qualifiers-pedantic-warnings-gcc.c:9:23: warning: invalid use of pointers to arrays with different qualifiers in ISO C before C23 [-Wpedantic]
+    9 |   const int (*b)[3] = pa;
+      |                       ^~
+sema-array-qualifiers-pedantic-warnings-gcc.c:10:23: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   10 |   const int (*v)[3] = (const void *)0;
+      |                       ^~~~~~~~~~~~~~~
+sema-array-qualifiers-pedantic-warnings-gcc.c:14:14: warning: invalid use of pointers to arrays with different qualifiers in ISO C before C23 [-Wpedantic]
+   14 |   return (pa == cpa) + (int)(pa - cpa);
+      |              ^~
+sema-array-qualifiers-pedantic-warnings-gcc.c:14:33: warning: invalid use of pointers to arrays with different qualifiers in ISO C before C23 [-Wpedantic]
+   14 |   return (pa == cpa) + (int)(pa - cpa);
+      |                                 ^

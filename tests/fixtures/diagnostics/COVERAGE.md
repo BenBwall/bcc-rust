@@ -397,9 +397,15 @@ an argument, `==`, `<`, a subtraction and the arms of `?:`, each before the
 whose elements carry its qualifiers (a return, an initialization and an
 argument) is GCC's `-pedantic` `discards 'const volatile' qualifier`
 error, naming all the `void`'s qualifiers, which a pragma ignoring
-`-Wpedantic` does not silence. Every warning and error line and the status
-match GCC 14; carets over a cast or `&` operand span it where GCC marks one
-column, and GCC's `note: expected` after an argument is not modelled.
+`-Wpedantic` does not silence. The value operands of `__atomic_store_n`,
+`__atomic_exchange_n`, `__atomic_compare_exchange_n`,
+`__sync_lock_test_and_set` and the `__sync` compare-and-swap builtins
+get neither, as GCC converts them as by a cast.
+`sema-array-qualifiers-pedantic-warnings-gcc` pins the same reports as
+warnings under plain `-pedantic`, which exits 0. Every warning and error
+line and the status match GCC 14; carets over a cast or `&` operand span
+it where GCC marks one column, and GCC's `note: expected` after an
+argument is not modelled.
 
 Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `sema-stdbit-clang.c` pin each identity's operand rules for
