@@ -17,8 +17,38 @@ import 'monaco-editor/features/hover/register.js';
 import 'monaco-editor/features/comment/register.js';
 import 'monaco-editor/features/multicursor/register.js';
 import 'monaco-editor/features/wordOperations/register.js';
+import { ResizableContentWidget } from 'monaco-editor/editor/contrib/hover/browser/resizableContentWidget.js';
 import { registerLanguages } from './languages.js';
 import { defineThemes } from './themes.js';
+
+// Where a hover has room: between its line and the edge of the editor's
+// frame (.code-editor clips what overflows it) or of the window, whichever
+// is nearer. Monaco 0.57 measures the room below as the window's height
+// less the line's place on the page, scroll included, so on a page
+// scrolled further than its hover is tall every hover opened above its
+// line even with `hover: { above: false }`, and line 1's was cut off by the
+// frame's top edge, under the reading over the output. Measured here, a
+// hover opens below when it fits there, and else is sized to the side with
+// more room.
+const HOVER_MARGIN = 2;
+function hoverRoom(widget, position) {
+  const node = widget._editor.getDomNode();
+  const line = widget._editor.getScrolledVisiblePosition(position);
+  if (!node || !line) return undefined;
+  const frame = node.getBoundingClientRect();
+  const view = node.ownerDocument.defaultView;
+  const top = frame.top + line.top;
+  return {
+    above: top - Math.max(frame.top, 0) - HOVER_MARGIN,
+    below: Math.min(frame.bottom, view.innerHeight) - (top + line.height) - HOVER_MARGIN,
+  };
+}
+ResizableContentWidget.prototype._availableVerticalSpaceAbove = function (position) {
+  return hoverRoom(this, position)?.above;
+};
+ResizableContentWidget.prototype._availableVerticalSpaceBelow = function (position) {
+  return hoverRoom(this, position)?.below;
+};
 
 // The editor worker runs Monaco's text-model computations off the page.
 self.MonacoEnvironment = {
@@ -269,7 +299,8 @@ class Editor {
       padding: { top: 14, bottom: 14 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
       // A hover opens below its line, so the first line's (a folded line's
-      // explanation) is not cut off by the editor's top edge.
+      // explanation) is not cut off by the editor's top edge (with
+      // hoverRoom, which measures where it fits).
       hover: { above: false },
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
