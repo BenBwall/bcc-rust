@@ -284,7 +284,7 @@ The selector's per-opcode table for stage 1:
 | `return` | value to `%rax` (extended per `signext`/`zeroext`), epilogue, `ret` |
 | `trap`, `unreachable` | `ud2` |
 | `return_address` | `movq` from the CFA minus 8 |
-| `frame_address` | `leaq` of the CFA minus 16, where the prologue then pushes `%rbp` first, as a frame pointer would save it; on Win64, `%rsp` after the prologue, the establisher frame the unwind information names, as LLVM returns it and as the C runtime's `_setjmp` needs it for `longjmp` to unwind to |
+| `frame_address` | `leaq` of the CFA minus 16, where the prologue then pushes `%rbp` first, as a frame pointer would save it, and on System V sets `%rbp` to that slot, linking the frame ("Frame pointers"); on Win64, `%rsp` after the prologue, the establisher frame the unwind information names, as LLVM returns it and as the C runtime's `_setjmp` needs it for `longjmp` to unwind to |
 
 ### Block parameters become parallel copies
 
@@ -552,10 +552,11 @@ Allocation order: caller-saved registers first (no save cost) — `%rax %rcx
 %rdx %rsi %rdi %r8 %r9` on System V, `%rax %rcx %rdx %r8 %r9` on Win64 — then
 callee-saved `%rbx %r12 %r13 %r14 %r15 %rbp` (plus `%rsi %rdi` on Win64).
 The frame pointer is omitted, so `%rbp` is allocatable, except in a function
-that keeps one (a moving stack, or every function under
-`-fno-omit-frame-pointer`; see "Frame layout"). SSE registers go
-`%xmm0`-`%xmm13`; on Win64 `%xmm6` and up are callee-saved and saved by the
-frame when written. x87 values are never allocated (see "Legalization").
+that keeps one (a moving stack, a System V function that takes its frame
+address, or every function under `-fno-omit-frame-pointer`; see "Frame
+layout"). SSE registers go `%xmm0`-`%xmm13`; on Win64 `%xmm6` and up are
+callee-saved and saved by the frame when written. x87 values are never
+allocated (see "Legalization").
 
 ```rust
 /// One piece of a vreg's lifetime (`regalloc/intervals.rs`).
@@ -676,7 +677,12 @@ aligned, except within the prolog"). Every call is made at that alignment.
 - **Frame pointers** (2026-11-08). A function whose stack moves keeps one,
   and so does every function but a naked one under
   `-fno-omit-frame-pointer` (GCC manual, "Optimize Options"), which reaches
-  the native back end as `Hardening::keep_frame_pointer`. On System V it is
+  the native back end as `Hardening::keep_frame_pointer`. Since 2026-11-24
+  a System V function that takes its frame address (`frame_address`, which
+  `__builtin_frame_address` at any level, `__builtin_return_address` above
+  level 0 and `__builtin_setjmp` lower to) keeps one too, at every
+  optimization level, as GCC's and Clang's do (`isel::select`); its callers
+  keep theirs only under the option. On System V it is
   GCC's and Clang's: `pushq %rbp; movq %rsp, %rbp` first
   (`.cfi_def_cfa_register %rbp`), then the other pushes and the
   allocation, so `%rbp` points at the caller's `%rbp` with the return
