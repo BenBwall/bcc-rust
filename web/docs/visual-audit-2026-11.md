@@ -6885,3 +6885,240 @@ The review of #445 found two blockers and three nits, all fixed here.
   (whose conversion is undefined on Windows), and upcoming labels such as
   "cast `18446744073709551615u` from `unsigned long`". No lesson reaches
   them; edited code does.
+
+## Part 22: the compiler views, with fresh eyes (2026-11)
+
+Parts 11 to 21 worked on the abstract machine's explanations. The compiler
+views had their last visual pass in Part 10: bcc IR, the ABI-lowered IR,
+LLVM IR, the x86-64 assembly, the machine code and the WebAssembly text,
+all coloured by the Monaco grammars in `web/editor/`. This part walks them
+as a newcomer would, on `agent/site-part22`, and fixes the ten problems
+that hurt most.
+
+### Method
+
+The deployed site (`main` at `d7d3e133a`) was driven with Playwright in
+Chromium, one browser at a time, with reduced motion. For each lesson the
+script opened the compiler pipeline and took the stage card at every
+back-end stage (bcc IR, ABI-lowered IR, LLVM IR, x86-64 assembly, machine
+code), each at `-O0` and `-O2`, and then the WebAssembly view:
+
+- at 1440x900, every lesson, in both themes (418 states);
+- at 1366x768 and 390x844, in both themes, five lessons that cover the
+  shapes the views take (Objects, Floating point, Callbacks, Structs and
+  From source to a running program): 220 states.
+
+On each state it recorded whether the page scrolls sideways, every element
+of the stage card past the window's right edge, the WCAG contrast of every
+token colour Monaco drew against the screen, the stage's explanatory text,
+and how far the page jumped when the stage changed. No state scrolled
+sideways, no page logged an error, and every token colour is at least
+6.88:1 on the light theme's screen (`#0b0b0b`) and 7.12:1 on the dark
+theme's (`#050505`): those are the grey of comments and directives, and
+every other colour is 8.96:1 or more. I read the
+screenshots at full size.
+
+The fixes were checked against the output they describe: the dev build's
+listings for every lesson at both levels (`web/src/explorer.rs` natively),
+the bundled LLVM IR, `middle-end.md` for bcc IR, the LLVM Language
+Reference for `load`, `align` and `nsw`, and the Intel SDM (Vol. 2) for the
+encodings, as each item says.
+
+### The problems, worst first
+
+1. **Nothing said how to read a line, or what the colours mean.** The only
+   legend under the output was for the links to the source. A newcomer
+   met `v3 = iadd.i32 nsw v1, v2`, `%v1 = load i32, ptr %v0, align 4`,
+   `movl %eax, (%rdi)` and `5  89 07  movl %eax, (%rdi)` with no key, and
+   the colours (orange, blue, teal, khaki, orchid, pink) were never named
+   ([before](screenshots/part22/before-bcc-ir-1440-dark.png)). **Fixed:**
+   under the output of each of the five stages a figure, "How to read a
+   line", writes one line of that notation in its colours, says what it
+   does, lists each part beside its meaning, and keys the view's other
+   colours with a sample of each
+   ([after](screenshots/part22/after-bcc-ir-1440-dark.png),
+   [phone](screenshots/part22/after-machine-code-390-dark.png)). The
+   examples are lines of the first lesson's output, and a test pins each
+   one to that output and each key's sample to some lesson's view. The
+   claims:
+   - bcc IR: `nsw` lets bcc assume the sum fits, since signed overflow is
+     undefined (`middle-end.md`, "Undefined behaviour": C lowering sets
+     `nsw` on signed `+ - *` because of C99 §6.5p5, and an overflowing
+     `nsw` add is poison).
+   - LLVM IR: `load <ty>, ptr <pointer>, align <n>` reads a `<ty>` at the
+     pointer, and `align` promises the address's alignment (LangRef,
+     `load`); `#0` names the attribute group the file ends with
+     (`attributes #0 = { "frame-pointer"="all" }` in every lesson).
+   - Assembly: AT&T's `l` suffix is a 32-bit operand; the destination is
+     last (GNU as, "AT&T Syntax versus Intel Syntax").
+   - Machine code: `89 /r` is `MOV r/m32, r32`, and the ModRM byte `07`
+     (mod 00, reg 000, r/m 111) names `eax` and the memory at `rdi` in
+     64-bit mode (SDM Vol. 2, MOV, and Table 2-2).
+   The ABI-lowered IR uses bcc IR's figure, since it writes the same
+   notation.
+2. **The machine code's jumps went to labels the listing never showed.**
+   At `-O2` in Objects, `2a  7c 14  jl .LBB1_3` jumps to a `.LBB1_3`
+   that only the assembly view has, and the offsets skip from `33` to
+   `40` with nothing between. **Fixed:** each label one of the function's
+   instructions names is a line of its own before the instruction it
+   labels, as in the assembly, and each run of alignment padding is one
+   line, `34  (12 bytes of padding)`
+   ([after](screenshots/part22/after-machine-code-1440-dark.png)). The
+   bytes agree: `7c 14` is `jl` with a distance of 0x14 from the next
+   instruction at 0x2c, so it lands at 0x40, where `.LBB1_3:` now stands
+   (SDM Vol. 2, Jcc: the offset is relative to the next instruction).
+   Every padding line in every lesson is followed by a label, as the
+   assembly's `.p2align` precedes one. Neither kind of line counts as an
+   instruction, so "23 instructions encode to 95 bytes" is unchanged
+   (a test).
+3. **On a phone each machine-code row broke in two,** the mnemonic at the
+   right edge and its operands under the bytes column
+   ([before](screenshots/part22/before-machine-code-390-dark.png)).
+   **Fixed:** the machine code alone no longer wraps; it scrolls sideways
+   inside its frame, as its fallback text already did, and the page does
+   not ([after](screenshots/part22/after-machine-code-390-dark.png)). On a
+   card narrower than 560 px the figure of item 1 puts each meaning under
+   its part.
+4. **The assembly never said which operand is the destination.**
+   `movl %eax, (%rdi)` reads backwards to anyone who knows Intel's
+   syntax. **Fixed:** the explanation names AT&T syntax, which GCC and
+   Clang print by default, its `%`, `$` and parentheses, that the
+   destination comes last (`addl $1, %eax` adds 1 to eax, a line of
+   Objects), and the size suffixes b, w, l and q that most integer
+   instructions carry (jumps such as `jl` and floating-point instructions
+   such as `movsd` are named differently; GNU as says instructions *may*
+   carry one; review round 1).
+5. **The machine code said only calls show zero bytes.** A string
+   literal's and a floating constant's address do too: Floating point's
+   `leaq .str(%rip), %rdi` is `48 8d 3d 00 00 00 00` and
+   `movsd .LCPI0_0(%rip), %xmm0` ends in four zero bytes. **Fixed:** the
+   explanation says so, says a jump within the function is complete (its
+   last bytes are the distance to its label, counted from the end of the
+   jump), and says why the offsets skip.
+6. **The ABI-lowered IR's struct notation was unexplained.** Structs
+   shows `function @moved(ptr registers(i64, align 4), i64, i32 noundef)`,
+   and the explanation said only that structs are "where this stage earns
+   its keep" ([before](screenshots/part22/before-abi-1440-dark.png)).
+   **Fixed:** it names the System V ABI, says what the IR's
+   `ptr aggregate(…)` and `ptr result(…)` mean, and reads that signature,
+   as `middle-end.md` defines `registers(…)`: the 8-byte `struct point`
+   travels as one `i64` in a register (`movq %rdi, -32(%rsp)` in the
+   machine code), and the result comes back in one 64-bit register
+   (`movq -16(%rsp), %rax`) through a parameter that is not passed
+   ([after](screenshots/part22/after-abi-1440-dark.png)).
+7. **`-O2` made code bigger and the note did not say why.** In
+   Callbacks the LLVM IR grows from 27 instructions to 52, and the note
+   said only that `sum_of` is no longer called, which reads as a saving
+   ([before](screenshots/part22/before-optimizer-1366-dark.png)). The
+   `-O2` IR shows why: `main` holds a copy of `sum_of`'s loop for each of
+   its two calls, and `sum_of` is still defined, since another file could
+   call it. **Fixed:** where the code grew and a function was inlined,
+   the note ends "That is why there is more code at -O2: each inlined
+   call gets its own copy of the body, and a function that other files
+   could call is kept as well." It appears in Hello, Pointers (LLVM IR
+   only), Walking a string and Callbacks, each of which inlines a
+   function that stays defined
+   ([after](screenshots/part22/after-optimizer-1366-dark.png)).
+8. **An indirect call's register was named as a function.** Callbacks'
+   assembly at `-O2` read "with calls to `*%r13`, `*%rax` and `printf`"
+   ([before](screenshots/part22/before-asm-example-390-dark.png)).
+   **Fixed:** "with calls to `printf` and 3 calls through a function
+   pointer", the three `callq *` lines of that listing (a test;
+   [after](screenshots/part22/after-asm-example-390-dark.png)).
+9. **The same kind of token had different colours in different views.**
+   The WebAssembly text drew a function's name where it is defined or
+   called off-white, where every other view uses orchid; `i32.add` was
+   all instruction colour, though bcc IR's `iadd.i32` colours its type
+   blue; `offset=` and `align=` were as loud as an instruction; and LLVM
+   IR's `%slot0` was a plain value's teal, though bcc IR's `slot0` is a
+   stack slot's lavender. **Fixed** in the grammars, so each kind of
+   token has one colour in every view. `style.css` now names the code
+   colours as `--syntax-*` tokens, which the figure and the fallback
+   highlighting use, beside `themes.js`'s palette.
+10. **Two listings were both "Listing 2"** in the WebAssembly view: the C
+    source and the module's text, because the source's chip rule also
+    matched the text's. **Fixed:** the C source is Listing 1 there, as in
+    the other modes, and the text Listing 2.
+
+### Checks
+
+- **The lesson walk.** A throwaway engine test (never committed) stepped
+  all 19 lessons and wrote each step's title, lead, explanation, note,
+  clauses and next step: 1981 notes over 18 lessons, with the
+  preprocessor lesson refused before its first step ("line splicing is
+  outside this subset"), as on `main`. Nothing the abstract machine shows
+  changed: this branch leaves `src/`, the engine and the machine view's
+  code (`web/src/machine*`, `engine.rs`, `glossary.rs` and the narration,
+  tape, cells and evaluation panels) byte-identical to `main`, so no note
+  can differ.
+- **Tests,** as `pages.yml` runs them:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed |
+  | Engine clippy | clean |
+  | Site tests | 181 passed (177 and four new), plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | passes |
+  | `git diff --check` | clean |
+
+  `cargo +nightly fmt --check` passes for the repository's crate. In
+  `web/` it reports the same hunks on `main` as on this branch: none of
+  this branch's lines.
+- **The browser.** Less than 14 GB was free, so the site was not built
+  here: the walk ran on CI's Pages build of `d84d123b9` (run 45292587212),
+  served locally, with the same script as before, at 1440x900 (every
+  lesson, dark), and in both themes at 1440x900, 1366x768, 1024x768 and
+  390x844 (the five lessons): 594 states. No state scrolled sideways, no
+  page logged an error or a warning, every back-end stage showed the
+  figure, which never passed the window's right edge, and every colour in
+  the code and in the figure is at least 6.88:1 on the light theme's
+  screen and 7.12:1 on the dark one's (the grey of comments, directives,
+  offsets and the figure's meanings; every other colour 8.96:1 or more).
+  The figure adds no control: its parts list is named "The line, part by
+  part" and its key "Other colours in this view" for screen readers, and
+  its example is plain text in its colours. The narrow-card layout of
+  item 3 came after that build. It was checked first on that build with
+  only its CSS added (390x844 dark, the Objects lesson), then on CI's
+  build of `a2a53a1e1` (run 45305513222): the Callbacks lesson at
+  390x844 in both themes, 1024x768 light and 1440x900 light, 44 states,
+  each with the figure, none with an error or sideways scroll, and every
+  colour at least 6.88:1.
+
+### Left for later
+
+- **The assembly's directives.** At `-O0` a function's assembly is about
+  a third `.cfi_*` lines, and every listing opens with five directives
+  before the first label. The figure's key says what a directive is, but
+  they could fold behind a chip, as the target lines do.
+- **The WebAssembly text** has no "How to read a line" of its own; its
+  stack-machine notation is explained step by step in the WebAssembly
+  view's notes.
+- **Fixed examples.** Each figure's example comes from the first lesson,
+  whatever program is on screen. Taking it from the output on screen
+  would need a reader for each notation that finds a line of each shape.
+- **The editor's height at 1366x768** is the minimum, 360 px, about 15
+  lines; the figure now fills the column under it, but the output shows
+  less than at 1440x900.
+- **Touch wording.** "Point at a line" and "Point at a source line" also
+  mean a tap on a phone, which the text does not say.
+- **The before walk** at 1366x768 and 390x844 covered five lessons, not
+  all nineteen; the 1440x900 walk covered every lesson in both themes.
+
+### Review, round 1
+
+- **Size suffixes.** The assembly explanation said every instruction's
+  last letter gives its size, which `jl`, `jne`, `sete`, `movsd`,
+  `ucomisd` and `cvttsd2si` on the site contradict. It now says most
+  instructions that move or compute integers carry one, and names jumps
+  and floating-point instructions as exceptions.
+- **`%slot0`.** The LLVM IR key now says `%slot0` is the *address* of
+  the memory `alloca` reserves, as LLVM IR uses it. The bcc IR key, where
+  `slot0` names the frame region itself, is unchanged.
+- **Left for later, from the review:** a swipe hint for the machine
+  code on phones; the figure's height on phones (490 to 565 px); saying
+  in the key that labels and padding lines are not bytes; a reason for
+  the assembly and machine code growing at `-O2`; the inlining note's
+  "kept" clause on user code that inlines a `static` function.

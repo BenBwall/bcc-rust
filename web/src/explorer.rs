@@ -106,7 +106,8 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
         .machine_code
         .as_deref()
         .map_or((None, Vec::new(), Vec::new()), |functions| {
-            let (text, listed, lines) = listing(functions, &asm_lines);
+            let asm = output.asm.as_deref().unwrap_or_default();
+            let (text, listed, lines) = listing(functions, asm, &asm_lines);
             (Some(text), listed, lines)
         });
     let lines = |range: Option<ExplorerLineRange>| range.map(span);
@@ -480,12 +481,18 @@ type Listed = Vec<(String, (usize, usize))>;
 
 /// The machine-code listing: each function's label, then one line per
 /// instruction with its offset in the function, its bytes and its assembly,
-/// with a blank line between functions. Also each function's lines in it, and
-/// where each line came from, which is where its line of the assembly did.
+/// with a blank line between functions. A label that one of the function's
+/// instructions names (a jump's `.LBB1_3`) is a line of its own before the
+/// instruction it labels, as in the assembly, and bytes the assembler put
+/// between two instructions to align the second are one line saying so.
+/// Also each function's lines in the listing, and where each line came from,
+/// which is where its line of the assembly did.
 fn listing(
     functions: &[ExplorerFunctionBytes],
+    asm: &str,
     asm_lines: &[LineOrigin],
 ) -> (String, Listed, Vec<LineOrigin>) {
+    let asm: Vec<&str> = asm.lines().collect();
     let mut text = String::new();
     let mut lines = Vec::new();
     let mut origins = Vec::new();
@@ -500,7 +507,38 @@ fn listing(
         origins.push(LineOrigin::default());
         line += 1;
         let first = line;
+        let named = jump_targets(function);
+        // The assembly's lines before the first instruction start at the
+        // function's own label.
+        let mut after = asm
+            .iter()
+            .position(|each| label(each) == Some(function.name.as_str()))
+            .unwrap_or(asm.len());
+        let mut end = 0;
         for instruction in &function.instructions {
+            let offset = instruction.offset as usize;
+            if offset > end {
+                _ = writeln!(
+                    text,
+                    "{end:>6x}  ({} of padding)",
+                    counted(offset - end, "byte")
+                );
+                origins.push(LineOrigin::default());
+                line += 1;
+            }
+            let at = instruction.line as usize;
+            for label in asm
+                .get(after + 1..at.saturating_sub(1))
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|each| label(each))
+                .filter(|label| named.contains(label))
+            {
+                _ = writeln!(text, "{label}:");
+                origins.push(LineOrigin::default());
+                line += 1;
+            }
+            after = at.saturating_sub(1).max(after);
             let bytes: Vec<String> = instruction
                 .bytes
                 .iter()
@@ -518,17 +556,48 @@ fn listing(
                     .join(" ")
             );
             origins.push(
-                (instruction.line as usize)
-                    .checked_sub(1)
+                at.checked_sub(1)
                     .and_then(|index| asm_lines.get(index))
                     .copied()
                     .unwrap_or_default(),
             );
             line += 1;
+            end = offset + instruction.bytes.len();
         }
         lines.push((function.name.clone(), (first, line)));
     }
     (text, lines, origins)
+}
+
+/// The local labels (`.LBB1_3`) the function's instructions name.
+fn jump_targets(function: &ExplorerFunctionBytes) -> Vec<&str> {
+    function
+        .instructions
+        .iter()
+        .flat_map(|instruction| {
+            instruction
+                .asm
+                .split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')'))
+                .filter(|word| word.starts_with(".L"))
+        })
+        .collect()
+}
+
+/// The label an assembly line defines, if it is a label's line.
+fn label(line: &str) -> Option<&str> {
+    let (label, rest) = line.split_once(':')?;
+    let rest = rest.trim_start();
+    let plain = !label.is_empty() && !label.starts_with(char::is_whitespace);
+    (plain && (rest.is_empty() || rest.starts_with('#'))).then_some(label)
+}
+
+/// `count` and `noun`, plural unless one.
+fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 /// `diagnostic` with its range in the editor's coordinates, when it is in
@@ -948,6 +1017,31 @@ mod tests {
         };
         assert_eq!(bytes_of("ret"), Some(vec!["c3"]), "{code}");
         assert_eq!(bytes_of("call"), Some(vec!["e8", "00", "00", "00", "00"]), "{code}");
+    }
+
+    /// A jump's label is a line of the listing, before the instruction it
+    /// labels, and the bytes that align it are one line before that; neither
+    /// counts as an instruction.
+    #[test]
+    fn the_listing_shows_the_labels_jumps_name_and_the_padding() {
+        let compilation = compile(crate::demos::DEMOS[0].source, true);
+        let listing = compilation.machine_code.as_deref().unwrap();
+        // 7c 14 is jl with a distance of 0x14 from the next instruction, at
+        // 0x2c: the label is at 0x40.
+        for expected in [
+            "    2a  7c 14                    jl .LBB1_3\n    2c  (4 bytes of padding)\n.LBB1_2:\n",
+            "    34  (12 bytes of padding)\n.LBB1_3:\n    40  8b 31 ",
+        ] {
+            assert!(listing.contains(expected), "{expected}\n{listing}");
+        }
+        assert_eq!(
+            compilation.machine_code_lines.len(),
+            listing.lines().count()
+        );
+        assert_eq!(
+            crate::pipeline::example(Stage::MachineCode, &compilation, "").as_deref(),
+            Some("Here 23 instructions encode to 95 bytes of code, 4.1 bytes each on average.")
+        );
     }
 
     #[test]

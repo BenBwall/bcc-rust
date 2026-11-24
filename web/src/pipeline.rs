@@ -661,6 +661,7 @@ impl Stage {
 
     /// A short explanation for programmers new to compilers of what the
     /// stage decides and how; what goes in and comes out is its [`Brief`].
+    #[expect(clippy::too_many_lines, reason = "One paragraph per stage.")]
     pub fn explanation(self) -> &'static str {
         match self {
             | Self::Lines =>
@@ -731,8 +732,14 @@ impl Stage {
                  need memory, so they get a stack_slot.",
             | Self::IrAbi =>
                 "Decided here: which arguments travel in registers, which in memory, and how \
-                 values are returned. For programs that pass only ints and pointers, very little \
-                 changes; structs and wide values are where this stage earns its keep.",
+                 values are returned, by the System V ABI that x86-64 Linux follows. Ints and \
+                 pointers already fit a register, so for them little changes. Structures are \
+                 where this stage earns its keep: the IR passes one as ptr aggregate(…), a copy \
+                 the caller made, and returns one by storing it through ptr result(…). Lowering \
+                 decides how each really travels. In the structs lesson an 8-byte struct point \
+                 goes as one i64, in a register, and registers(i64, align 4) on the first \
+                 parameter says the result comes back in one 64-bit register: that parameter is \
+                 only where the function builds its result, and is not passed.",
             | Self::Llvm =>
                 "Decided here: nothing new, since bcc only translates; LLVM, bcc-rust's default \
                  back end, picks the instructions later. LLVM IR is also in SSA form: %names are \
@@ -742,13 +749,23 @@ impl Stage {
             | Self::Asm =>
                 "Decided here: which instruction carries out each operation, which register holds \
                  each value, and how the stack frame is laid out. bcc's own native back end does \
-                 this. Arguments arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
+                 this. The syntax is AT&T's, which GCC and Clang print by default: % marks a \
+                 register, $ a constant, and a register in parentheses the memory at the address \
+                 it holds, and the destination comes last, so addl $1, %eax adds 1 to eax. Most \
+                 instructions that move or compute integers end in a letter for the operand \
+                 size (movl, addq: b, w, l and q for 8, 16, 32 and 64 bits); jumps such as jl \
+                 and floating-point instructions such as movsd are named differently. Arguments \
+                 arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
                  starting with a dot are directives for the assembler, not instructions.",
             | Self::MachineCode =>
-                "Decided here: each instruction's exact encoding and length. The left column is \
-                 the instruction's offset from the start of its function, then its encoding, both \
-                 in hexadecimal. x86-64 instructions vary from 1 to 15 bytes long. Calls to other \
-                 functions show zero bytes where the linker will later fill in the address.",
+                "Decided here: each instruction's exact encoding and length. Each line is the \
+                 instruction's offset from the start of its function, then its encoding, both in \
+                 hexadecimal, then the assembly it encodes. x86-64 instructions vary from 1 to 15 \
+                 bytes long. A jump to a label in the same function is complete: its last bytes \
+                 are the distance to the label, counted from the end of the jump. A call to \
+                 another function, and the address of data such as a string literal (.str) or a \
+                 floating constant (.LCPI0_0), show zero bytes where the linker will later fill in \
+                 the address. Where the offsets skip, the assembler padded to align the next label.",
         }
     }
 
@@ -1534,6 +1551,17 @@ pub fn optimizer_changes(
     };
     let before = Census::of(stage, before);
     let after = Census::of(stage, after);
+    // A call to a function the program defines that disappeared was inlined.
+    let defined: Vec<&str> = plain
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect();
+    let inlined: Vec<&String> = before
+        .callees
+        .iter()
+        .filter(|callee| !after.callees.contains(callee) && defined.contains(&callee.as_str()))
+        .collect();
     let mut changes = Vec::new();
     let mut compare = |what: &str, before: usize, after: usize, why: &str| {
         // The reason explains a saving, not a cost.
@@ -1569,19 +1597,21 @@ pub fn optimizer_changes(
         after.slots,
         " Each one is memory reserved in the function's stack frame.",
     );
-    // A call to a function the program defines that disappeared was inlined.
-    let defined: Vec<&str> = plain
-        .functions
-        .iter()
-        .map(|function| function.name.as_str())
-        .collect();
-    for callee in &before.callees {
-        if !after.callees.contains(callee) && defined.contains(&callee.as_str()) {
-            changes.push(format!(
-                "{callee} is no longer called: the optimizer inlined it, copying its body into \
-                 the caller, where it could be simplified further."
-            ));
-        }
+    let grew = after.instructions > before.instructions && !inlined.is_empty();
+    for callee in inlined {
+        changes.push(format!(
+            "{callee} is no longer called: the optimizer inlined it, copying its body into the \
+             caller, where it could be simplified further."
+        ));
+    }
+    // Code that grew where a function was inlined: a cost the saving
+    // reasons do not explain.
+    if grew {
+        changes.push(
+            "That is why there is more code at -O2: each inlined call gets its own copy of the \
+             body, and a function that other files could call is kept as well."
+                .to_owned(),
+        );
     }
     if changes.is_empty() && stage.phase() != "Front end" {
         changes.push(
@@ -1663,7 +1693,13 @@ impl Census {
                 },
                 | Stage::Asm =>
                     line.starts_with('\t') && !trimmed.starts_with('.') && !trimmed.ends_with(':'),
-                | Stage::MachineCode => line.starts_with(' '),
+                // An instruction's line, not a label's or padding's: an
+                // offset, then its bytes.
+                | Stage::MachineCode =>
+                    line.starts_with(' ')
+                        && trimmed.split_whitespace().nth(1).is_some_and(|byte| {
+                            byte.len() == 2 && byte.bytes().all(|b| b.is_ascii_hexdigit())
+                        }),
                 | Stage::Lines
                 | Stage::PpTokens
                 | Stage::Preprocessor
