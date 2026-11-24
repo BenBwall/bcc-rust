@@ -1573,8 +1573,8 @@ fn llvm_function(line: &str) -> Option<&str> {
 }
 
 /// The function an x86-64 instruction calls, or jumps to as a tail call:
-/// `callq	bump` and `callq	printf@PLT` (a machine-code line has its offset
-/// and bytes first), not `callq	*%rax`, which calls through a pointer, or a
+/// `callq bump` and `callq printf@PLT` (a machine-code line has its offset
+/// and bytes first), not `callq *%rax`, which calls through a pointer, or a
 /// jump to a label.
 fn native_callee(line: &str) -> Option<&str> {
     let mut fields = line.split_whitespace();
@@ -1664,61 +1664,15 @@ pub fn optimizer_changes(
         " Each one is memory reserved in the function's stack frame.",
     );
     let grew = after.instructions > before.instructions;
-    // Of the inlined functions, those -O2 still defines, each with whether
-    // another file could call it.
-    let definitions = definitions(stage, optimized);
-    let kept: Vec<bool> = inlined
-        .iter()
-        .filter_map(|callee| {
-            definitions
-                .iter()
-                .find(|(name, _)| name == *callee)
-                .map(|&(_, external)| external)
-        })
-        .collect();
     let inlining = !inlined.is_empty();
+    let kept = kept_inlined(stage, optimized, &inlined);
     for callee in inlined {
         changes.push(format!(
             "{callee} is no longer called: the optimizer inlined it, copying its body into the \
              caller, where it could be simplified further."
         ));
     }
-    // Code that grew where a function was inlined, or where the back end
-    // copied more blocks: a cost the saving reasons do not explain.
-    if grew && inlining {
-        let kept = if kept.contains(&true) {
-            ", and a function that other files could call is kept as well"
-        } else if kept.is_empty() {
-            ""
-        } else {
-            ", and the inlined function is kept as well"
-        };
-        changes.push(format!(
-            "That is why there is more code at -O2: each inlined call gets its own copy of the \
-             body{kept}."
-        ));
-    } else if grew
-        && matches!(stage, Stage::Asm | Stage::MachineCode)
-        && let (Some(plain), Some(optimized)) =
-            (plain.output(Stage::Asm), optimized.output(Stage::Asm))
-        && copied_tests(optimized) > copied_tests(plain)
-    {
-        changes.push(
-            "That is why there is more code at -O2: where a jump leads to a block of at most \
-             eight instructions that ends in a test, the back end puts a copy of the block in \
-             place of the jump (loop rotation, for a loop's jump back), and here it copies more \
-             at -O2 than at -O0."
-                .to_owned(),
-        );
-    }
-    // More bytes from no more instructions: longer encodings.
-    if stage == Stage::MachineCode && optimized.code_bytes > plain.code_bytes && !grew {
-        changes.push(
-            "Fewer instructions can still take more bytes: an x86-64 instruction is 1 to 15 bytes \
-             long, and the padding before a label changes with the code ahead of it."
-                .to_owned(),
-        );
-    }
+    changes.extend(growth(stage, plain, optimized, grew, inlining, &kept));
     if changes.is_empty() && stage.phase() != "Front end" {
         changes.push(
             "The optimizer found nothing to improve here: this output is the same size at both \
@@ -1727,6 +1681,70 @@ pub fn optimizer_changes(
         );
     }
     changes
+}
+
+/// Of the `inlined` functions, those `optimized` still defines in `stage`,
+/// each as whether another file could call it.
+fn kept_inlined(stage: Stage, optimized: &Compilation, inlined: &[&String]) -> Vec<bool> {
+    let definitions = definitions(stage, optimized);
+    inlined
+        .iter()
+        .filter_map(|callee| {
+            definitions
+                .iter()
+                .find(|(name, _)| name == *callee)
+                .map(|&(_, external)| external)
+        })
+        .collect()
+}
+
+/// Why `stage`'s code is bigger at -O2, when it `grew` or its machine code
+/// takes more bytes: a cost the saving reasons do not explain. Where a
+/// function was inlined (`inlining`), its copies, and whether it is `kept`
+/// ([`kept_inlined`]); else, in the assembly and machine code, the blocks
+/// the back end copied; and in the machine code, longer encodings.
+fn growth(
+    stage: Stage,
+    plain: &Compilation,
+    optimized: &Compilation,
+    grew: bool,
+    inlining: bool,
+    kept: &[bool],
+) -> Option<String> {
+    let native = matches!(stage, Stage::Asm | Stage::MachineCode);
+    if grew && inlining {
+        let kept = if kept.contains(&true) {
+            ", and a function that other files could call is kept as well"
+        } else if kept.is_empty() {
+            ""
+        } else {
+            ", and the inlined function is kept as well"
+        };
+        return Some(format!(
+            "That is why there is more code at -O2: each inlined call gets its own copy of the \
+             body{kept}."
+        ));
+    }
+    if grew
+        && native
+        && let (Some(plain), Some(optimized)) =
+            (plain.output(Stage::Asm), optimized.output(Stage::Asm))
+        && copied_tests(optimized) > copied_tests(plain)
+    {
+        return Some(
+            "That is why there is more code at -O2: where a jump leads to a block of at most \
+             eight instructions that ends in a test, the back end puts a copy of the block in \
+             place of the jump (loop rotation, for a loop's jump back), and here it copies more \
+             at -O2 than at -O0."
+                .to_owned(),
+        );
+    }
+    // More bytes from no more instructions: longer encodings.
+    (stage == Stage::MachineCode && optimized.code_bytes > plain.code_bytes && !grew).then(|| {
+        "Fewer instructions can still take more bytes: an x86-64 instruction is 1 to 15 bytes \
+         long, and the padding before a label changes with the code ahead of it."
+            .to_owned()
+    })
 }
 
 /// The functions `compilation` defines in `stage`'s output, each with

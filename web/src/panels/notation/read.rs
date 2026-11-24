@@ -88,10 +88,11 @@ fn is_bcc_value(name: &str) -> bool {
     name.strip_prefix('v').is_some_and(is_number)
 }
 
-/// LLVM IR: `%v1 = load i32, ptr %v0, align 4` (LangRef, `load`), or
+/// LLVM IR: `%v1 = load i32, ptr %v0, align 4` (the LLVM Language
+/// Reference, `load`), or
 /// else `%v7 = add nsw i32 %v4, 3`, a signed `int` add, subtract or
-/// multiply (LangRef, `add`: with `nsw`, the result is poison on signed
-/// overflow).
+/// multiply (the Language Reference, `add`: with `nsw`, the result is poison on
+/// signed overflow).
 pub fn llvm_ir(line: &str) -> Option<Reading> {
     let (result, rest) = line.trim().split_once(" = ")?;
     let Some(rest) = rest.strip_prefix("load ") else {
@@ -231,7 +232,7 @@ pub fn assembly(line: &str) -> Option<Reading> {
 
 /// The machine-code listing: `5  89 07   movl %eax, (%rdi)`, an offset, the
 /// bytes, and the instruction they encode, for the encodings the reader can
-/// take apart: an ALU or `mov` opcode whose ModRM byte names a register
+/// take apart: an ALU or `mov` opcode whose `ModRM` byte names a register
 /// source and a register or memory destination (SDM Vol. 2, Table 2-2).
 pub fn machine_code(line: &str) -> Option<Reading> {
     let (offset, rest) = line.trim_start().split_once("  ")?;
@@ -637,7 +638,7 @@ impl<'a> AsmLine<'a> {
 
     /// `bytes` taken apart as the encoding of this instruction, or `None`
     /// if they are not one the reader knows: an optional REX.W prefix
-    /// (`48`), one of the `op r/m, reg` opcodes, and a ModRM byte whose reg
+    /// (`48`), one of the `op r/m, reg` opcodes, and a `ModRM` byte whose reg
     /// field names the source register, with the SIB byte and one-byte
     /// displacement its r/m and mod fields call for (SDM Vol. 2, §2.1 and
     /// Tables 2-2 and 2-3).
@@ -645,6 +646,14 @@ impl<'a> AsmLine<'a> {
         let Operand::Register(source) = self.source else {
             return None;
         };
+        let (mut parts, rest) = self.opcode(bytes)?;
+        parts.extend(self.operands(source, rest)?);
+        Some(parts)
+    }
+
+    /// The REX.W prefix, if the instruction is 64 bits wide, and the opcode
+    /// at the start of `bytes`, and the bytes after them.
+    fn opcode<'b>(&self, bytes: &'b [u8]) -> Option<(Vec<Part>, &'b [u8])> {
         let mut parts = Vec::new();
         let mut rest = bytes;
         if self.wide {
@@ -682,7 +691,15 @@ impl<'a> AsmLine<'a> {
             )
         };
         parts.push(byte_part(opcode, does));
-        let (&modrm, mut rest) = after.split_first()?;
+        Some((parts, after))
+    }
+
+    /// The `ModRM` byte at the start of `bytes`, naming `source` and the
+    /// destination, and the SIB byte and displacement it calls for, which
+    /// must be all of `bytes`.
+    fn operands(&self, source: &str, bytes: &[u8]) -> Option<Vec<Part>> {
+        let mut parts = Vec::new();
+        let (&modrm, mut rest) = bytes.split_first()?;
         let (mode, reg, rm) = (modrm >> 6, (modrm >> 3) & 7, modrm & 7);
         if register_name(reg, self.wide) != source {
             return None;
@@ -756,7 +773,7 @@ impl<'a> AsmLine<'a> {
     }
 }
 
-/// The name of register `number` (0-7) in a ModRM field, at 64 or 32
+/// The name of register `number` (0-7) in a `ModRM` field, at 64 or 32
 /// bits (SDM Vol. 2, Table 2-2; no REX.R or REX.B).
 fn register_name(number: u8, wide: bool) -> &'static str {
     const WIDE: [&str; 8] = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"];
