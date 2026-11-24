@@ -8807,6 +8807,38 @@ mod tests {
         assert_eq!(output.status.code(), Some(1));
     }
 
+    /// clang-cl's `/openmp` flags, in either spelling, are no `-o` (#452):
+    /// `-openmp-`, the default, writes what clang-cl writes, and bcc, which
+    /// implements no OpenMP, refuses the others, which define `_OPENMP`.
+    #[test]
+    fn clang_cl_reads_its_openmp_flags_as_cl_flags() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        for prefix in ['-', '/'] {
+            let default = format!("{prefix}openmp-");
+            for (step, written) in [("/c", "a.obj"), ("/P", "a.i")] {
+                let output = directory.bcc("--clang-cl-mode", &[step, "a.c", &default]);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{step} {default}");
+                assert!(directory.path(written).is_file(), "{step} {default}");
+                assert!(!directory.path("penmp-").exists(), "{step} {default}");
+                std::fs::remove_file(directory.path(written)).unwrap();
+            }
+            for name in ["openmp", "openmp:experimental"] {
+                let shown = format!("{prefix}{name}");
+                let output = directory.bcc("--clang-cl-mode", &["/c", "a.c", &shown]);
+                assert_eq!(
+                    stderr(&output),
+                    format!(
+                        "clang-cl: error: '{shown}' is not supported: bcc implements no OpenMP\n"
+                    )
+                );
+                assert_eq!(output.status.code(), Some(1), "{shown}");
+                assert!(!directory.path("a.obj").exists(), "{shown}");
+            }
+        }
+    }
+
     /// The GCC-style options clang-cl ignores bcc ignores too, rather than
     /// honoring them: `-ffreestanding` leaves the hosted environment,
     /// `-std=c11` the C17 default and `-funsafe-math-optimizations` the

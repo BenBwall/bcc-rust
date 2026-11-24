@@ -132,6 +132,8 @@ fn clang_cl_plans_the_outputs_clang_cl_names() {
         (&["/c", "a.c", "-ox.obj"], Some("x.obj")),
         (&["/c", "a.c", "/o", "x"], Some("x.obj")),
         (&["/c", "a.c", "-objectx"], Some("bjectx.obj")),
+        // clang-cl's `/openmp-`, the default, is no `-o penmp-`.
+        (&["/c", "a.c", "-openmp-"], Some("a.obj")),
         (&["/c", "a.c", "-o", "x.obj", "/Foy.obj"], Some("y.obj")),
         (&["/c", "a.c", "/Foy.obj", "-o", "x.obj"], Some("x.obj")),
         (&["/c", "a.c", "/clang:-o", "/clang:x"], Some("x")),
@@ -142,12 +144,14 @@ fn clang_cl_plans_the_outputs_clang_cl_names() {
         (&["a.c", "-o", "x.exe", "/Fey.exe"], Some("y.exe")),
         (&["a.c", "/clang:-o", "/clang:x"], Some("x")),
         (&["a.c", "/clang:-ox.exe", "/Fey.exe"], Some("x.exe")),
+        (&["a.c", "-openmp-"], Some("a.exe")),
         (&["/E", "a.c", "/clang:-o", "/clang:x.i"], Some("x.i")),
         (&["/EP", "a.c", "/clang:-ox.i"], Some("x.i")),
         (&["/P", "a.c", "/clang:-ox.i"], Some("x.i")),
         (&["/P", "a.c", "/clang:-o", "/clang:-"], None),
         (&["/E", "a.c", "-o", "x.i"], None),
         (&["/P", "a.c", "-o", "x.i"], Some("a.i")),
+        (&["/P", "a.c", "-openmp-"], Some("a.i")),
         // clang-cl's `/P` writes its file beside `/E`.
         (&["/P", "/E", "a.c"], Some("a.i")),
     ] {

@@ -258,13 +258,25 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             clang_arguments.push(clang);
             continue;
         }
+        // clang-cl's `/openmp` flags, which `/o` below would otherwise
+        // read: `/openmp-` is the default, and bcc implements no OpenMP for
+        // the others, which define `_OPENMP` and link its runtime.
+        if clang_cl && matches!(option, "openmp" | "openmp-" | "openmp:experimental") {
+            if option != "openmp-" {
+                state.command_line_error(
+                    invocation,
+                    None,
+                    format_args!("'{text}' is not supported: bcc implements no OpenMP"),
+                );
+            }
+            continue;
+        }
         // clang-cl's `/o`, also `-o`, joined (`-ox.obj`, and `-objectx` too)
         // or separate. The Clang option `-object-file-name` is a longer
-        // match, and the `/openmp` flags are whole names.
+        // match.
         if clang_cl
             && let Some(value) = option.strip_prefix('o')
             && !option.starts_with("object-file-name")
-            && !matches!(option, "openmp" | "openmp-" | "openmp:experimental")
         {
             state.output_option(invocation, text, value, &mut arguments);
             continue;
