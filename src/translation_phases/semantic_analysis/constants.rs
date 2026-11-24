@@ -186,7 +186,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn carrier_format(&self, ty: TypeId) -> Option<crate::ir::Type> {
         carrier_format(
             &self.types.nodes[self.types.non_atomic(ty).index],
-            self.types.target,
+            &self.types.target,
         )
     }
 
@@ -208,7 +208,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index] else {
             return None;
         };
-        match carrier_type(scalar.real_type(), self.types.target) {
+        match carrier_type(scalar.real_type(), &self.types.target) {
             | Some(format) => self.integer_value(integer, format).map(Floating::real),
             // Binary128 constants fold apart; the carrier is the nearest.
             | None => self
@@ -753,7 +753,7 @@ impl SemanticTranslationUnit<'_> {
         ty: crate::ir::Type,
     ) -> Option<u128> {
         let kind = &self.types.nodes[self.types.non_atomic(from).index];
-        let part = if carrier_format(kind, self.types.target) == Some(ty) {
+        let part = if carrier_format(kind, &self.types.target) == Some(ty) {
             part
         } else {
             quieted_nan(part, gcc_nans(context))
@@ -807,7 +807,7 @@ fn kept_nan(original: LongDouble, rounded: LongDouble) -> LongDouble {
 
 /// The IR format a real floating scalar's value has, for those the x87
 /// carrier holds exactly; `None` for binary128 and every other type.
-fn carrier_type(scalar: Scalar, target: TargetLayout) -> Option<crate::ir::Type> {
+fn carrier_type(scalar: Scalar, target: &TargetLayout) -> Option<crate::ir::Type> {
     use crate::ir::Type;
     Some(match scalar.representation() {
         | Scalar::Float16 | Scalar::Fp16 => Type::F16,
@@ -822,7 +822,7 @@ fn carrier_type(scalar: Scalar, target: TargetLayout) -> Option<crate::ir::Type>
 
 /// The carrier format of a real floating type, or of a complex type's
 /// parts, whose node is `kind`; `None` for every other type.
-fn carrier_format(kind: &TypeKind<'_>, target: TargetLayout) -> Option<crate::ir::Type> {
+fn carrier_format(kind: &TypeKind<'_>, target: &TargetLayout) -> Option<crate::ir::Type> {
     let &TypeKind::Scalar(scalar) = kind else {
         return None;
     };
