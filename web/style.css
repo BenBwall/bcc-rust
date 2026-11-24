@@ -2010,10 +2010,14 @@
        stage (a laptop's narrow card puts the name before it). */
     .stage-card { padding-top: 12px; }
     .stage-card > .stage-header { order: 0; }
-    .stage-work > .link-reading { order: -1; }
     .source-legend { gap: 2px 12px; padding: 8px 12px; font-size: 10px; }
-    .link-reading { min-height: calc(3 * 1.55em + 12px); }
+    /* The reading under the source sits over the output, so it keeps room
+       for the longest sentence (see .link-reading); the stage card's own
+       follows the output, where its growing moves no listing, so it is as
+       tall as its sentence and keeps no empty room. */
     .link-reading.is-source { min-height: calc(3 * 1.55em + 12px); padding: 6px 12px; }
+    .stage-work > .link-reading { order: -1; min-height: 0; }
+    .stage-work > .link-reading > .link-reading-room { display: none; }
     .source-pane > .code-editor {
       --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(154px, calc(100svh - var(--toolbar-height) - 560px)));
     }
