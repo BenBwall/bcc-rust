@@ -359,18 +359,25 @@ fn a_folded_call_keeps_the_sequence_point_before_it() {
 #[cfg(feature = "worker")]
 #[test]
 fn the_panel_marks_where_over_stops() {
-    for demo in crate::demos::DEMOS.iter().filter(|demo| demo.stage.is_none() && !demo.faults) {
+    for demo in crate::demos::DEMOS
+        .iter()
+        .filter(|demo| demo.stage.is_none() && !demo.faults)
+    {
         let states = run(demo.source);
         for cursor in 0..states.len() - 1 {
             let Some(shown) = group(&states, cursor, demo.source) else {
                 continue;
             };
             let stop = over(&states, cursor);
-            match shown.over.expect("Over can run from every step but the last") {
+            match shown
+                .over
+                .expect("Over can run from every step but the last")
+            {
                 | OverStop::At(index) => assert_eq!(stop, index, "{} at {cursor}", demo.key),
                 | OverStop::Next => assert!(
-                    group(&states, stop, demo.source).is_none_or(|next| next.text != shown.text
-                        || next.parts.first() != shown.parts.first()),
+                    group(&states, stop, demo.source)
+                        .is_none_or(|next| next.text != shown.text
+                            || next.parts.first() != shown.parts.first()),
                     "{} at {cursor}",
                     demo.key
                 ),

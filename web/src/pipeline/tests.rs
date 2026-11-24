@@ -170,8 +170,8 @@ fn origins(lines: &[usize]) -> Vec<LineOrigin> {
 #[test]
 fn back_end_stages_link_line_by_line() {
     let source = "int f(int x) {\n    return x * x;\n}\n";
-    let asm = "\t.text\nf:\n\t.cfi_startproc\n\timull\t%edi, %edi\n\tmovl\t%edi, %eax\n\tretq\n\t.\
-               size\tf, .-f\n";
+    let asm = "\t.text\nf:\n\t.cfi_startproc\n\timull\t%edi, %edi\n\tmovl\t%edi, \
+               %eax\n\tretq\n\t.size\tf, .-f\n";
     let code = |line, call| LineOrigin {
         line,
         call,
@@ -195,13 +195,30 @@ fn back_end_stages_link_line_by_line() {
     let asm = links(Stage::Asm, &compilation, source, Unfolded::default());
     assert!(asm.is_exact() && asm.has_origins());
     assert_eq!(asm.outputs_for(2), [4, 6]);
-    assert_eq!(asm.sources_for(2), [1, 2, 3], "the label stands for the function");
-    assert_eq!(asm.sources_for(7), [1, 2, 3], "and so does the end directive");
+    assert_eq!(
+        asm.sources_for(2),
+        [1, 2, 3],
+        "the label stands for the function"
+    );
+    assert_eq!(
+        asm.sources_for(7),
+        [1, 2, 3],
+        "and so does the end directive"
+    );
     assert_eq!(asm.sources_for(4), [2]);
     assert_eq!(asm.sources_for(5), Vec::<usize>::new());
     assert_eq!(asm.unclaimed().collect::<Vec<_>>(), [5]);
-    let machine = links(Stage::MachineCode, &compilation, source, Unfolded::default());
-    assert_eq!(machine.sources_for(4), [2], "the last instruction keeps its line");
+    let machine = links(
+        Stage::MachineCode,
+        &compilation,
+        source,
+        Unfolded::default(),
+    );
+    assert_eq!(
+        machine.sources_for(4),
+        [2],
+        "the last instruction keeps its line"
+    );
     assert_eq!(machine.sources_for(1), [1, 2, 3]);
     assert_eq!(machine.outputs_for(2), [2, 4]);
 }
@@ -223,7 +240,18 @@ fn inlined_copies_link_to_their_line_and_their_call() {
              v1\n}\n"
                 .to_owned(),
         ),
-        ir_lines: vec![none, none, code(2, 0), code(2, 0), none, none, none, code(2, 5), code(5, 0), none],
+        ir_lines: vec![
+            none,
+            none,
+            code(2, 0),
+            code(2, 0),
+            none,
+            none,
+            none,
+            code(2, 5),
+            code(5, 0),
+            none,
+        ],
         functions: vec![
             FunctionLines {
                 name: "s".into(),
@@ -241,11 +269,23 @@ fn inlined_copies_link_to_their_line_and_their_call() {
         ..Compilation::default()
     };
     let ir = links(Stage::Ir, &compilation, source, Unfolded::default());
-    assert_eq!(ir.outputs_for(2), [3, 4, 8], "the line, in place and inlined");
-    assert_eq!(ir.outputs_for(5), [8, 9], "the call, with the copy made for it");
+    assert_eq!(
+        ir.outputs_for(2),
+        [3, 4, 8],
+        "the line, in place and inlined"
+    );
+    assert_eq!(
+        ir.outputs_for(5),
+        [8, 9],
+        "the call, with the copy made for it"
+    );
     assert_eq!(ir.sources_for(8), [2], "the copy's own line");
     assert_eq!(ir.origin(8).call, 5);
-    assert_eq!(ir.first_output_for(5), Some(9), "scroll to the call's own code");
+    assert_eq!(
+        ir.first_output_for(5),
+        Some(9),
+        "scroll to the call's own code"
+    );
 }
 
 /// `f` in bcc IR, opening with its target lines.
@@ -423,7 +463,10 @@ fn precomputed_llvm_lines_match_their_ir() {
             for (text, origin) in llvm.lines().zip(&origins) {
                 let instruction = text.starts_with("  ") && !text.trim_start().starts_with(';');
                 assert_eq!(origin.code, instruction, "{stem}: {text}");
-                assert!(origin.line <= lines && origin.call <= lines, "{stem}: {text}");
+                assert!(
+                    origin.line <= lines && origin.call <= lines,
+                    "{stem}: {text}"
+                );
             }
             assert!(origins.iter().any(|origin| origin.line != 0), "{stem}");
         }

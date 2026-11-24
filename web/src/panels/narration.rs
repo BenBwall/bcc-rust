@@ -943,10 +943,7 @@ fn flow_groups(flow: &[FlowPart], labels: &[(String, String)]) -> AnyView {
 /// One chip of the value flow; an object's takes the tape's label for it
 /// (`x #2`).
 fn chip(part: &FlowPart, labels: &[(String, String)]) -> AnyView {
-    let colour = part
-        .object
-        .as_deref()
-        .map_or_default(palette::class);
+    let colour = part.object.as_deref().map_or_default(palette::class);
     let role = part.role.clone();
     let text = labels
         .iter()

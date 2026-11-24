@@ -437,7 +437,8 @@ impl Origins {
         let origin = links.origin(line);
         Self {
             call: (origin.call != 0).then_some(origin.call),
-            unclaimed: (origin.code && origin.line == 0).then(|| unclaimed_reason(stage, optimized)),
+            unclaimed: (origin.code && origin.line == 0)
+                .then(|| unclaimed_reason(stage, optimized)),
             whole_function: links.has_origins()
                 && !origin.code
                 && !links.sources_for(line).is_empty(),
@@ -490,13 +491,16 @@ fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Orig
     };
     match (side, linked.is_empty(), exact) {
         | (Side::Source, true, _) if origins.removed => format!(
-            "Source line {line} has no code left in the {name} at -O2: the optimizer folded it away \
-             or merged it into another line's code."
+            "Source line {line} has no code left in the {name} at -O2: the optimizer folded it \
+             away or merged it into another line's code."
         ),
         | (Side::Source, true, _) => format!("Nothing in the {name} came from source line {line}."),
         | (Side::Source, false, true) => {
             let parts = [
-                (origins.inlined_here, "the inlined body of the function it calls"),
+                (
+                    origins.inlined_here,
+                    "the inlined body of the function it calls",
+                ),
                 (origins.copies, "copies inlined into a caller"),
             ];
             let notes: Vec<String> = parts
@@ -529,9 +533,8 @@ fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Orig
         | (Side::Output, false, true) => match origins.call {
             // The callee's own line can equal the call's (a header's function,
             // or a callee written on the caller's line), so no file is named.
-            | Some(call) if linked == [call] => format!(
-                "{this} came from a function inlined for the call on source line {call}."
-            ),
+            | Some(call) if linked == [call] =>
+                format!("{this} came from a function inlined for the call on source line {call}."),
             | Some(call) =>
                 format!("{this} came from source {lines}, inlined for the call on line {call}."),
             | None if origins.whole_function =>
@@ -586,26 +589,41 @@ mod tests {
 
         // The keyboard alone.
         pointing.cursor(Side::Source, 4);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (4, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (4, 0)
+        );
 
         // The pointer moves over the output: it wins, and the source's
         // cursor no longer marks anything.
         pointing.hover(Side::Output, 9);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (0, 9));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (0, 9)
+        );
 
         // The arrow keys move the cursor under the resting pointer.
         pointing.cursor(Side::Source, 5);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (5, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (5, 0)
+        );
 
         // The pointer moves again, then leaves: the cursor shows again.
         pointing.hover(Side::Output, 10);
         assert_eq!(pointing.line(Side::Output), 10);
         pointing.hover(Side::Output, 0);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (5, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (5, 0)
+        );
 
         // The focus leaves the editors.
         pointing.cursor(Side::Source, 0);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (0, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (0, 0)
+        );
 
         // The output's editor goes away under the pointer.
         pointing.hover(Side::Output, 3);
@@ -716,17 +734,23 @@ mod tests {
              move a value or to reach the next block."
         );
         assert_eq!(
-            said(Side::Source, 8, &[], Origins {
-                removed: true,
-                ..none
-            }),
-            "Source line 8 has no code left in the x86-64 assembly at -O2: the optimizer folded it \
-             away or merged it into another line's code."
+            said(
+                Side::Source,
+                8,
+                &[],
+                Origins {
+                    removed: true,
+                    ..none
+                }
+            ),
+            "Source line 8 has no code left in the x86-64 assembly at -O2: the optimizer folded \
+             it away or merged it into another line's code."
         );
         let call = Some(8);
         assert_eq!(
             said(Side::Output, 14, &[3], Origins { call, ..none }),
-            "Line 14 of the x86-64 assembly came from source line 3, inlined for the call on line 8."
+            "Line 14 of the x86-64 assembly came from source line 3, inlined for the call on line \
+             8."
         );
         assert_eq!(
             said(Side::Output, 14, &[8], Origins { call, ..none }),
@@ -734,26 +758,38 @@ mod tests {
              line 8."
         );
         assert_eq!(
-            said(Side::Source, 3, &[4, 5, 14, 15], Origins {
-                copies: 2,
-                ..none
-            }),
-            "Source line 3 became lines 4 to 5 and 14 to 15 of the x86-64 assembly: 2 of them copies \
-             inlined into a caller."
+            said(
+                Side::Source,
+                3,
+                &[4, 5, 14, 15],
+                Origins { copies: 2, ..none }
+            ),
+            "Source line 3 became lines 4 to 5 and 14 to 15 of the x86-64 assembly: 2 of them \
+             copies inlined into a caller."
         );
         assert_eq!(
-            said(Side::Source, 8, &[14, 15], Origins {
-                inlined_here: 2,
-                ..none
-            }),
+            said(
+                Side::Source,
+                8,
+                &[14, 15],
+                Origins {
+                    inlined_here: 2,
+                    ..none
+                }
+            ),
             "Source line 8 became lines 14 to 15 of the x86-64 assembly: the inlined body of the \
              function it calls."
         );
         assert_eq!(
-            said(Side::Output, 1, &[2, 3, 4], Origins {
-                whole_function: true,
-                ..none
-            }),
+            said(
+                Side::Output,
+                1,
+                &[2, 3, 4],
+                Origins {
+                    whole_function: true,
+                    ..none
+                }
+            ),
             "Line 1 of the x86-64 assembly stands for the whole function, source lines 2 to 4."
         );
     }

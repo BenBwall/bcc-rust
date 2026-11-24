@@ -1174,9 +1174,7 @@ mod tests {
                 // in bcc's C library take millions) runs to the end at
                 // once, bounded by the stepper's own step limit.
                 if steps == 200_000 {
-                    snapshot = worker
-                        .control(WasmControl::Run(WasmRun::Continue))
-                        .unwrap();
+                    snapshot = worker.control(WasmControl::Run(WasmRun::Continue)).unwrap();
                     break;
                 }
                 snapshot = worker.control(WasmControl::Run(WasmRun::Step)).unwrap();

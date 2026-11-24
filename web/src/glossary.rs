@@ -372,7 +372,11 @@ pub static TERMS: [Term; 62] = [
     Term {
         id:         "modulo-reduction",
         name:       "Reduction modulo 2^N",
-        phrases:    &["reduced modulo", "reduces it modulo", "reduces the value modulo"],
+        phrases:    &[
+            "reduced modulo",
+            "reduces it modulo",
+            "reduces the value modulo",
+        ],
         definition: "What an unsigned type does with a value it cannot hold: it adds or subtracts \
                      2^N, one more than its largest value, until the value fits, so -1 becomes \
                      the largest value. This is defined, unlike signed overflow.",
@@ -518,9 +522,9 @@ pub static TERMS: [Term; 62] = [
         id:         "enumeration-constant",
         name:       "Enumeration constant",
         phrases:    &["enumeration constant", "enumeration constants"],
-        definition: "A name an enumeration declares for an int value, such as RED in enum color \
-                     { RED, GREEN }. It is a constant, not an object: it takes no storage, and \
-                     the compiler puts its value wherever the name appears.",
+        definition: "A name an enumeration declares for an int value, such as RED in enum color { \
+                     RED, GREEN }. It is a constant, not an object: it takes no storage, and the \
+                     compiler puts its value wherever the name appears.",
         clause:     "6.4.4.3p2",
         page:       71,
     },
@@ -550,9 +554,8 @@ pub static TERMS: [Term; 62] = [
         name:       "goto",
         phrases:    &["goto"],
         definition: "A statement, goto name;, that jumps to the statement labeled name: anywhere \
-                     in the same function, earlier or later. Leaving a block by the jump ends \
-                     its objects' lifetimes; jumping into one begins them, but runs no \
-                     initializer.",
+                     in the same function, earlier or later. Leaving a block by the jump ends its \
+                     objects' lifetimes; jumping into one begins them, but runs no initializer.",
         clause:     "6.8.6.1p2",
         page:       149,
     },
@@ -561,8 +564,8 @@ pub static TERMS: [Term; 62] = [
         name:       "continue",
         phrases:    &["continue statement", "continue"],
         definition: "A statement, continue;, that ends the current pass through a loop's body: a \
-                     while or do statement tests its condition next, and a for statement runs \
-                     its third clause first. Unlike break, it does not leave the loop.",
+                     while or do statement tests its condition next, and a for statement runs its \
+                     third clause first. Unlike break, it does not leave the loop.",
         clause:     "6.8.6.2p2",
         page:       150,
     },
@@ -729,11 +732,11 @@ pub static COMPILER_TERMS: [CompilerTerm; 15] = [
     CompilerTerm {
         id:         "target-triple",
         name:       "Target triple",
-        definition: "The name of the machine a compiler makes code for, in parts joined by dashes: \
-                     the processor, the vendor, the operating system and, often, the environment. \
-                     x86_64-unknown-linux-gnu is the x86-64 processor, no vendor in particular, \
-                     Linux and the GNU environment. bcc IR and LLVM IR name it on their first \
-                     lines.",
+        definition: "The name of the machine a compiler makes code for, in parts joined by \
+                     dashes: the processor, the vendor, the operating system and, often, the \
+                     environment. x86_64-unknown-linux-gnu is the x86-64 processor, no vendor in \
+                     particular, Linux and the GNU environment. bcc IR and LLVM IR name it on \
+                     their first lines.",
         clause:     None,
         stage:      Stage::Ir,
     },
@@ -742,8 +745,8 @@ pub static COMPILER_TERMS: [CompilerTerm; 15] = [
         name:       "Data layout",
         definition: "A line of bcc IR and LLVM IR that records how the target stores data, in \
                      entries joined by dashes: e for little-endian (a value's least significant \
-                     byte stored first), i64:64 for 64-bit integers aligned to 64 bits, S128 for a \
-                     stack aligned to 128 bits, and the sizes and alignments of other types.",
+                     byte stored first), i64:64 for 64-bit integers aligned to 64 bits, S128 for \
+                     a stack aligned to 128 bits, and the sizes and alignments of other types.",
         clause:     None,
         stage:      Stage::Ir,
     },

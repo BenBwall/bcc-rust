@@ -271,9 +271,9 @@ impl Compilation {
                     "bcc could not find the header {include}{at}. Your browser has no C library \
                      of its own, so bcc finds only the headers it brings: the freestanding ones, \
                      such as <limits.h>, <stdint.h> and <stddef.h>, and those of its own small C \
-                     library, such as <stdio.h>, <stdlib.h>, <string.h>, <ctype.h> and \
-                     <math.h>. A header outside that set, such as <pthread.h> or another \
-                     library's, needs the command-line bcc and a full C library."
+                     library, such as <stdio.h>, <stdlib.h>, <string.h>, <ctype.h> and <math.h>. \
+                     A header outside that set, such as <pthread.h> or another library's, needs \
+                     the command-line bcc and a full C library."
                 ),
             ),
             | _ => (
@@ -494,8 +494,8 @@ impl Stage {
                 "First, the file's bytes become characters, and lines ending in a backslash are \
                  joined: these logical lines go to phase 3.",
             | Self::PpTokens =>
-                "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now \
-                 a space, for the preprocessor.",
+                "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now a \
+                 space, for the preprocessor.",
             | Self::Preprocessor =>
                 "The preprocessor runs the directives and expands the macros, leaving one \
                  translation unit's preprocessing tokens, directives gone, for phases 5 to 7.",
@@ -538,25 +538,26 @@ impl Stage {
     pub fn link_note(self) -> &'static str {
         match self {
             | Self::Ir =>
-                "Point at a source line and the colored lines are the instructions lowering made for \
-                 it, and the reverse; -O2 moves, merges and deletes them, so a line can scatter, reappear \
-                 inlined in its callers, or vanish.",
+                "Point at a source line and the colored lines are the instructions lowering made \
+                 for it, and the reverse; -O2 moves, merges and deletes them, so a line can \
+                 scatter, reappear inlined in its callers, or vanish.",
             | Self::IrAbi =>
-                "Point at a source line and the colored lines are its instructions once its calls follow \
-                 the ABI, and the reverse; -O2 ran before this stage, so a line can scatter, reappear \
-                 inlined in its callers, or vanish.",
+                "Point at a source line and the colored lines are its instructions once its calls \
+                 follow the ABI, and the reverse; -O2 ran before this stage, so a line can \
+                 scatter, reappear inlined in its callers, or vanish.",
             | Self::Llvm =>
-                "Point at a source line and the colored lines are the LLVM instructions bcc wrote for it, \
-                 from the !dbg locations -g records, and the reverse; -O2 runs bcc's optimizer first, so a \
-                 line can scatter, reappear inlined in its callers, or vanish.",
+                "Point at a source line and the colored lines are the LLVM instructions bcc wrote \
+                 for it, from the !dbg locations -g records, and the reverse; -O2 runs bcc's \
+                 optimizer first, so a line can scatter, reappear inlined in its callers, or \
+                 vanish.",
             | Self::Asm =>
-                "Point at a source line and the colored lines are the x86-64 instructions selected for it, \
-                 and the reverse; at -O2 a line's instructions scatter and merge with their neighbours', and \
-                 a line can reappear inlined in its callers or vanish.",
+                "Point at a source line and the colored lines are the x86-64 instructions selected \
+                 for it, and the reverse; at -O2 a line's instructions scatter and merge with \
+                 their neighbours', and a line can reappear inlined in its callers or vanish.",
             | Self::MachineCode =>
-                "Point at a source line and the colored lines are the bytes its instructions encode to, and \
-                 the reverse; at -O2 a line's bytes scatter and merge with their neighbours', and a line can \
-                 reappear inlined in its callers or vanish.",
+                "Point at a source line and the colored lines are the bytes its instructions \
+                 encode to, and the reverse; at -O2 a line's bytes scatter and merge with their \
+                 neighbours', and a line can reappear inlined in its callers or vanish.",
             | Self::Lines
             | Self::PpTokens
             | Self::Preprocessor
@@ -733,9 +734,9 @@ impl Stage {
             | Self::IrAbi =>
                 "Decided here: which arguments travel in registers, which in memory, and how \
                  values are returned, by the System V ABI that x86-64 Linux follows. Ints and \
-                 pointers already fit a register, so for them little changes. Structures are \
-                 where this stage earns its keep: the IR passes one as ptr aggregate(…), a copy \
-                 the caller made, and returns one by storing it through ptr result(…). Lowering \
+                 pointers already fit a register, so for them little changes. Structures are where \
+                 this stage earns its keep: the IR passes one as ptr aggregate(…), a copy the \
+                 caller made, and returns one by storing it through ptr result(…). Lowering \
                  decides how each really travels. In the structs lesson an 8-byte struct point \
                  goes as one i64, in a register, and registers(i64, align 4) on the first \
                  parameter says the result comes back in one 64-bit register: that parameter is \
@@ -752,11 +753,11 @@ impl Stage {
                  this. The syntax is AT&T's, which GCC and Clang print by default: % marks a \
                  register, $ a constant, and a register in parentheses the memory at the address \
                  it holds, and the destination comes last, so addl $1, %eax adds 1 to eax. Most \
-                 instructions that move or compute integers end in a letter for the operand \
-                 size (movl, addq: b, w, l and q for 8, 16, 32 and 64 bits); jumps such as jl \
-                 and floating-point instructions such as movsd are named differently. Arguments \
-                 arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
-                 starting with a dot are directives for the assembler, not instructions.",
+                 instructions that move or compute integers end in a letter for the operand size \
+                 (movl, addq: b, w, l and q for 8, 16, 32 and 64 bits); jumps such as jl and \
+                 floating-point instructions such as movsd are named differently. Arguments arrive \
+                 in %rdi, %rsi, …, and an int result leaves in %eax. Lines starting with a dot are \
+                 directives for the assembler, not instructions.",
             | Self::MachineCode =>
                 "Decided here: each instruction's exact encoding and length. Each line is the \
                  instruction's offset from the start of its function, then its encoding, both in \
@@ -1389,7 +1390,9 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, unfolded: Un
     } else {
         Vec::new()
     };
-    exact.map_or_else(Links::default, |exact| Links::exact(exact, ranges, Vec::new()))
+    exact.map_or_else(Links::default, |exact| {
+        Links::exact(exact, ranges, Vec::new())
+    })
 }
 
 /// Each function's source lines and lines in `output`, `stage`'s text as
@@ -1441,10 +1444,7 @@ fn function_lines(
 /// none of whose lines kept a source line links every line to the whole
 /// function. `None` when no line has a source line (a program of declarations,
 /// or a stage with no table), so the stage links per function and says so.
-fn origin_links(
-    origins: &[LineOrigin],
-    functions: &FunctionSpans,
-) -> Option<LineLinks> {
+fn origin_links(origins: &[LineOrigin], functions: &FunctionSpans) -> Option<LineLinks> {
     if origins.iter().all(|origin| origin.line == 0) {
         return None;
     }

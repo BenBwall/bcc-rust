@@ -248,7 +248,9 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
             })),
         ) => vec![Access {
             object: target,
-            cell:   (offset != 0).then(|| usize::try_from(offset).ok()).flatten(),
+            cell:   (offset != 0)
+                .then(|| usize::try_from(offset).ok())
+                .flatten(),
             kind:   kind.to_owned(),
         }],
         | _ => Vec::new(),
@@ -361,7 +363,12 @@ impl Chips<'_, '_> {
     /// `total += step`: the object, its old value, the operator and the
     /// right operand, and what it holds now.
     fn compound(&self, event: &Event, operator: Option<&str>) -> Vec<Option<FlowPart>> {
-        let operand = |index: usize| event.operands.get(index).map(|operand| self.operand(operand));
+        let operand = |index: usize| {
+            event
+                .operands
+                .get(index)
+                .map(|operand| self.operand(operand))
+        };
         vec![
             operand(0),
             Some(arrow("was")),
@@ -391,7 +398,10 @@ impl Chips<'_, '_> {
         vec![
             condition.map(|operand| self.operand(operand)),
             Some(arrow("counts as")),
-            Some(part("label", if truth(condition) { "true" } else { "false" })),
+            Some(part(
+                "label",
+                if truth(condition) { "true" } else { "false" },
+            )),
         ]
     }
 
@@ -450,8 +460,11 @@ impl Chips<'_, '_> {
             | (false, true) => "ends",
             | (false, false) => "end",
         };
-        let mut parts: Vec<Option<FlowPart>> =
-            event.objects.iter().map(|&id| Some(self.whole(id))).collect();
+        let mut parts: Vec<Option<FlowPart>> = event
+            .objects
+            .iter()
+            .map(|&id| Some(self.whole(id)))
+            .collect();
         parts.push(Some(arrow(verb)));
         if entry {
             parts.push(Some(part("value", "?")));
@@ -463,7 +476,10 @@ impl Chips<'_, '_> {
     fn decay(&self, event: &Event) -> Vec<Option<FlowPart>> {
         let array = event.objects.first().map(|&id| self.whole(id));
         // A const array decays to a pointer to const elements.
-        let ty = array.as_ref().and_then(|chip| chip.ty.as_deref()).unwrap_or("int");
+        let ty = array
+            .as_ref()
+            .and_then(|chip| chip.ty.as_deref())
+            .unwrap_or("int");
         let element = ty.split('[').next().unwrap_or("int").trim();
         let pointer = format!("{element} *");
         vec![
@@ -500,10 +516,7 @@ impl Chips<'_, '_> {
             }
             parts.push(Some(self.operand(argument)));
         }
-        parts.extend([
-            Some(arrow("writes")),
-            Some(part("value", &quoted(written))),
-        ]);
+        parts.extend([Some(arrow("writes")), Some(part("value", &quoted(written)))]);
         parts
     }
 
@@ -526,8 +539,10 @@ impl Chips<'_, '_> {
 
     fn operand(&self, operand: &Operand) -> FlowPart {
         match operand {
-            | Operand::Value(value) =>
-                part("value", &super::value_text(value, self.objects, self.program)),
+            | Operand::Value(value) => part(
+                "value",
+                &super::value_text(value, self.objects, self.program),
+            ),
             | &Operand::Address {
                 target,
                 offset,
