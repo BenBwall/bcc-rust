@@ -681,8 +681,10 @@ aligned, except within the prolog"). Every call is made at that alignment.
   a System V function that takes its frame address (`frame_address`, which
   `__builtin_frame_address` at any level, `__builtin_return_address` above
   level 0 and `__builtin_setjmp` lower to) keeps one too, at every
-  optimization level, as GCC's and Clang's do (`isel::select`); its callers
-  keep theirs only under the option. On System V it is
+  optimization level (`isel::select`); its callers keep theirs only under
+  the option. Clang keeps one for all three. GCC 14 (and 13.3) at `-O2`
+  keeps one for the first two, but for `__builtin_setjmp` only pushes
+  `%rbp`, with no `movq %rsp, %rbp` to link it into the chain. On System V it is
   GCC's and Clang's: `pushq %rbp; movq %rsp, %rbp` first
   (`.cfi_def_cfa_register %rbp`), then the other pushes and the
   allocation, so `%rbp` points at the caller's `%rbp` with the return
