@@ -1119,9 +1119,6 @@ struct State {
     /// The options of code generation bcc does not implement, as given,
     /// and why, which only a step that compiles refuses (`own_options`).
     code_options:            Vec<(String, &'static str)>,
-    /// The options of precompiled headers, as given, which only a step
-    /// that does more than preprocess refuses.
-    header_options:          Vec<String>,
     /// clang-cl's `/C`.
     keep_comments:           Option<String>,
     /// The letter of a clang-cl `/O` option that sets the level: the index
@@ -1223,7 +1220,6 @@ impl Default for State {
             vector_length:           None,
             just_my_code:            false,
             code_options:            Vec::new(),
-            header_options:          Vec::new(),
             keep_comments:           None,
             level_letter:            None,
             inlining:                ClangInlining::default(),

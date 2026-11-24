@@ -985,7 +985,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
 | `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect (clang-cl's `/fp:` options set the math functions' `errno`, see "clang-cl") |
-| `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
+| `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/Yc`, `/Yu` (no `.pch` is written or read; the source is compiled as it is), clang-cl's `/JMC` with debug information, `/d1*`, `/d2*` | accepted with a warning |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
 **Defaults.** The `x86_64-pc-windows-msvc` target with every Microsoft
@@ -1473,15 +1473,21 @@ one that changes nothing bcc writes is accepted without a word (`/FC`,
 linker for an image without a time stamp (bcc's objects carry none in any
 case), `/showFilenames` prints each source's name to stdout as it is
 compiled, and `/vlen=256` and `/JMC` without debug information warn as
-clang-cl does. The rest are refused, status 1, where they would change what
-the step writes: `/winsysroot`, `/vctoolsdir`, `/winsdkdir` and
-`/diasdkdir`, whose Visual Studio installation clang-cl would search for
-headers and libraries (set `INCLUDE` and `LIB`, or use `/imsvc`), `/arm64EC`,
-`/kernel`, `/fsanitize=address`, `/C`, `/pathmap:`, `/showIncludes:user` and
-`/JMC` with debug information, and, only where a step compiles, `/hotpatch`,
-`/GA`, `/Gregcall`, `/QIntel-jcc-erratum` and `/funcoverride:`, and the
-precompiled header's `/Yc` and `/Yu`. An option of clang-cl's that bcc does
-not know is refused too, never ignored. Like
+clang-cl does.
+The precompiled header's `/Yc` and `/Yu`, and `/JMC` with debug information
+where a step compiles, change only how fast a build runs or how a debugger
+steps: bcc warns that it ignores them (`'/Ycpch.h' is ignored: bcc does not
+build precompiled headers`), which `/WX` does not make an error, as for
+`/RTC1`, and compiles each source as it is, writing no `.pch`; CMake's
+`target_precompile_headers` and MSBuild's Debug line build. The rest are
+refused, status 1, where they would change what the step writes:
+`/winsysroot`, `/vctoolsdir`, `/winsdkdir` and `/diasdkdir`, whose Visual
+Studio installation clang-cl would search for headers and libraries (set
+`INCLUDE` and `LIB`, or use `/imsvc`), `/arm64EC`, `/kernel`,
+`/fsanitize=address`, `/C`, `/pathmap:` and `/showIncludes:user`, and, only
+where a step compiles, `/hotpatch`, `/GA`, `/Gregcall`,
+`/QIntel-jcc-erratum` and `/funcoverride:`. An option of clang-cl's that
+bcc does not know is refused too, never ignored. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed. Its
 `/fp:fast` gives up the math functions' `errno`, as clang-cl's

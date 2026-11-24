@@ -15,18 +15,21 @@
 //! - **Applied.** `/FA` with any letters writes the listing, `/Brepro` asks the
 //!   linker for a reproducible image (bcc's objects carry no time stamp either
 //!   way), `/showFilenames` prints each source's name as it is compiled, and
-//!   `/vlen` and `/JMC` warn as clang-cl does where they do nothing.
+//!   `/vlen`, and `/JMC` without debug information, warn as clang-cl does where
+//!   they do nothing.
+//! - **Ignored.** The precompiled header's (`/Yc`, `/Yu`) and `/JMC` with debug
+//!   information change only how fast a build runs or how a debugger steps,
+//!   never what the program does: bcc warns that it ignores them, as it does
+//!   `/RTC1`, and compiles the source as it is.
 //! - **Refused.** The rest change clang-cl's object, preprocessed text or link
 //!   in ways bcc does not implement, and stop the command line with status 1:
 //!   the directories of a Visual Studio installation (`/winsysroot`), whose
 //!   headers and libraries clang-cl would search, among them. Those that only
-//!   change the code (`/hotpatch`) are refused only where a step compiles, and
-//!   the precompiled header's (`/Yc`, `/Yu`) where it does more than
-//!   preprocess.
+//!   change the code (`/hotpatch`) are refused only where a step compiles.
 //!
-//! Of these options, the `cl` personality reads only the refused ones that
-//! `cl.exe` itself takes without a word, as bcc cannot do what they ask;
-//! `cl.exe` reports the others itself, as unknown or as ignored.
+//! Of these options, the `cl` personality reads only those that `cl.exe`
+//! itself takes without a word ([`CL_READ`]); `cl.exe` reports the others
+//! itself, as unknown or as ignored.
 //!
 //! The kinds and names are those of the pinned Clang's option table
 //! (`known::clang_cl_entry`); its behavior is clang-cl 23.1.5's
@@ -58,7 +61,7 @@ impl State {
             return false;
         };
         let clang_cl = invocation.personality.is_clang_cl();
-        if !clang_cl && !CL_REFUSED.contains(&name) {
+        if !clang_cl && !CL_READ.contains(&name) {
             return false;
         }
         let value = &option[name.len()..];
@@ -133,8 +136,9 @@ impl State {
             // tune for, which bcc's optimizer does not consult, as its
             // Clang personality ignores `-f[no-]vectorize` and `-mtune=`;
             // C++'s member-pointer layouts; the switches clang-cl ignores
-            // (`/Zm`, `/Zo`, `/Qgather-`, `/Qscatter-`, `/cgthreads`,
-            // `/errorReport`); and the default `/kernel-`.
+            // (`/Zm`, `/Zo`, `/cgthreads`, `/errorReport`); `/Qgather-` and
+            // `/Qscatter-`, which keep the code from AVX gathers and
+            // scatters, which bcc never emits; and the default `/kernel-`.
             | "FC" | "GX" | "GX-" | "Qgather-" | "Qscatter-" | "Qvec" | "Qvec-" | "Zm" | "Zo"
             | "Zo-" | "cgthreads" | "errorReport" | "kernel-" | "tune:" | "vmb" | "vmg"
             // The hash of each file in the CodeView debug information; bcc
@@ -210,9 +214,11 @@ impl State {
                 text.to_owned(),
                 "bcc does not make functions loader-replaceable",
             )),
-            // A precompiled header, which preprocessing neither writes nor
-            // reads.
-            | "Yc" | "Yu" => self.header_options.push(text.to_owned()),
+            // A precompiled header only saves the time of compiling the
+            // headers before it again: the source still includes them, or
+            // `/FI` does, so bcc compiles them as written.
+            | "Yc" => super::ignored(invocation, option, "bcc does not build precompiled headers"),
+            | "Yu" => super::ignored(invocation, option, "bcc does not use precompiled headers"),
             | "kernel" =>
                 self.own_refused(invocation, text, "bcc does not compile for kernel mode"),
             | "showIncludes:user" => self.own_refused(
@@ -287,13 +293,13 @@ impl State {
     /// Checks clang-cl's own options that depend on the whole command line,
     /// once it is read: `/C` keeps comments in preprocessed text, which bcc
     /// does not, and is an error without `/E`, `/EP` or `/P`; `/JMC` with
-    /// debug information (`debug_information`) instruments a compiled
-    /// function, which bcc refuses, and otherwise warns, as `/vlen=256` and
-    /// `/vlen=512` do without AVX-512 (which bcc refuses), once for each
+    /// debug information (`debug_information`) adds calls that only a
+    /// debugger's stepping reads, which bcc ignores with a warning where a
+    /// step compiles, and otherwise warns as clang-cl does, as `/vlen=256`
+    /// and `/vlen=512` do without AVX-512 (which bcc refuses), once for each
     /// source; `/showFilenames` is unused where nothing is compiled. The
     /// options of code generation bcc does not implement are refused where
-    /// a step compiles, and those of precompiled headers where it does more
-    /// than preprocess.
+    /// a step compiles.
     pub(super) fn check_own_options(&mut self, invocation: &Invocation, debug_information: bool) {
         if let Some(text) = self.keep_comments.take() {
             if self.preprocess.is_some() {
@@ -319,9 +325,9 @@ impl State {
                         .into(),
                 );
             } else if compiles {
-                self.own_refused(
+                super::ignored(
                     invocation,
-                    "/JMC",
+                    "JMC",
                     "bcc does not instrument functions for Just My Code debugging",
                 );
             }
@@ -329,15 +335,6 @@ impl State {
         for (text, why) in std::mem::take(&mut self.code_options) {
             if compiles {
                 self.own_refused(invocation, &text, why);
-            }
-        }
-        for text in std::mem::take(&mut self.header_options) {
-            if self.preprocess.is_none() {
-                self.own_refused(
-                    invocation,
-                    &text,
-                    "bcc does not build or use precompiled headers",
-                );
             }
         }
         if let Some(text) = self.vector_length.take() {
@@ -376,9 +373,11 @@ impl State {
     }
 }
 
-/// The own options of clang-cl's that the `cl` personality refuses too:
-/// `cl.exe` takes each without a word, and each changes its output.
-const CL_REFUSED: &[&str] = &[
+/// The own options of clang-cl's that the `cl` personality reads too, as
+/// `cl.exe` takes each without a word: the precompiled header's, which bcc
+/// ignores with a warning, and the rest, which change `cl.exe`'s output in
+/// ways bcc does not implement.
+const CL_READ: &[&str] = &[
     "GA",
     "QIntel-jcc-erratum",
     "Yc",

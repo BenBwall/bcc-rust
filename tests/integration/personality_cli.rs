@@ -8991,9 +8991,11 @@ mod tests {
     /// about one no job uses (silenced by `-Qunused-arguments`, bare or after
     /// `/clang:`, and an error under `/WX`), accepts silently one that changes
     /// nothing bcc writes, does what clang-cl does with `/FA`,
-    /// `/showFilenames`, `/vlen` and `/JMC`, and refuses the rest with
+    /// `/showFilenames`, `/vlen` and `/JMC`, ignores with a warning `/Yc`,
+    /// `/Yu` and `/JMC` with debug information, which change only how fast
+    /// a build runs or how a debugger steps, and refuses the rest with
     /// status 1 where they would change the step's output. Each row but the
-    /// refusals is clang-cl 23.1.5's stderr and status.
+    /// ignored and refused ones is clang-cl 23.1.5's stderr and status.
     #[test]
     fn clang_cl_reads_its_own_options_as_clang_cl_does() {
         let directory = Directory::new();
@@ -9014,6 +9016,12 @@ mod tests {
                    that enable debugger's stepping function; option ignored [-Woption-ignored]\n";
         let vlen = "clang-cl: warning: invalid argument '/vlen=256' not allowed with '/arch:SSE2' \
                     [-Woption-ignored]\n";
+        let ignored = |option: &str, why: &str| {
+            format!("clang-cl: warning: '/{option}' is ignored: bcc does not {why}\n")
+        };
+        let built = ignored("Yc", "build precompiled headers");
+        let used = |option: &str| ignored(option, "use precompiled headers");
+        let stepping = ignored("JMC", "instrument functions for Just My Code debugging");
         let rows: &[(&[&str], String, i32)] = &[
             (&["/c", "a.c", "/Bt"], unused("/Bt"), 0),
             (&["/c", "a.c", "-u"], unused("-u"), 0),
@@ -9087,6 +9095,15 @@ mod tests {
             (&["/c", "a.c", "/vlen=512", "/vlen"], String::new(), 0),
             (&["/c", "a.c", "-JMC"], jmc.into(), 0),
             (&["/c", "a.c", "/JMC", "/JMC-"], String::new(), 0),
+            // `/WX` makes neither ignored option an error, and `/JMC` warns
+            // only where a step compiles.
+            (&["/c", "a.c", "/JMC", "/Z7", "/WX"], stepping.clone(), 0),
+            (&["/c", "a.c", "/Zi", "/JMC"], stepping, 0),
+            (&["/Zs", "a.c", "/Zi", "/JMC"], String::new(), 0),
+            (&["/c", "a.c", "/Yc", "/WX"], built.clone(), 0),
+            (&["/Zs", "a.c", "/Yupch.h"], used("Yupch.h"), 0),
+            (&["/c", "a.c", "-Yu", "/Fpa.pch"], used("Yu"), 0),
+            (&["/P", "a.c", "/Yc"], built.clone(), 0),
             (
                 &["/c", "a.c", "-guard:x"],
                 "clang-cl: error: invalid value 'x' in '-guard:'\n".into(),
@@ -9107,18 +9124,9 @@ mod tests {
                 unused("/showFilenames"),
                 0,
             ),
-            // Options of code generation and precompiled headers change no
-            // preprocessed text.
+            // Options of code generation change no preprocessed text.
             (
-                &[
-                    "/E",
-                    "a.c",
-                    "/hotpatch",
-                    "/GA",
-                    "/QIntel-jcc-erratum",
-                    "/Yc",
-                    "/Yupch.h",
-                ],
+                &["/E", "a.c", "/hotpatch", "/GA", "/QIntel-jcc-erratum"],
                 String::new(),
                 0,
             ),
@@ -9145,12 +9153,9 @@ mod tests {
             &["/c", "a.c", "-GA"],
             &["/c", "a.c", "/Gregcall"],
             &["/c", "a.c", "/QIntel-jcc-erratum"],
-            &["/c", "a.c", "/Yc"],
-            &["/c", "a.c", "/Yupch.h"],
             &["/c", "a.c", "/showIncludes:user"],
             &["/c", "a.c", "/pathmap:a=b"],
             &["/c", "a.c", "/funcoverride:f"],
-            &["/c", "a.c", "/JMC", "/Z7"],
             &["/E", "a.c", "/C"],
             &["/c", "a.c", "-winsysroot", "dir"],
             &["/c", "a.c", "/vctoolsdirdir"],
@@ -9161,7 +9166,6 @@ mod tests {
             let shown = match args[2..] {
                 | ["-winsysroot", "dir"] => "-winsysroot dir",
                 | ["/vctoolsdirdir"] => "/vctoolsdir dir",
-                | ["/JMC", "/Z7"] => "/JMC",
                 | [option, ..] => option,
                 | [] => unreachable!(),
             };
@@ -9181,6 +9185,99 @@ mod tests {
             stderr(&output),
             "cl : Command line error : '/kernel' is not supported: bcc does not compile for \
              kernel mode\n"
+        );
+    }
+
+    /// The precompiled headers that `target_precompile_headers` and Visual
+    /// Studio projects ask for (`/Yc`, `/Yu`, `/Fp`, with the header forced
+    /// by `/FI`) only save time: bcc compiles each source as it is, writes no
+    /// `.pch`, and warns, also under `/WX`. A new Visual Studio project's
+    /// Debug line, which carries `/JMC`, compiles too. Both are as on main,
+    /// where bcc warned that the options were unknown.
+    #[test]
+    fn msvc_drivers_compile_through_precompiled_header_and_debug_lines() {
+        let directory = Directory::new();
+        directory.write("pch.h", "#define ANSWER 42\n");
+        directory.write("pch.c", "/* the precompiled header's source */\n");
+        directory.write("a.c", "int main(void) { return ANSWER - 42; }\n");
+        let lines: &[&[&str]] = &[
+            &[
+                "/c",
+                "/Ycpch.h",
+                "/Fpa.pch",
+                "/FIpch.h",
+                "/WX",
+                "pch.c",
+                "/Fopch.obj",
+            ],
+            &[
+                "/c", "/Yupch.h", "/Fpa.pch", "/FIpch.h", "/WX", "a.c", "/Foa.obj",
+            ],
+            &["/c", "-Yu", "/FIpch.h", "a.c", "/Foa.obj"],
+            &[
+                "/c",
+                "/Zi",
+                "/JMC",
+                "/nologo",
+                "/W3",
+                "/WX-",
+                "/diagnostics:column",
+                "/sdl",
+                "/Od",
+                "/D",
+                "_DEBUG",
+                "/D",
+                "_CONSOLE",
+                "/D",
+                "_UNICODE",
+                "/D",
+                "UNICODE",
+                "/Gm-",
+                "/EHsc",
+                "/RTC1",
+                "/MDd",
+                "/GS",
+                "/fp:precise",
+                "/permissive-",
+                "/Zc:wchar_t",
+                "/Zc:forScope",
+                "/Zc:inline",
+                "/FIpch.h",
+                "/Foa.obj",
+                "/Fdvc143.pdb",
+                "/external:W3",
+                "/Gd",
+                "/TC",
+                "/FC",
+                "/errorReport:prompt",
+                "a.c",
+            ],
+        ];
+        for mode in ["--clang-cl-mode", "--msvc-mode", "--icx-cl-mode"] {
+            for args in lines {
+                let output = directory.bcc(mode, &[&["/nologo"], *args].concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+                let object = args.iter().find_map(|arg| arg.strip_prefix("/Fo")).unwrap();
+                assert!(directory.path(object).is_file(), "{mode} {args:?}");
+                assert!(!directory.path("a.pch").exists(), "{mode} {args:?}");
+                drop(std::fs::remove_file(directory.path(object)));
+            }
+        }
+        let output = directory.bcc(
+            "--msvc-mode",
+            &["/nologo", "/c", "/Ycpch.h", "/WX", "pch.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stdout(&output), "pch.c\n");
+        assert_eq!(
+            stderr(&output),
+            "cl : Command line warning : '/Ycpch.h' is ignored: bcc does not build precompiled \
+             headers\n"
         );
     }
 
