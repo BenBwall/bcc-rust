@@ -8835,6 +8835,15 @@ mod tests {
                 );
                 assert_eq!(output.status.code(), Some(1), "{shown}");
                 assert!(!directory.path("a.obj").exists(), "{shown}");
+                // clang-cl's last OpenMP flag wins: `/openmp-` after it turns
+                // OpenMP off again, and one before it changes nothing.
+                let output = directory.bcc("--clang-cl-mode", &["/c", "a.c", &shown, &default]);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{shown} {default}");
+                std::fs::remove_file(directory.path("a.obj")).unwrap();
+                let output = directory.bcc("--clang-cl-mode", &["/c", "a.c", &default, &shown]);
+                assert_eq!(output.status.code(), Some(1), "{default} {shown}");
+                assert!(!directory.path("a.obj").exists(), "{default} {shown}");
             }
         }
     }

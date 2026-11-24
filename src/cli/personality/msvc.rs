@@ -259,16 +259,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             continue;
         }
         // clang-cl's `/openmp` flags, which `/o` below would otherwise
-        // read: `/openmp-` is the default, and bcc implements no OpenMP for
-        // the others, which define `_OPENMP` and link its runtime.
+        // read: the last one wins, `/openmp-` is the default, and bcc
+        // implements no OpenMP for the others, which define `_OPENMP` and
+        // link its runtime (refused after the loop).
         if clang_cl && matches!(option, "openmp" | "openmp-" | "openmp:experimental") {
-            if option != "openmp-" {
-                state.command_line_error(
-                    invocation,
-                    None,
-                    format_args!("'{text}' is not supported: bcc implements no OpenMP"),
-                );
-            }
+            state.openmp = (option != "openmp-").then(|| text.to_owned());
             continue;
         }
         // clang-cl's `/o`, also `-o`, joined (`-ox.obj`, and `-objectx` too)
@@ -340,6 +335,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
+    state.check_openmp(invocation);
     if state.read_clang_arguments(
         invocation,
         &clang_arguments,
@@ -1046,6 +1042,9 @@ struct Preprocess {
 struct State {
     /// bcc's options shared by every step.
     bcc:                     Vec<OsString>,
+    /// clang-cl's last `/openmp` flag when it asks for OpenMP, which bcc
+    /// refuses; `/openmp-` after it clears it.
+    openmp:                  Option<String>,
     sources:                 Vec<Source>,
     /// Linker options after `/link`, as bcc's link options.
     link:                    Vec<OsString>,
@@ -1130,6 +1129,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             bcc:                     Vec::new(),
+            openmp:                  None,
             sources:                 Vec::new(),
             link:                    Vec::new(),
             linking:                 false,
@@ -1632,6 +1632,19 @@ impl State {
     /// missing input for the linker to the linker, unless its name starts
     /// with `/`, as a mistyped option's does, and suggests the option one
     /// edit away from a missing input's name.
+    /// Refuses clang-cl's last `/openmp` flag if it asks for OpenMP, which
+    /// bcc does not implement; an earlier one that `/openmp-` overrides is
+    /// fine, as clang-cl's last flag wins.
+    fn check_openmp(&mut self, invocation: &Invocation) {
+        if let Some(text) = self.openmp.take() {
+            self.command_line_error(
+                invocation,
+                None,
+                format_args!("'{text}' is not supported: bcc implements no OpenMP"),
+            );
+        }
+    }
+
     fn check_inputs(&mut self, invocation: &Invocation) {
         let clang_cl = invocation.personality.is_clang_cl();
         let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
