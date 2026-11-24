@@ -306,6 +306,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let Operand::Excess(value) = item.operand else {
             return self.convert_value(item, to, source);
         };
+        let value = self.quieted_excess(value);
         let operand = match target {
             | Repr::Void => Operand::Void,
             | Repr::Bool => {
@@ -343,6 +344,43 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
         };
         Ok(Item { operand, ty: to })
+    }
+
+    /// The excess `value` of a `_Float16` or `__bf16` constant about to
+    /// convert to another type. The `f32` holds a signaling NaN of the half
+    /// format exactly, but the conversion to another format quiets it, as
+    /// semantic analysis folds it: GCC folds one whose payload is only the
+    /// `__builtin_nansf16("")` bit to the default quiet NaN
+    /// ([`super::saturation::convert_constant`]), and the other identities
+    /// keep the payload. Every other value is returned unchanged.
+    /// C99: §6.3.1.5 paragraph 1, p. 44; PDF p. 56; §F.3 paragraph 1,
+    /// pp. 445-447; PDF pp. 457-459.
+    pub(super) fn quieted_excess(&mut self, value: Value) -> Value {
+        const QUIET: u128 = 1 << 22;
+        let configuration = self.unit.context.configuration;
+        let quieted = self.draft.float_constant(value).and_then(|bits| {
+            let gcc =
+                configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc;
+            let quieted = if gcc {
+                super::saturation::convert_constant(
+                    bits,
+                    Type::F32,
+                    Type::F32,
+                    configuration.signaling_nans(),
+                )?
+            } else if f32::from_bits(u32::try_from(bits).ok()?).is_nan()
+                && !configuration.signaling_nans()
+            {
+                bits | QUIET
+            } else {
+                bits
+            };
+            (quieted != bits).then_some(quieted)
+        });
+        match quieted {
+            | Some(bits) => self.fconst(Type::F32, bits),
+            | None => value,
+        }
     }
 
     /// The IR type of `_Float16` (`f16`) or `__bf16` (`bf16`), which

@@ -51,6 +51,8 @@ static void dump(const char *name, const void *object, int size,
              __builtin_issignaling(__imag__ fixed));                           \
         dump(#ty " = " #e, &automatic, size,                                   \
              __builtin_issignaling(__real__ automatic));                       \
+        dump(#ty " = " #e, (char *)&automatic + sizeof automatic / 2, size,    \
+             __builtin_issignaling(__imag__ automatic));                       \
     }
 
 struct members {
@@ -117,6 +119,12 @@ int main(void) {
 #ifdef __x86_64__
     S(_Float16, 2, __builtin_nans(""))
     S(_Float16, 2, 1 ? __builtin_nans("0x123") : 0)
+    S(float, 4, __builtin_nansf16(""))
+    S(float, 4, __builtin_nansf16("0x5"))
+    S(float, 4, (float)__builtin_nansf16(""))
+    S(double, 8, __builtin_nansf16(""))
+    S(__bf16, 2, __builtin_nansf16(""))
+    S(_Float16, 2, __builtin_nansf16(""))
 #endif
 #ifdef __SIZEOF_FLOAT128__
     S(__float128, 16, __builtin_nans(""))
@@ -127,6 +135,9 @@ int main(void) {
     C(_Complex double, 8, __builtin_complex(__builtin_nansf(""), 0.0f))
     C(_Complex float, 4, __builtin_complex(0.0, -__builtin_nans("")))
     C(_Complex long double, 10, __builtin_complex(__builtin_nans(""), 1.0))
+#ifdef __x86_64__
+    C(_Complex float, 4, __builtin_nansf16(""))
+#endif
     {
         static struct members fixed = MEMBERS;
         struct members automatic = MEMBERS;

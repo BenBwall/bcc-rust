@@ -1170,10 +1170,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let item = match (item.operand, target) {
             // An excess converts to its own type, or for GCC to the other
             // half type, without rounding.
-            | (Operand::Excess(_), _)
+            | (Operand::Excess(value), _)
                 if self.half(to).is_some()
                     && (self.half_in_float() || self.half(to) == self.half(item.ty)) =>
-                return Ok(Item { ty: to, ..item }),
+            {
+                // GCC's conversion to the other half type quiets a constant
+                // signaling NaN.
+                let operand = if self.half(to) == self.half(item.ty) {
+                    item.operand
+                } else {
+                    Operand::Excess(self.quieted_excess(value))
+                };
+                return Ok(Item { operand, ty: to });
+            },
             | (Operand::Excess(_), _) if self.half_in_float() =>
                 return self.convert_excess(item, to, target, source),
             // A half vector's excess converts to a vector of the same lanes
