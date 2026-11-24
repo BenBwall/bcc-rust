@@ -68,7 +68,7 @@ fn rich_text(text: &str) -> AnyView {
 /// `text` as a reader with a pointer reads it, and on a touch screen with
 /// its opening words for a pointer ("Point at a line") as a tap says them
 /// ("Tap a line"): `style.css` shows one or the other.
-fn touch_words(text: &str) -> AnyView {
+pub fn touch_words(text: &str) -> AnyView {
     const OPENINGS: [(&str, &str); 3] = [
         (
             "Hover a source line, or move the cursor to it,",

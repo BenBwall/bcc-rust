@@ -453,7 +453,7 @@ pub fn PipelineView(
                         <i aria-hidden="true">"⇆"</i>
                         <span class="on-pointer">"Scroll"</span>
                         <span class="on-touch">"Swipe"</span>
-                        " the listing sideways: each instruction goes on past its right edge."
+                        " the listing sideways: the instructions run on past its right edge."
                     </p>
                     </div>
                     {move || side_by_side.get().then(|| view! {
