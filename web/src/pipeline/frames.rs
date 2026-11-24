@@ -1,5 +1,6 @@
 //! The assembly's call-frame directives: `.cfi_startproc`, `.cfi_offset
-//! %rbp, -16` and the rest, about a third of a function's lines at `-O0`.
+//! %rbp, -16` and the rest, a quarter of a lesson's listing at `-O0` (38 of
+//! Callbacks' 147 lines).
 //! They are not instructions: the assembler turns them into the `.eh_frame`
 //! table (GNU as, "CFI directives"; bcc's own assembler likewise, in
 //! `src/backend/native/object/unwind.rs`), which says at each instruction
