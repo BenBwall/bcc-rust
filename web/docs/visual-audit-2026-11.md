@@ -7119,7 +7119,8 @@ encodings, as each item says.
   `slot0` names the frame region itself, is unchanged.
 - **Left for later, from the review:** a swipe hint for the machine
   code on phones; the figure's height on phones (490 to 565 px); saying
-  in the key that labels and padding lines are not bytes; a reason for
+  in the key that a label takes no bytes and that a padding line stands
+  for filler bytes; a reason for
   the assembly and machine code growing at `-O2`; the inlining note's
   "kept" clause on user code that inlines a `static` function.
 
@@ -7345,13 +7346,209 @@ list, on `agent/site-part23`, in the brief's order.
 - **Loop rotation** is recognised from the text: a block that ends in a
   conditional jump and repeats as the end of a longer one. A count from
   the back end itself would be exact.
-- **GCC 14** was not at hand: its `__builtin_setjmp` frame at `-O2` is as
-  the brief reports it; GCC 13.3 and Clang 18.1 were checked here.
+- **GCC 14** was not at hand here, but the review of #459 checked GCC
+  14.2.0 and Clang 23.1.5 at `-O0` to `-O3`: GCC 14 links `%rbp` for
+  `__builtin_setjmp` only at `-O0` and for the other two at every level,
+  Clang for all three at every level, as `native-backend.md` says.
+  Nothing is left to check.
 - **The figure remembers nothing.** Opened or closed, it is back to its
   first state on the next visit; the views' other switches do not
   persist either.
 - **Clang's WebAssembly module** (the compiler switch in the WebAssembly
   view): the reader accepts the stepper's printout of it (no natural
   `align=`), but the tests and the browser walk read bcc's modules only.
+  (Part 24 reads them.)
 - **The link legend** under the output still says "came from the line
-  you point at" on a touch screen.
+  you point at" on a touch screen. (Fixed in Part 24.)
+
+## Part 24: Part 23's review follow-ups (2026-11)
+
+Part 23 (#459) was reviewed with no blockers and seven follow-ups. This
+part does them, on `agent/site-part24`, in the brief's order.
+
+### What changed
+
+1. **Pointing never moves the listing.** The sentence over the output
+   that says what the pointed line links to kept room for two lines. At
+   1440 px the sentence for a folded first line (the IRs' target line,
+   the assembly's `.cfi_` summary) takes three, so pointing at line 1
+   grew the box from 49 to 68 px and moved the listing 18.6 px down,
+   under the pointer, which then sat above line 1
+   ([before](screenshots/part24/before-hover-1440-dark.png), where the
+   dot marks the pointer). The box now lays out, unseen in the same grid
+   cell as the sentence shown, the three longest sentences the view on
+   screen can give, of those for every line of the output, every source
+   line, and every line of the other level's output when the two are
+   side by side. It is as tall as the tallest of
+   them, so it never grows while the pointer moves
+   ([after](screenshots/part24/after-hover-1440-dark.png)). The sentence
+   under the source on screens narrower than 821 px keeps the same room.
+   A view whose longest sentence fits in two lines keeps its two-line
+   box; one with a folded line is one line taller from the start.
+2. **The WebAssembly example comes from the lesson's own code.** With
+   the Clang switch, a lesson that prints is a WASI command whose C
+   library, linked without line information, comes first: the figure
+   read the first function with a load, `$_start`, and showed its
+   `i32.load` (Loops three ways here)
+   ([before](screenshots/part24/before-wasm-clang-1440-dark.png)). bcc's
+   modules put their bundled runtime (`_start` and the C library) after
+   `$main`, and Recursion's example came from there. The figure now reads
+   only the functions with a C line, the lesson's own
+   ([after](screenshots/part24/after-wasm-clang-1440-dark.png): Loops
+   three ways shows `i32.load offset=36` from `$__original_main`, which
+   is Clang's name for `main(void)` under a `$main` of its own). A test
+   loads every lesson's module from both compilers: the listing the
+   figure reads holds exactly the functions with a C line, never
+   `$_start`. Clang's 19 modules all have a load or store of their own;
+   bcc's 14 do, and the other five (Recursion and frames, Integer
+   promotions, Signed overflow, Uninitialized reads, From source to a
+   running program) now show the first lesson's line rather than one of
+   the runtime's.
+3. **Loop rotation is claimed only from copies of a loop's test.** The
+   detector counted every block that ended in a conditional jump and
+   whose instructions ended another such block, so blocks that merely
+   end alike counted: in Loops three ways the do loop's own test and the
+   for loop's `if (k == 2)` at `-O0`, and the while loop's header at
+   `-O2`, which match other loops' tests but are not copies (8 vs 10
+   counted, where the copies are 4 vs 8). A copy is now counted only by
+   what the back end's rotation alone makes (`duplicate_tests` in
+   `src/backend/native/regalloc/edges.rs`): a block that ends in the
+   instructions of an earlier block's test, leaves as that test does (to
+   the same two blocks, the condition negated where they swap) and
+   branches back into the loop, to a label from that test down to
+   itself. Loops three ways reads 4 copied instructions in 2 copies at
+   `-O0` (the while and for loops' tests) and 8 in 2 at `-O2` (the do
+   loop's six-instruction block, which is its body and its test, and the
+   for loop's test). The copies are part of the growth from 38 to 46
+   instructions, not all of it (each copy replaces one `jmp`, so they
+   add 2 instructions at `-O0` and 6 at `-O2`), and the note now says
+   so, with the counts: "Some of the extra code is copied: at the bottom
+   of a loop, where the jump back leads to a short block that tests
+   whether to go round again, the back end puts a copy of that block
+   instead (loop rotation), so each pass branches back once rather than
+   jumping and then branching. Here the copies take 8 instructions at
+   -O2 and 4 at -O0, each in place of one jump." The note is shown only
+   when the copies add more at `-O2` than at `-O0`.
+
+   A test reads a program that grows for another reason: four `for`
+   loops whose `continue` becomes a select (`cmovel`) at `-O2`, which
+   takes more instructions than the branch it replaces (70 instructions
+   to 73), and a function whose two `if (y == 2)` tests end alike at
+   `-O2`. The old detector counted 8 copied instructions at `-O0` and 10
+   at `-O2` there, and would have said loop rotation; the new one counts
+   8 and 8 (the four loops' tests, rotated at both levels), and the note
+   gives no reason for the growth in the assembly or the machine code.
+4. **`align=` is about the address plus the offset.** The WebAssembly
+   figure said `align=4` is "a hint that the address is a multiple of
+   4". The specification's note under "Memory Instructions" (execution;
+   WebAssembly 3.0, as webassembly.github.io serves it, 2026-11-23) says
+   the alignment "is a hint that the offset ea at which the memory is
+   accessed is intended to satisfy the property ea mod
+   2^memarg.align = 0", where `ea` is the popped address plus the
+   static offset ("yielding a 33-bit or 65-bit effective address",
+   structure, "Memory Instructions"; the execution rules read memory at
+   `i + ao.offset`). The gloss now reads "a hint that the address plus
+   12, where memory is read, is meant to be a multiple of 4; it changes
+   nothing the instruction does" for `i32.load offset=12 align=4`, "the
+   address" without an offset, and "written" for a store.
+5. **Stale notes.** Part 23's "Left for later" said GCC 14 was not at
+   hand; the review of #459 checked GCC 14.2.0 and Clang 23.1.5, and the
+   bullet now says what they do. The wording of #459's description that
+   padding lines "take no bytes" is quoted nowhere in the docs, but Part
+   22's review list said the key should say "labels and padding lines
+   are not bytes"; it now says a label takes no bytes and a padding line
+   stands for filler bytes, as the key itself says.
+6. **The `.cfi_` fold's links over every lesson.** A test now reads
+   every lesson's assembly at `-O0` and `-O2` (38 listings): each line of
+   the folded listing links to the source lines of, and has the origin
+   of, the line of the full listing it shows; each source line links to
+   the same instructions folded and unfolded; the summary line links
+   nowhere.
+7. **"came from the line you tap".** The legend under the output says
+   "tap" where the screen has no pointer that hovers, with the
+   `on-pointer`/`on-touch` words the hints over the output use
+   ([before](screenshots/part24/before-legend-390-dark.png),
+   [after](screenshots/part24/after-legend-390-dark.png)). Its item rule
+   now applies to its own items only, so the hidden word stays hidden.
+
+### Checks
+
+- **Tests,** as `pages.yml` runs them, and its other checks:
+
+  | Check | Result |
+  | --- | --- |
+  | Engine tests | 176 passed |
+  | Engine clippy | clean |
+  | Site tests | 194 passed (191 and three new), plus the prerender's 2 |
+  | WebAssembly stepper tests | 79 passed |
+  | Site clippy: native, and wasm32 `hydrate`, `worker` and `compiler` | all four clean |
+  | `web/wasm/generate.sh --check` (wasi-sdk 34) | passes |
+  | `web/pipeline/generate.sh --check` (this branch's dev bcc) | "Pipeline outputs are up to date." |
+  | `cargo +nightly fmt --check`, root and `web/` (CI's "Site formatting") | clean |
+  | `git diff --check` | clean |
+
+- **The lesson walk.** This branch leaves `src/`, the engine and the
+  machine view's code byte-identical to `main`, so no machine note can
+  differ. The `-O2` notes of every lesson's bcc IR, LLVM IR, assembly and
+  machine code were read from the built page with the #459 review's
+  script and compared with its dump: of the 76 views and the review's
+  three programs of its own, only Loops three ways' assembly and machine
+  code changed, from "That is why there is more code at -O2: …" to the
+  sentence in item 3.
+
+- **The browser.** Less than 14 GB was free, so the site was not built
+  here: the walk ran on CI's Pages build of `25e6ee800` (run
+  45412816632, whose site code is the head's; the head only moves a
+  test), served locally, with Playwright in Chromium, one browser at a
+  time, under the shared build lock and a 1.5 GB scope with a memory
+  watchdog. For six lessons (Objects, Hello, Loops three ways, Floating
+  point, Callbacks and Structs) it took each back-end stage at `-O0` and
+  `-O2`, and the WebAssembly view with each compiler, at 1440x900,
+  1024x768 and 390x844 (as a touch screen), in both themes: 360
+  compiler views and 72 WebAssembly views.
+  - **Pointing.** In the dark theme the walk put each listing at its
+    first line, then pointed at every line of the listing in view (up to
+    60) and at the source's first 30, tapping them on the phone, and
+    measured the listing's place on the page after each: 2872 lines at
+    1440 px, 2390 at 1024 px and 1162 at 390 px. The listing never moved
+    (0 px). The reading's box held its height in each view: 68 px for
+    the IRs and the assembly and 49 px for the machine code at 1440 px,
+    49 to 86 px at 1024 px, 63 to 98 px at 390 px. The same walk on
+    `main`'s Pages build (run 45406526594) moved the listing 18.6 px in 8
+    of Callbacks' 10 views at 1440 px, all but the machine code, as the
+    box grew from 49 to 68 px.
+  - No view scrolled sideways, and no page logged an error or a warning.
+    The lowest contrast of any text in the stage card, the WebAssembly
+    view, the readings and the legends is 4.98:1 in the dark theme and
+    4.97:1 in the light one (AA is 4.5:1).
+  - The legend said "came from the line you tap" at every phone state
+    and "point at" at 1440 and 1024 px. With Clang, the WebAssembly
+    figure showed the lessons' own loads (`i32.load offset=12`,
+    `offset=36`, `offset=152`, `offset=65552` and `offset=65573 align=1`)
+    where `main`'s build showed `$_start`'s `i32.load` (seen there in
+    Loops three ways and Callbacks); its `align=` gloss named the offset
+    where the line has one.
+
+### Left for later
+
+- **The reading's room is per view.** Switching stage or level can
+  change the box's height (two lines, or three for a view with a folded
+  line, at 1440 px); only pointing within a view is held still.
+- **A count from the back end.** The rotation count is read from the
+  text, by the shape only rotation makes. The back end could record its
+  copies and make the count exact even for a test that the copy's
+  branch does not lead back from.
+- **bcc's five lessons without a load or store of their own** show the
+  first lesson's line; a reader for `local.get`/`i32.add` lines would
+  give them one.
+- **The editor's hover over a folded line is cut off.** Pointing at line
+  1 of an IR or the assembly opens the editor's own explanation of the
+  folded lines (148 px tall for Callbacks' `.cfi_` line at 1440 px), and
+  it opens above the line, although the editor asks for hovers below
+  (`hover: { above: false }`, `web/editor/src/main.js`): the reading box
+  covers all but its last line, "Show call frames puts them back in
+  place." The after screenshot of item 1 shows it. It was so before this
+  part too (the before screenshot); opening it below line 1, or folding
+  its text into the reading, needs a site build to check.
+- From Part 23: more shapes for the readers; the figure remembers
+  nothing between visits.
