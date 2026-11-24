@@ -1062,10 +1062,12 @@ fn loop_rotation_is_claimed_only_from_copies_of_a_loops_test() {
             changes.last().map(String::as_str),
             Some(
                 "Some of the extra code is copied: at the bottom of a loop, where the jump back \
-                 leads to a short block that tests whether to go round again, the back end puts a \
-                 copy of that block instead (loop rotation), so each pass branches back once \
-                 rather than jumping and then branching. Here the copies take 8 instructions at \
-                 -O2 and 4 at -O0, each in place of one jump."
+                 leads to a short block that ends by testing whether to go round again, the back \
+                 end puts a copy of that whole block instead (loop rotation), so each pass \
+                 branches back once rather than jumping and then branching. Such a block can be a \
+                 while or for loop's test alone, or a small do loop's whole body with its test. \
+                 Here the copies take 8 instructions at -O2 and 4 at -O0, each in place of one \
+                 jump."
             ),
             "{stage:?}"
         );
