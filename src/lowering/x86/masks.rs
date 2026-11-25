@@ -163,7 +163,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     | _ => (Type::F64, 4),
                 };
                 let scalar = matches!(id, B::X86Cmpss | B::X86Cmpsd);
-                let predicate = operands.imm(2) & 15;
+                let predicate = operands.imm(2)? & 15;
                 let int = int_of(u64::from(ty.bytes()));
                 Produced::Vector(self.fill_lanes(int, count, source, |this, i| {
                     if scalar && i > 0 {
@@ -243,7 +243,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | B::X86GatherqQ256 => {
                 let (ty, count, index_ty, indices) = gather_shape(id);
                 let (base, index, mask) = (operands.get(1), operands.get(2), operands.get(3));
-                let scale = operands.imm(4);
+                let scale = operands.imm(4)?;
                 let gathered = count.min(indices);
                 let object = self.fill_lanes(ty, count, source, |this, i| {
                     if i < gathered {

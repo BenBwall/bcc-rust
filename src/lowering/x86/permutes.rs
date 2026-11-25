@@ -61,7 +61,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     | B::X86Pblendw128 => (Type::I16, 8),
                     | _ => (Type::I16, 16),
                 };
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 picked(self, ty, count, &|i| {
                     Pick::Lane(usize::from(imm >> (i % 8) & 1 != 0), i)
                 })?
@@ -69,7 +69,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // SHUFPS: lanes 0-1 of each half from the first operand, 2-3
             // from the second, each chosen by two bits of the immediate.
             | B::X86Shufps | B::X86Shufps256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 let count = if id == B::X86Shufps { 4 } else { 8 };
                 picked(self, Type::I32, count, &|i| {
                     let k = i % 4;
@@ -79,19 +79,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // SHUFPD: even lanes from the first operand, odd from the
             // second, each chosen within its half by one bit.
             | B::X86Shufpd | B::X86Shufpd256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 let count = if id == B::X86Shufpd { 2 } else { 4 };
                 picked(self, Type::I64, count, &|i| {
-                    Pick::Lane(
-                        usize::try_from(i % 2).unwrap_or(0),
-                        i - i % 2 + (imm >> i & 1),
-                    )
+                    Pick::Lane(usize::from(i % 2 == 1), i - i % 2 + (imm >> i & 1))
                 })?
             },
             // PSHUFD and VPERMILPS with an immediate: each lane of a half
             // chosen by two bits.
             | B::X86Pshufd | B::X86Pshufd256 | B::X86Vpermilps | B::X86Vpermilps256 => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 let count = if matches!(id, B::X86Pshufd | B::X86Vpermilps) {
                     4
                 } else {
@@ -105,7 +102,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // PSHUFLW and PSHUFHW: the low (high) four words of each half
             // chosen by two bits each, the others kept.
             | B::X86Pshuflw | B::X86Pshuflw256 | B::X86Pshufhw | B::X86Pshufhw256 => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 let count = if matches!(id, B::X86Pshuflw | B::X86Pshufhw) {
                     8
                 } else {
@@ -125,7 +122,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // VPERMILPD with an immediate: bit `i` chooses lane `i` within
             // its half.
             | B::X86Vpermilpd | B::X86Vpermilpd256 => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 let count = if id == B::X86Vpermilpd { 2 } else { 4 };
                 picked(self, Type::I64, count, &|i| {
                     Pick::Lane(0, i - i % 2 + (imm >> i & 1))
@@ -134,7 +131,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // PALIGNR: each half of the first operand above the same half of
             // the second, shifted right by the immediate's bytes.
             | B::X86Palignr128 | B::X86Palignr256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 let count = if id == B::X86Palignr128 { 16 } else { 32 };
                 picked(self, Type::I8, count, &|i| {
                     let (half, k) = (i - i % 16, i % 16 + imm);
@@ -148,7 +145,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // PSLLDQ and PSRLDQ: each half shifted by the immediate's bytes,
             // zeros shifted in.
             | B::X86Pslldqi128Byteshift | B::X86Pslldqi256Byteshift => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 let count = if id == B::X86Pslldqi128Byteshift {
                     16
                 } else {
@@ -163,7 +160,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 })?
             },
             | B::X86Psrldqi128Byteshift | B::X86Psrldqi256Byteshift => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 let count = if id == B::X86Psrldqi128Byteshift {
                     16
                 } else {
@@ -184,7 +181,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | B::X86Vperm2f128Ps256
             | B::X86Vperm2f128Si256
             | B::X86Permti256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 picked(self, Type::I64, 4, &|i| {
                     let control = imm >> (4 * (i / 2)) & 0xF;
                     if control & 8 != 0 {
@@ -197,7 +194,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // VPERMQ and VPERMPD: each quadword chosen from all four by two
             // bits.
             | B::X86Permdi256 | B::X86Permdf256 => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 picked(self, Type::I64, 4, &|i| Pick::Lane(0, imm >> (2 * i) & 3))?
             },
             // VEXTRACTF128 and VEXTRACTI128: the half bit 0 names.
@@ -205,7 +202,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | B::X86Vextractf128Pd256
             | B::X86Vextractf128Ps256
             | B::X86Vextractf128Si256 => {
-                let imm = operands.imm(1);
+                let imm = operands.imm(1)?;
                 picked(self, Type::I64, 2, &|i| Pick::Lane(0, (imm & 1) * 2 + i))?
             },
             // VINSERTF128 and VINSERTI128: the first operand with the half
@@ -214,7 +211,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | B::X86Vinsertf128Pd256
             | B::X86Vinsertf128Ps256
             | B::X86Vinsertf128Si256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 picked(self, Type::I64, 4, &|i| {
                     if i / 2 == imm & 1 {
                         Pick::Lane(1, i % 2)
@@ -227,7 +224,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // `imm[5:4]` of the first, then the lanes `imm[3:0]` names
             // zeroed.
             | B::X86Insertps128 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 picked(self, Type::I32, 4, &|i| {
                     if imm >> i & 1 != 0 {
                         Pick::Zero
@@ -255,7 +252,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     | B::X86VecExtV4sf => Type::F32,
                     | _ => Type::I64,
                 };
-                Produced::Scalar(self.lane(a, ty, operands.imm(1)))
+                Produced::Scalar(self.lane(a, ty, operands.imm(1)?))
             },
             | B::X86VecSetV16hi
             | B::X86VecSetV16qi
@@ -277,7 +274,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     | B::X86VecSetV2di => (Type::I64, 2),
                     | _ => (Type::I64, 4),
                 };
-                let (value, at) = (operands.get(1), operands.imm(2));
+                let (value, at) = (operands.get(1), operands.imm(2)?);
                 Produced::Vector(self.fill_lanes(ty, count, source, |this, i| {
                     if i == at { value } else { this.lane(a, ty, i) }
                 })?)

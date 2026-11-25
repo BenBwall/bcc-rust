@@ -16,7 +16,8 @@
 //! attribute turns AVX on, linked with either compiler's half, as
 //! `avx_target_variadic.c` does for a variadic one, and `avx_vector_abi.c`
 //! the vectors of a unit built with `-mavx2` in every place the psABI
-//! gives them.
+//! gives them. `x86_wide_immediates.c` passes immediates that change value
+//! when they convert to their builtin's parameter type.
 
 #[cfg(test)]
 #[expect(
@@ -617,6 +618,87 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
                     "{flags:?}: {}",
                     text(&output.stderr)
                 );
+            }
+        }
+    }
+
+    /// Immediates wider than their builtin's `int` parameter, negative, or
+    /// above a byte take the value of their conversion to the parameter,
+    /// whose low byte the instruction encodes: `0x8000000000000101ULL`
+    /// shuffles as 257. GCC 14 accepts every call in
+    /// `x86_wide_immediates.c`, and its builds and the pinned Clang's under
+    /// `-w` print `expected` at -O0 and -O2. bcc must print it through LLVM
+    /// and the native back end at both levels, and through the interpreter,
+    /// under both identities; Clang's refuses the values outside its limits
+    /// unless `-w` silences that.
+    #[test]
+    fn wide_immediates_take_their_converted_value() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let cpu = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+        let flags: Vec<&str> = cpu
+            .lines()
+            .find_map(|line| line.strip_prefix("flags"))
+            .map_or_else(Vec::new, |line| line.split_whitespace().collect());
+        if !["avx2", "pclmulqdq"]
+            .iter()
+            .all(|feature| flags.contains(feature))
+        {
+            eprintln!("note: the processor lacks AVX2 or PCLMULQDQ; skipping");
+            return;
+        }
+        let expected = concat!(
+            "pshufd-257 2 1 1 1\n",
+            "pblendd-17 5 2 3 4\n",
+            "pshufd-neg1 4 4 4 4\n",
+            "pshufd-neg255 2 1 1 1\n",
+            "pshufd-0x31b 4 3 2 1\n",
+            "pshuflw-wide 13 12 11 10 14 15 16 17\n",
+            "pshufhw-wide 10 11 12 13 17 16 15 14\n",
+            "shufps-wide 3 4 5 6\n",
+            "shufpd-wide 2 3\n",
+            "pblendw-wide 10 11 12 13 114 115 116 117\n",
+            "vec-ext-wide 3\n",
+            "pclmul-wide 27 0\n",
+        );
+        let source = fixture("x86_wide_immediates.c");
+        for identity in [
+            &["--compiler-identity=gcc"][..],
+            &["--compiler-identity=clang", "-w"],
+        ] {
+            let common = [identity, &[source.as_str(), "-mavx2", "-mpclmul"]].concat();
+            let interpreted = bcc(&[&common[..], &["--interpret"]].concat());
+            assert_eq!(
+                interpreted.status.code(),
+                Some(0),
+                "{identity:?} --interpret: {}",
+                text(&interpreted.stderr)
+            );
+            assert_lines(
+                &text(&interpreted.stdout),
+                expected,
+                &format!("{identity:?} --interpret"),
+            );
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["--backend=native", "-O0"],
+                &["--backend=native", "-O2"],
+            ] {
+                let context = format!("{identity:?} {flags:?}");
+                let executable = temporary("wide.exe");
+                let built =
+                    bcc(&[&common[..], flags, &["-o", executable.to_str().unwrap()]].concat());
+                assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                std::fs::remove_file(&executable).unwrap();
+                assert_eq!(run.status.code(), Some(0), "{context}");
+                assert_lines(&text(&run.stdout), expected, &context);
             }
         }
     }

@@ -7,7 +7,8 @@
 //! `atomic.rs` and `checked.rs` hold scalar operations, general library
 //! aliases, C99 real math, atomic contracts and the object-size-checking
 //! aliases of fortified headers. `x86.rs` is generated from the resource
-//! headers' x86 calls; `vector.rs` and `type_generic.rs` hold the vector and
+//! headers' x86 calls, and `x86_gcc_immediates.rs` from GCC's checks of
+//! their immediates; `vector.rs` and `type_generic.rs` hold the vector and
 //! type-generic families, whose calls their own semantic handlers type, and
 //! `bits.rs` the type-generic bit operations.
 //! `contract.rs` defines closed rules, operations and effects. Semantic
@@ -39,6 +40,7 @@ mod scalar;
 mod type_generic;
 mod vector;
 mod x86;
+mod x86_gcc_immediates;
 
 #[cfg(test)]
 pub(crate) use clang_purity::listed_spellings as test_clang_listed_spellings;
@@ -69,3 +71,4 @@ pub(crate) use scalar::UNIMPLEMENTED as test_unimplemented;
 pub(crate) use scalar::unimplemented;
 #[cfg(test)]
 pub(crate) use x86::MERGED as test_merged_x86;
+pub(crate) use x86_gcc_immediates::gcc_immediate;

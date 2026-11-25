@@ -15,8 +15,12 @@ use crate::{
         ConstantConstraint,
         TypeRule,
         VectorOverload,
+        gcc_immediate,
     },
-    configuration::RuleSet,
+    configuration::{
+        CompilerIdentity,
+        RuleSet,
+    },
     translation_phases::{
         parsing::{
             declaration_syntax::TypeQualifiers,
@@ -59,18 +63,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Function { parameters, .. } = self.types.nodes[function.ty.index] else {
             return;
         };
+        let identity = self.context.configuration.compiler_identity();
         for (index, rule) in descriptor.arguments.iter().enumerate() {
             let ConstantConstraint::Immediate(low, high, mask) = rule.constraint else {
                 continue;
             };
+            // GCC checks its own limits, with its own words, on the value
+            // its `int` parameter receives (`x86_gcc_immediates.rs`).
+            let gcc = if identity == CompilerIdentity::Gcc {
+                gcc_immediate(descriptor.id, index)
+            } else {
+                None
+            };
+            let (low, high, mask) =
+                gcc.map_or((low, high, mask), |(low, high, mask, _)| (low, high, mask));
             if let Some(&arg) = args.get(index) {
                 let info = self.expression_info(arg);
                 if self.types.unanalyzed(info.ty) {
                     continue;
                 }
                 let value = info.integer.filter(|_| info.ice).and_then(|value| {
-                    let parameter = parameters.get(index)?;
-                    let (bits, signed) = self.integer_type(*parameter)?;
+                    let (bits, signed) = if gcc.is_some() {
+                        (32, true)
+                    } else {
+                        self.integer_type(*parameters.get(index)?)?
+                    };
                     self.wide.convert(value, bits, signed).to_i128()
                 });
                 if !value.is_some_and(|v| {
@@ -78,12 +95,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && v <= i128::from(high)
                         && (mask == 0 || (v < 16 && (mask & (1 << v)) != 0))
                 }) {
+                    if let Some((.., message)) = gcc {
+                        self.error(
+                            SemanticErrorKind::GccImmediate(message),
+                            arg.source_vectors,
+                            None,
+                            None,
+                        );
+                        continue;
+                    }
                     // Clang's `-Wargument-outside-range` is an error by
                     // default, which `-w` silences; a scale outside its
                     // set stays an error.
                     if let Some(value) = value.and_then(|value| i32::try_from(value).ok())
                         && mask == 0
-                        && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+                        && identity.rules() == RuleSet::Clang
                     {
                         self.error(
                             SemanticErrorKind::ImmediateOutOfRange { value, low, high },
