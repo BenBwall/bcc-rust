@@ -1011,6 +1011,10 @@ pub(crate) enum SemanticErrorKind {
         low:   i32,
         high:  i32,
     },
+    /// GCC's words for an x86 builtin's immediate outside the limits GCC
+    /// checks when it expands the call (`builtins/x86_gcc_immediates.rs`).
+    /// GNU extension: GCC manual, "x86 Built-in Functions".
+    GccImmediate(&'static str),
     /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
     /// PDF p. 526.
     InvalidAsm(super::assembly::AsmFault),
@@ -1240,6 +1244,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::ImmediateOutOfRange { .. } => "outside the builtin's valid range",
+            | Self::GccImmediate(_) => "outside the immediate's valid range",
             | Self::InvalidAsm(fault) => fault.label(),
             | Self::InvalidInference(fault) => fault.label(),
             | Self::InvalidConstexpr(fault) => fault.label(),
@@ -2105,6 +2110,11 @@ impl SemanticErrorKind {
                 "argument value is outside the valid range",
                 "Clang x86 intrinsics: the immediate operand must lie in the builtin's \
                  permitted range",
+            ),
+            | Self::GccImmediate(message) => (
+                message,
+                "GCC x86 built-in functions: the immediate operand must lie in the limits GCC \
+                 checks when it expands the call",
             ),
             | Self::InvalidImmediate => (
                 "invalid intrinsic immediate operand",

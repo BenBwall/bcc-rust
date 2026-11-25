@@ -41,8 +41,16 @@
 ///    Bit[4]=1 indicates that bits[127:64] of operand \a Y are used.
 /// \returns The 128-bit integer vector containing the result of the carry-less
 ///    multiplication of the selected 64-bit values.
+/* GCC's header passes the immediate as an `int`, which GCC checks as a
+ * byte; Clang's narrows it to `char` first. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define _mm_clmulepi64_si128(X, Y, I) \
+  ((__m128i)__builtin_ia32_pclmulqdq128((__v2di)(__m128i)(X), \
+                                        (__v2di)(__m128i)(Y), (int)(I)))
+#else
 #define _mm_clmulepi64_si128(X, Y, I) \
   ((__m128i)__builtin_ia32_pclmulqdq128((__v2di)(__m128i)(X), \
                                         (__v2di)(__m128i)(Y), (char)(I)))
+#endif
 
 #endif /* __WMMINTRIN_PCLMUL_H */

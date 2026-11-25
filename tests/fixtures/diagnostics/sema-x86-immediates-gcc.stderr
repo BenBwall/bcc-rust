@@ -1,0 +1,32 @@
+sema-x86-immediates-gcc.c: In function 'dot':
+sema-x86-immediates-gcc.c:2:41: error: the last argument must be an 8-bit immediate
+    2 | __m256 dot(__m256 a, __m256 b) { return _mm256_dp_ps(a, b, 256); }
+      |                                         ^~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'negative':
+sema-x86-immediates-gcc.c:5:49: error: the last argument must be an 8-bit immediate
+    5 | __m128i negative(__m128i a, __m128i b) { return _mm_clmulepi64_si128(a, b, -1); }
+      |                                                 ^~~~~~~~~~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'extracted':
+sema-x86-immediates-gcc.c:6:35: error: selector must be an integer constant in the range [0, 7]
+    6 | int extracted(__m128i v) { return _mm_extract_epi16(v, 8); }
+      |                                   ^~~~~~~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'compared':
+sema-x86-immediates-gcc.c:7:45: error: the third argument must be an 8-bit immediate
+    7 | int compared(__m128i a, __m128i b) { return _mm_cmpistri(a, b, 256); }
+      |                                             ^~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'rounded':
+sema-x86-immediates-gcc.c:8:35: error: the last argument must be a 4-bit immediate
+    8 | __m128 rounded(__m128 a) { return _mm_round_ps(a, 16); }
+      |                                   ^~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'predicate':
+sema-x86-immediates-gcc.c:9:50: error: the last argument must be a 5-bit immediate
+    9 | __m128d predicate(__m128d a, __m128d b) { return _mm_cmp_pd(a, b, 32); }
+      |                                                  ^~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'halves':
+sema-x86-immediates-gcc.c:10:36: error: the last argument must be an 8-bit immediate
+   10 | __m256i halves(__m256i a) { return _mm256_permute2x128_si256(a, a, 0x1ff); }
+      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~
+sema-x86-immediates-gcc.c: In function 'variable':
+sema-x86-immediates-gcc.c:11:45: error: the last argument must be an 8-bit immediate
+   11 | __m128i variable(__m128i v, int i) { return _mm_shuffle_epi32(v, i); }
+      |                                             ^~~~~~~~~~~~~~~~~

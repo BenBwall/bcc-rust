@@ -1288,6 +1288,22 @@ valid controls. Two-operand shuffles and converted x86 immediates are also
 covered. These are semantic unit-test fixtures; the four diagnostic vector
 fixtures and `coverage.tsv` counts are unchanged.
 
+[`sema-x86-immediates-gcc`](sema-x86-immediates-gcc.c) pins `GccImmediate`:
+under GCC's identity an x86 builtin's immediate is checked against the
+limits GCC 14 checks when it expands the call, with its words
+(`src/builtins/x86_gcc_immediates.rs`, which
+`scripts/generate_x86_gcc_immediates.py` measures). The fixture covers an
+8-bit immediate Clang leaves unchecked (`_mm256_dp_ps`), a shuffle control
+GCC accepts at 256 where Clang refuses it, a carry-less product's byte that
+GCC's header passes as an `int` (0x80 accepted, -1 refused), a selector
+range, the third argument of a string comparison, and 4-, 5- and 8-bit
+immediates. Checked 25 November 2026 against GCC 14.2 (`-Wall -Wextra`): the
+errors, their lines, columns, messages and function lines match. GCC also
+prints `In file included from` lines for the header that defines each
+intrinsic's macro; bcc prints none, and its headers are laid out differently.
+GCC checks only calls it expands, so it is silent about an immediate in a
+function it never emits and under `-fsyntax-only`; bcc checks every call.
+
 ### Type-only member declarations
 
 `parser-member-declares-nothing.c` pins Clang-compatible warnings for tagged
