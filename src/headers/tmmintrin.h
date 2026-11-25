@@ -67,7 +67,7 @@ __BCC_SSE __m64 __bcc_alignr_pi8(__m64 __a, __m64 __b, int __n) {
   return (__m64)__r;
 }
 #define _mm_alignr_pi8(a, b, n)                                                 \
-  __BCC_IMMEDIATE(__builtin_ia32_palignr128((__v16qi)(__m128i){}, (__v16qi)(__m128i){}, (n)), \
+  __BCC_IMMEDIATE(__builtin_ia32_palignr128((__v16qi)(__m128i){0, 0}, (__v16qi)(__m128i){0, 0}, (n)), \
                   __bcc_alignr_pi8((__m64)(a), (__m64)(b), (int)(n) & 255))
 
 /* Horizontal additions and subtractions of adjacent pairs, `a`'s first. */
