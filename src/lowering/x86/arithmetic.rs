@@ -279,7 +279,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // four of the second from byte `4 * imm[1:0]`; the 256-bit form's
             // high half takes bits 3-5.
             | B::X86Mpsadbw128 | B::X86Mpsadbw256 => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 let count = if id == B::X86Mpsadbw128 { 8 } else { 16 };
                 vector(self.fill_lanes(Type::I16, count, source, |this, i| {
                     let (half, k) = (i / 8, i % 8);
@@ -398,7 +398,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // others +0.0) summed pairwise, then stored in the lanes its low
             // bits select (the others +0.0).
             | B::X86Dpps | B::X86Dpps256 | B::X86Dppd => {
-                let imm = operands.imm(2);
+                let imm = operands.imm(2)?;
                 let (ty, per_half) = if id == B::X86Dppd {
                     (Type::F64, 2)
                 } else {

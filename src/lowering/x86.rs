@@ -61,7 +61,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::syntax::Expression,
-        semantic_analysis::Callee,
+        semantic_analysis::{
+            Callee,
+            TypeId,
+        },
     },
     util::bump::ArenaVec,
 };
@@ -80,10 +83,12 @@ pub(super) enum Produced {
 
 /// The operands of a target builtin call, after prototype conversion: each
 /// vector's address or each scalar's value, and the value of each operand
-/// that is an integer constant expression (zero for the others).
+/// that is an integer constant expression, converted to its parameter's
+/// type (`None` for the others).
 pub(super) struct Operands<'s> {
     pub(super) values:    ArenaVec<'s, Value>,
-    pub(super) constants: ArenaVec<'s, i64>,
+    pub(super) constants: ArenaVec<'s, Option<i128>>,
+    pub(super) source:    SourceVectors,
 }
 
 impl Operands<'_> {
@@ -94,8 +99,18 @@ impl Operands<'_> {
 
     /// The immediate operand `index`, as the instruction's 8-bit field
     /// encodes it.
-    pub(super) fn imm(&self, index: usize) -> u64 {
-        self.constants[index] as u64 & 0xFF
+    pub(super) fn imm(&self, index: usize) -> Result<u64, LoweringError> {
+        self.byte(index).map(u64::from)
+    }
+
+    /// The low byte of the immediate operand `index`. Semantic analysis
+    /// refuses a call whose immediate is no integer constant expression, so
+    /// a missing value is an internal error, never an immediate of zero.
+    pub(super) fn byte(&self, index: usize) -> Result<u8, LoweringError> {
+        let value = self.constants[index].ok_or_else(|| {
+            LoweringError::missing("an immediate operand has no constant value", self.source)
+        })?;
+        Ok(value.to_le_bytes()[0])
     }
 }
 
@@ -163,23 +178,24 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             self.operands.push(item);
             return Ok(());
         }
+        let facts = self
+            .unit
+            .sema
+            .call_facts(e)
+            .ok_or_else(|| LoweringError::missing("call facts are not retained", source))?;
         let mut operands = Operands {
-            values:    ArenaVec::with_capacity_in(items.len(), self.scratch),
+            values: ArenaVec::with_capacity_in(items.len(), self.scratch),
             constants: ArenaVec::with_capacity_in(items.len(), self.scratch),
+            source,
         };
-        for (&item, &argument) in items.iter().zip(arguments.iter()) {
+        for ((&item, &argument), fact) in items.iter().zip(arguments.iter()).zip(facts.arguments) {
             let value = match self.repr(item.ty, source)? {
                 | Repr::Aggregate => vector_address(item, source)?,
                 | _ => self.value(item, source)?,
             };
             operands.values.push(value);
-            let constant = self
-                .info(argument)?
-                .integer
-                .map_or(0, |integer| integer.value);
-            operands
-                .constants
-                .push(i64::try_from(constant).unwrap_or(0));
+            let constant = self.converted_constant(argument, fact.ty, source)?;
+            operands.constants.push(constant);
         }
         let operand = match self.x86_builtin(id, &operands, source)? {
             | Produced::Vector(object) => Operand::Aggregate(object),
@@ -188,6 +204,30 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         };
         self.operands.push(Item { operand, ty });
         Ok(())
+    }
+
+    /// The value of `argument`, if it is an integer constant expression,
+    /// after its conversion to the parameter type `ty`: the value whose
+    /// limits semantic analysis checked, so `0x8000000000000101ULL` passed to
+    /// an `int` parameter is 257 (C99 §6.5.2.2p7, p. 72; PDF p. 84). Under
+    /// GCC's identity semantic analysis checks the value as GCC's `int`
+    /// parameter receives it instead, which has the same low byte, the only
+    /// one an immediate encodes, because no immediate's parameter type is
+    /// narrower than a byte (C99 §6.3.1.3p2-3, p. 43; PDF p. 55).
+    fn converted_constant(
+        &self,
+        argument: &'tu Expression<'tu>,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Option<i128>, LoweringError> {
+        let info = self.info(argument)?;
+        let Some(integer) = info.integer.filter(|_| info.ice) else {
+            return Ok(None);
+        };
+        Ok(match self.repr(ty.unqualified(), source)? {
+            | Repr::Int { signed, width, .. } => Some(integer.cast(u32::from(width), signed).value),
+            | _ => None,
+        })
     }
 
     /// The argument expressions of the call `e`.
@@ -279,7 +319,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let signature = intrinsic.signature();
         let count = signature.operands.len();
         let immediate = if signature.immediate.is_some() {
-            u8::try_from(operands.imm(count)).unwrap_or(0)
+            operands.byte(count)?
         } else {
             0
         };
