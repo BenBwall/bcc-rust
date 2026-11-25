@@ -7,15 +7,37 @@
 //! (GCC's `i386-expand.cc`). Each row is a builtin, the index of its
 //! immediate operand, the values GCC accepts as the registry's `imm` reads
 //! them (`[low, high]` and, with a nonzero mask, a set bit of `mask`), and
-//! GCC's message for the others and for an operand that is no constant. A
-//! builtin GCC lacks has no row.
+//! GCC's message for the others and for an operand that is no constant.
+//!
+//! A builtin GCC lacks has no row and keeps Clang's limits:
+//! `__builtin_ia32_gatherd_d`, `__builtin_ia32_gatherd_d256`,
+//! `__builtin_ia32_gatherd_pd`, `__builtin_ia32_gatherd_pd256`,
+//! `__builtin_ia32_gatherd_ps`, `__builtin_ia32_gatherd_ps256`,
+//! `__builtin_ia32_gatherd_q`, `__builtin_ia32_gatherd_q256`,
+//! `__builtin_ia32_gatherq_d`, `__builtin_ia32_gatherq_d256`,
+//! `__builtin_ia32_gatherq_pd`, `__builtin_ia32_gatherq_pd256`,
+//! `__builtin_ia32_gatherq_ps`, `__builtin_ia32_gatherq_ps256`,
+//! `__builtin_ia32_gatherq_q`, `__builtin_ia32_gatherq_q256`,
+//! `__builtin_ia32_pslldqi128_byteshift`,
+//! `__builtin_ia32_pslldqi256_byteshift`,
+//! `__builtin_ia32_psrldqi128_byteshift`,
+//! `__builtin_ia32_psrldqi256_byteshift`, `__builtin_ia32_vec_ext_v16hi`,
+//! `__builtin_ia32_vec_ext_v32qi`, `__builtin_ia32_vec_ext_v4di`,
+//! `__builtin_ia32_vec_ext_v8si`, `__builtin_ia32_vec_set_v16hi`,
+//! `__builtin_ia32_vec_set_v32qi`, `__builtin_ia32_vec_set_v4di`,
+//! `__builtin_ia32_vec_set_v8si`.
+//!
+//! Nor has a builtin whose GCC form takes other operand types than Clang's,
+//! which the probe cannot call with the registry's signature; it too keeps
+//! Clang's limits:
+//! `__builtin_ia32_palignr128`, `__builtin_ia32_palignr256`.
 //!
 //! GNU extension: GCC manual, "x86 Built-in Functions".
 //! <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
 use super::BuiltinId as Id;
 
 /// GCC's limits on operand `operand` of builtin `id`, and its message for a
-/// value outside them or no constant; `None` for a builtin GCC lacks.
+/// value outside them or no constant; `None` for a builtin without a row.
 pub(crate) fn gcc_immediate(id: Id, operand: usize) -> Option<(i32, i32, u16, &'static str)> {
     GCC_IMMEDIATES
         .iter()

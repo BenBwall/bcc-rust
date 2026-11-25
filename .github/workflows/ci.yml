@@ -44,6 +44,13 @@ jobs:
         run: cargo +nightly fmt --check --manifest-path web/Cargo.toml
       - name: Builtin index matches its shards
         run: python3 scripts/generate_builtin_index.py --check
+      # The runner image ships GCC 14 beside its default GCC 13.
+      - name: GCC immediate table matches GCC 14
+        run: |
+          if ! command -v gcc-14 >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y gcc-14
+          fi
+          python3 scripts/generate_x86_gcc_immediates.py --check gcc-14
 
   # The explorer's pure-Rust compiler for the website: no LLVM, C toolchain
   # or build script work, so this job needs only rustup's wasm32 target.
